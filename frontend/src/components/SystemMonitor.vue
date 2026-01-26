@@ -14,6 +14,7 @@ const stats = ref({
 })
 const loading = ref(true)
 const error = ref(null)
+let refreshInterval = null
 
 async function fetchStats() {
   try {
@@ -35,10 +36,20 @@ function handleSystemUpdate(data) {
 onMounted(() => {
   fetchStats()
   websocket.on('system_stats', handleSystemUpdate)
+
+  // Auto-refresh every 5 seconds
+  refreshInterval = setInterval(() => {
+    fetchStats()
+  }, 5000)
 })
 
 onUnmounted(() => {
   websocket.off('system_stats', handleSystemUpdate)
+
+  if (refreshInterval) {
+    clearInterval(refreshInterval)
+    refreshInterval = null
+  }
 })
 
 function getProgressColor(percent) {

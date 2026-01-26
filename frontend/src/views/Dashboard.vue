@@ -16,6 +16,7 @@ const dashboard = ref({
 })
 const loading = ref(true)
 const error = ref(null)
+let refreshInterval = null
 
 async function fetchDashboard() {
   try {
@@ -77,12 +78,22 @@ onMounted(() => {
   websocket.on('task_update', handleTaskUpdate)
   websocket.on('task_created', handleTaskUpdate)
   websocket.on('task_completed', handleTaskUpdate)
+
+  // Auto-refresh every 5 seconds
+  refreshInterval = setInterval(() => {
+    fetchDashboard()
+  }, 5000)
 })
 
 onUnmounted(() => {
   websocket.off('task_update', handleTaskUpdate)
   websocket.off('task_created', handleTaskUpdate)
   websocket.off('task_completed', handleTaskUpdate)
+
+  if (refreshInterval) {
+    clearInterval(refreshInterval)
+    refreshInterval = null
+  }
 })
 </script>
 

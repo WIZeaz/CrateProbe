@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import api from '../services/api'
 
 const props = defineProps({
@@ -23,6 +23,7 @@ const loading = ref({
 })
 const error = ref(null)
 const logContainer = ref(null)
+let refreshInterval = null
 
 const tabs = [
   { id: 'stdout', label: 'Standard Output' },
@@ -30,9 +31,10 @@ const tabs = [
   { id: 'miri_report', label: 'Miri Report' }
 ]
 
-async function loadLog(logType) {
-  if (logs.value[logType]) {
-    return // Already loaded
+async function loadLog(logType, isRefresh = false) {
+  // Skip if already loading (prevent duplicate requests)
+  if (!isRefresh && loading.value[logType]) {
+    return
   }
 
   loading.value[logType] = true
@@ -55,6 +57,20 @@ async function loadLog(logType) {
     logs.value[logType] = `Error loading log: ${error.value}`
   } finally {
     loading.value[logType] = false
+  }
+}
+
+function startAutoRefresh() {
+  // Refresh current tab every 5 seconds
+  refreshInterval = setInterval(() => {
+    loadLog(activeTab.value, true)
+  }, 5000)
+}
+
+function stopAutoRefresh() {
+  if (refreshInterval) {
+    clearInterval(refreshInterval)
+    refreshInterval = null
   }
 }
 
@@ -92,6 +108,11 @@ watch(activeTab, (newTab) => {
 
 onMounted(() => {
   loadLog(activeTab.value)
+  startAutoRefresh()
+})
+
+onUnmounted(() => {
+  stopAutoRefresh()
 })
 </script>
 

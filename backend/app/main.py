@@ -246,6 +246,23 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         except CustomFileNotFoundError:
             raise HTTPException(status_code=404, detail="Log file not found")
 
+    @app.get("/api/tasks/{task_id}/logs/miri_report")
+    async def get_miri_report_logs(task_id: int, lines: int = Query(default=1000, ge=0)):
+        """Get last N lines of miri_report.txt"""
+        task = db.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        # Construct path to miri_report.txt in workspace
+        workspace_path = Path(task.workspace_path)
+        miri_report_path = workspace_path / f"{task.crate_name}-{task.version}" / "miri_report.txt"
+
+        try:
+            log_lines = read_last_n_lines(str(miri_report_path), lines)
+            return {"lines": log_lines}
+        except CustomFileNotFoundError:
+            raise HTTPException(status_code=404, detail="Miri report file not found")
+
     @app.get("/api/tasks/{task_id}/logs/stdout/raw", response_class=PlainTextResponse)
     async def download_stdout_raw(task_id: int):
         """Download full stdout log file"""
@@ -271,6 +288,21 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             raise HTTPException(status_code=404, detail="Log file not found")
 
         return PlainTextResponse(log_path.read_text(encoding='utf-8', errors='replace'))
+
+    @app.get("/api/tasks/{task_id}/logs/miri_report/raw", response_class=PlainTextResponse)
+    async def download_miri_report_raw(task_id: int):
+        """Download full miri_report.txt file"""
+        task = db.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        workspace_path = Path(task.workspace_path)
+        miri_report_path = workspace_path / f"{task.crate_name}-{task.version}" / "miri_report.txt"
+
+        if not miri_report_path.exists():
+            raise HTTPException(status_code=404, detail="Miri report file not found")
+
+        return PlainTextResponse(miri_report_path.read_text(encoding='utf-8', errors='replace'))
 
     @app.websocket("/ws/tasks/{task_id}")
     async def websocket_task_endpoint(websocket: WebSocket, task_id: int):
