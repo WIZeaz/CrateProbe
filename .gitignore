@@ -35,3 +35,6 @@ config.toml
 .coverage
 htmlcov/
 .pytest_cache/
+
+# Git worktrees
+.worktrees/
