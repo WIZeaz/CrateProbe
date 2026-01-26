@@ -40,7 +40,12 @@ async function loadLog(logType) {
 
   try {
     const data = await api.getLog(props.taskId, logType, 1000)
-    logs.value[logType] = data.content || 'No content available'
+    // Backend returns { lines: [...] } - join array into string
+    if (data.lines && Array.isArray(data.lines)) {
+      logs.value[logType] = data.lines.join('\n') || 'No content available'
+    } else {
+      logs.value[logType] = data.content || 'No content available'
+    }
 
     if (props.autoScroll) {
       scrollToBottom()
