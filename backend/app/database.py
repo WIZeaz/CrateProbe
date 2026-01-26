@@ -1,116 +1,116 @@
-"""Database layer for task persistence using SQLite."""
+"""Database layer for experiment tracking"""
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
+
+from app.models import TaskStatus
 
 
 @dataclass
 class TaskRecord:
-    """Represents a task record in the database."""
+    """Data model for a task record"""
     id: int
-    title: str
-    description: str
-    status: str
-    case_count: int
-    poc_count: int
-    cases_completed: int
-    pocs_completed: int
-    pid: Optional[int]
-    error_message: Optional[str]
-    result_summary: Optional[str]
-    output_dir: Optional[str]
+    crate_name: str
+    version: str
+    workspace_path: str
+    stdout_log: str
+    stderr_log: str
+    status: TaskStatus
     created_at: datetime
-    started_at: Optional[datetime]
-    completed_at: Optional[datetime]
-    updated_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    case_count: Optional[int] = None
+    poc_count: Optional[int] = None
+    pid: Optional[int] = None
+    exit_code: Optional[int] = None
+    error_message: Optional[str] = None
 
 
 class Database:
-    """SQLite database manager for experiment tasks."""
+    """SQLite database for tracking experiments"""
 
-    def __init__(self, db_path: str = "experiments.db"):
-        """Initialize database connection.
+    def __init__(self, db_path: str):
+        """Initialize database connection
 
         Args:
             db_path: Path to SQLite database file
         """
         self.db_path = db_path
-        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.conn: Optional[sqlite3.Connection] = None
+
+    def init_db(self):
+        """Initialize database schema"""
+        # Create parent directory if needed
+        db_file = Path(self.db_path)
+        db_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Connect and create schema
+        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
 
-    def init_db(self) -> None:
-        """Initialize database schema with tasks table and indexes."""
         cursor = self.conn.cursor()
-
-        # Create tasks table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                description TEXT NOT NULL,
+                crate_name TEXT NOT NULL,
+                version TEXT NOT NULL,
+                workspace_path TEXT NOT NULL,
+                stdout_log TEXT NOT NULL,
+                stderr_log TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending',
-                case_count INTEGER NOT NULL,
-                poc_count INTEGER NOT NULL,
-                cases_completed INTEGER NOT NULL DEFAULT 0,
-                pocs_completed INTEGER NOT NULL DEFAULT 0,
-                pid INTEGER,
-                error_message TEXT,
-                result_summary TEXT,
-                output_dir TEXT,
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 started_at TIMESTAMP,
                 completed_at TIMESTAMP,
-                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                case_count INTEGER,
+                poc_count INTEGER,
+                pid INTEGER,
+                exit_code INTEGER,
+                error_message TEXT
             )
         """)
-
-        # Create indexes for common queries
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_status ON tasks(status)
-        """)
-
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_created_at ON tasks(created_at DESC)
-        """)
-
         self.conn.commit()
 
     def create_task(
         self,
-        title: str,
-        description: str,
-        case_count: int,
-        poc_count: int,
-        output_dir: Optional[str] = None
+        crate_name: str,
+        version: str,
+        workspace_path: str,
+        stdout_log: str,
+        stderr_log: str
     ) -> int:
-        """Create a new task.
+        """Create a new task
 
         Args:
-            title: Task title
-            description: Task description
-            case_count: Number of test cases
-            poc_count: Number of POCs
-            output_dir: Optional output directory path
+            crate_name: Name of the crate
+            version: Version of the crate
+            workspace_path: Path to workspace directory
+            stdout_log: Path to stdout log file
+            stderr_log: Path to stderr log file
 
         Returns:
-            ID of created task
+            Task ID of the created task
         """
         cursor = self.conn.cursor()
         cursor.execute("""
-            INSERT INTO tasks (title, description, case_count, poc_count, output_dir)
-            VALUES (?, ?, ?, ?, ?)
-        """, (title, description, case_count, poc_count, output_dir))
-
+            INSERT INTO tasks (
+                crate_name, version, workspace_path,
+                stdout_log, stderr_log, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            crate_name, version, workspace_path,
+            stdout_log, stderr_log, TaskStatus.PENDING.value,
+            datetime.now()
+        ))
         self.conn.commit()
         return cursor.lastrowid
 
     def get_task(self, task_id: int) -> Optional[TaskRecord]:
-        """Get a task by ID.
+        """Get a task by ID
 
         Args:
-            task_id: Task ID
+            task_id: Task ID to retrieve
 
         Returns:
             TaskRecord if found, None otherwise
@@ -119,157 +119,187 @@ class Database:
         cursor.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
         row = cursor.fetchone()
 
-        if row:
-            return self._row_to_task(row)
-        return None
+        if row is None:
+            return None
 
-    def get_all_tasks(self) -> list[TaskRecord]:
-        """Get all tasks ordered by created_at DESC (newest first).
+        return self._row_to_task_record(row)
 
-        Returns:
-            List of TaskRecord objects
-        """
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM tasks ORDER BY created_at DESC, id DESC")
-        rows = cursor.fetchall()
-
-        return [self._row_to_task(row) for row in rows]
-
-    def get_tasks_by_status(self, status: str) -> list[TaskRecord]:
-        """Get tasks filtered by status.
-
-        Args:
-            status: Task status (pending, running, completed, failed)
+    def get_all_tasks(self) -> List[TaskRecord]:
+        """Get all tasks ordered by creation time (latest first)
 
         Returns:
             List of TaskRecord objects
         """
         cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT * FROM tasks WHERE status = ? ORDER BY created_at DESC, id DESC",
-            (status,)
-        )
+        cursor.execute("SELECT * FROM tasks ORDER BY created_at DESC")
         rows = cursor.fetchall()
 
-        return [self._row_to_task(row) for row in rows]
+        return [self._row_to_task_record(row) for row in rows]
 
     def update_task_status(
         self,
         task_id: int,
-        status: str,
-        error_message: Optional[str] = None,
-        result_summary: Optional[str] = None
-    ) -> None:
-        """Update task status and related fields.
+        status: TaskStatus,
+        started_at: Optional[datetime] = None,
+        completed_at: Optional[datetime] = None,
+        exit_code: Optional[int] = None,
+        error_message: Optional[str] = None
+    ):
+        """Update task status and timestamps
 
         Args:
-            task_id: Task ID
-            status: New status (running, completed, failed)
-            error_message: Optional error message for failed tasks
-            result_summary: Optional result summary for completed tasks
+            task_id: Task ID to update
+            status: New task status
+            started_at: Task start time (optional)
+            completed_at: Task completion time (optional)
+            exit_code: Exit code (optional)
+            error_message: Error message (optional)
         """
         cursor = self.conn.cursor()
 
-        # Determine timestamp fields to update based on status
-        if status == "running":
-            cursor.execute("""
-                UPDATE tasks
-                SET status = ?,
-                    started_at = CURRENT_TIMESTAMP,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-            """, (status, task_id))
+        updates = ["status = ?"]
+        params = [status.value]
 
-        elif status in ("completed", "failed"):
-            cursor.execute("""
-                UPDATE tasks
-                SET status = ?,
-                    completed_at = CURRENT_TIMESTAMP,
-                    error_message = ?,
-                    result_summary = ?,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-            """, (status, error_message, result_summary, task_id))
+        if started_at is not None:
+            updates.append("started_at = ?")
+            params.append(started_at)
 
-        else:
-            cursor.execute("""
-                UPDATE tasks
-                SET status = ?,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-            """, (status, task_id))
+        if completed_at is not None:
+            updates.append("completed_at = ?")
+            params.append(completed_at)
 
+        if exit_code is not None:
+            updates.append("exit_code = ?")
+            params.append(exit_code)
+
+        if error_message is not None:
+            updates.append("error_message = ?")
+            params.append(error_message)
+
+        params.append(task_id)
+
+        query = f"UPDATE tasks SET {', '.join(updates)} WHERE id = ?"
+        cursor.execute(query, params)
         self.conn.commit()
 
     def update_task_counts(
         self,
         task_id: int,
-        cases_completed: int,
-        pocs_completed: int
-    ) -> None:
-        """Update task progress counts.
+        case_count: Optional[int] = None,
+        poc_count: Optional[int] = None
+    ):
+        """Update task case and POC counts
 
         Args:
-            task_id: Task ID
-            cases_completed: Number of test cases completed
-            pocs_completed: Number of POCs completed
+            task_id: Task ID to update
+            case_count: Number of test cases (optional)
+            poc_count: Number of POCs found (optional)
         """
         cursor = self.conn.cursor()
-        cursor.execute("""
-            UPDATE tasks
-            SET cases_completed = ?,
-                pocs_completed = ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-        """, (cases_completed, pocs_completed, task_id))
 
+        updates = []
+        params = []
+
+        if case_count is not None:
+            updates.append("case_count = ?")
+            params.append(case_count)
+
+        if poc_count is not None:
+            updates.append("poc_count = ?")
+            params.append(poc_count)
+
+        if not updates:
+            return
+
+        params.append(task_id)
+
+        query = f"UPDATE tasks SET {', '.join(updates)} WHERE id = ?"
+        cursor.execute(query, params)
         self.conn.commit()
 
-    def update_task_pid(self, task_id: int, pid: int) -> None:
-        """Update task process ID.
+    def update_task_pid(self, task_id: int, pid: int):
+        """Update task process ID
 
         Args:
-            task_id: Task ID
+            task_id: Task ID to update
             pid: Process ID
         """
         cursor = self.conn.cursor()
-        cursor.execute("""
-            UPDATE tasks
-            SET pid = ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-        """, (pid, task_id))
-
+        cursor.execute("UPDATE tasks SET pid = ? WHERE id = ?", (pid, task_id))
         self.conn.commit()
 
-    def _row_to_task(self, row: sqlite3.Row) -> TaskRecord:
-        """Convert a database row to TaskRecord.
+    def get_tasks_by_status(self, status: TaskStatus) -> List[TaskRecord]:
+        """Get tasks filtered by status
 
         Args:
-            row: sqlite3.Row object
+            status: Status to filter by
+
+        Returns:
+            List of TaskRecord objects with matching status
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM tasks WHERE status = ? ORDER BY created_at DESC",
+            (status.value,)
+        )
+        rows = cursor.fetchall()
+
+        return [self._row_to_task_record(row) for row in rows]
+
+    def _row_to_task_record(self, row: sqlite3.Row) -> TaskRecord:
+        """Convert a database row to a TaskRecord
+
+        Args:
+            row: Database row
 
         Returns:
             TaskRecord object
         """
         return TaskRecord(
             id=row['id'],
-            title=row['title'],
-            description=row['description'],
-            status=row['status'],
+            crate_name=row['crate_name'],
+            version=row['version'],
+            workspace_path=row['workspace_path'],
+            stdout_log=row['stdout_log'],
+            stderr_log=row['stderr_log'],
+            status=TaskStatus(row['status']),
+            created_at=self._parse_datetime(row['created_at']),
+            started_at=self._parse_datetime(row['started_at']) if row['started_at'] else None,
+            completed_at=self._parse_datetime(row['completed_at']) if row['completed_at'] else None,
             case_count=row['case_count'],
             poc_count=row['poc_count'],
-            cases_completed=row['cases_completed'],
-            pocs_completed=row['pocs_completed'],
             pid=row['pid'],
-            error_message=row['error_message'],
-            result_summary=row['result_summary'],
-            output_dir=row['output_dir'],
-            created_at=datetime.fromisoformat(row['created_at']),
-            started_at=datetime.fromisoformat(row['started_at']) if row['started_at'] else None,
-            completed_at=datetime.fromisoformat(row['completed_at']) if row['completed_at'] else None,
-            updated_at=datetime.fromisoformat(row['updated_at'])
+            exit_code=row['exit_code'],
+            error_message=row['error_message']
         )
 
-    def close(self) -> None:
-        """Close database connection."""
-        self.conn.close()
+    def _parse_datetime(self, dt_str: str) -> datetime:
+        """Parse datetime from database
+
+        Args:
+            dt_str: Datetime string
+
+        Returns:
+            datetime object
+        """
+        if isinstance(dt_str, datetime):
+            return dt_str
+
+        # Try different datetime formats
+        for fmt in [
+            '%Y-%m-%d %H:%M:%S.%f',
+            '%Y-%m-%d %H:%M:%S',
+        ]:
+            try:
+                return datetime.strptime(dt_str, fmt)
+            except ValueError:
+                continue
+
+        # If all formats fail, raise error
+        raise ValueError(f"Cannot parse datetime: {dt_str}")
+
+    def close(self):
+        """Close database connection"""
+        if self.conn:
+            self.conn.close()
+            self.conn = None
