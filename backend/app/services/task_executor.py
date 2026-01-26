@@ -112,13 +112,13 @@ class TaskExecutor:
             # Store PID
             self.db.update_task_pid(task_id, process.pid)
 
-            # Wait for completion
-            await process.wait()
+            # Wait for completion with periodic stats updates
+            await self._wait_with_stats_updates(process, task_id, workspace_dir)
 
             stdout_log.close()
             stderr_log.close()
 
-            # Count generated items
+            # Final count of generated items
             case_count, poc_count = self.count_generated_items(workspace_dir)
             self.db.update_task_counts(task_id, case_count, poc_count)
 
@@ -145,6 +145,22 @@ class TaskExecutor:
                 finished_at=datetime.now(),
                 error_message=str(e)
             )
+
+    async def _wait_with_stats_updates(self, process, task_id: int, workspace_dir: Path):
+        """Wait for process completion while periodically updating stats in database"""
+        update_interval = 10  # Update every 10 seconds
+
+        while True:
+            try:
+                # Wait for process with timeout
+                await asyncio.wait_for(process.wait(), timeout=update_interval)
+                # Process completed
+                break
+            except asyncio.TimeoutError:
+                # Process still running, update stats
+                case_count, poc_count = self.count_generated_items(workspace_dir)
+                self.db.update_task_counts(task_id, case_count, poc_count)
+                # Continue waiting
 
     def count_generated_items(self, workspace_dir: Path) -> Tuple[int, int]:
         """Count generated test cases and POCs"""
