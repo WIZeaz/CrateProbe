@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import api from '../services/api'
 
 const props = defineProps({
@@ -30,6 +30,10 @@ const tabs = [
   { id: 'stderr', label: 'Standard Error' },
   { id: 'miri_report', label: 'Miri Report' }
 ]
+
+const activeTabLabel = computed(() => {
+  return tabs.find(tab => tab.id === activeTab.value)?.label || 'Log'
+})
 
 async function loadLog(logType, isRefresh = false) {
   // Skip if already loading (prevent duplicate requests)
@@ -96,13 +100,23 @@ async function downloadLog() {
     const url = window.URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `task-${props.taskId}-${activeTab.value}.log`
+
+    // Set filename based on log type
+    let filename
+    if (activeTab.value === 'miri_report') {
+      filename = `task-${props.taskId}-miri_report.txt`
+    } else {
+      filename = `task-${props.taskId}-${activeTab.value}.log`
+    }
+    a.download = filename
+
     document.body.appendChild(a)
     a.click()
     window.URL.revokeObjectURL(url)
     document.body.removeChild(a)
   } catch (err) {
     console.error('Failed to download log:', err)
+    alert(`Failed to download log: ${err.response?.data?.detail || err.message}`)
   }
 }
 
@@ -139,8 +153,9 @@ onUnmounted(() => {
       <button
         @click="downloadLog"
         class="px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+        :title="`Download complete ${activeTabLabel}`"
       >
-        Download Full Log
+        Download {{ activeTabLabel }}
       </button>
     </div>
 

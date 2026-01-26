@@ -71,7 +71,7 @@ export default {
   },
 
   async downloadLog(taskId, logType) {
-    const response = await api.get(`/tasks/${taskId}/logs/${logType}/download`, {
+    const response = await api.get(`/tasks/${taskId}/logs/${logType}/raw`, {
       responseType: 'blob'
     })
     return response.data
