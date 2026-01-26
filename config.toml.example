@@ -1,6 +1,6 @@
 [server]
 # Web服务端口
-port = 8000
+port = 8080
 # 绑定地址
 host = "0.0.0.0"
 
