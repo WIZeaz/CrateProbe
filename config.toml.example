@@ -1,33 +1,84 @@
+# 实验平台统一配置文件示例
+# Experiment Platform Unified Configuration Example
+#
+# 使用方法 (Usage):
+#   cp config.toml.example config.toml
+#   编辑 config.toml 以适配你的环境
+
+# ============================================
+# 后端配置 (Backend Configuration)
+# ============================================
+
 [server]
 # Web服务端口
+# Backend server port
 port = 8080
-# 绑定地址
+
+# 绑定地址（0.0.0.0 表示监听所有网络接口）
+# Bind address (0.0.0.0 means listen on all network interfaces)
 host = "0.0.0.0"
 
 [workspace]
 # 工作空间根目录（所有运行时文件都在此目录下）
+# Workspace root directory (all runtime files stored here)
 path = "./workspace"
 
 [execution]
 # 最大并发任务数
+# Maximum concurrent tasks
 max_jobs = 3
+
 # 单个任务最大内存限制（GB）
+# Maximum memory limit per task (GB)
 max_memory_gb = 20
+
 # 单个任务最长运行时间（小时）
+# Maximum runtime per task (hours)
 max_runtime_hours = 24
+
 # 是否优先使用systemd-run（如果不可用则回退到resource模块）
+# Prefer systemd-run (fallback to resource module if unavailable)
 use_systemd = true
 
 [database]
 # SQLite数据库路径（相对于workspace或绝对路径）
+# SQLite database path (relative to workspace or absolute path)
 path = "tasks.db"
 
 [logging]
 # 日志级别：DEBUG, INFO, WARNING, ERROR
+# Log level: DEBUG, INFO, WARNING, ERROR
 level = "INFO"
+
 # 是否输出到控制台
+# Output to console
 console = true
+
 # 是否写入文件
+# Write to file
 file = true
+
 # 日志文件路径
+# Log file path
 file_path = "server.log"
+
+# ============================================
+# 前端配置 (Frontend Configuration)
+# ============================================
+
+[frontend]
+# 开发服务器端口
+# Development server port
+dev_port = 5173
+
+# 生产构建输出目录
+# Production build output directory
+dist_dir = "dist"
+
+# API 代理目标（指向后端服务器）
+# API proxy target (points to backend server)
+api_proxy_target = "http://localhost:8080"
+
+# WebSocket 代理目标
+# WebSocket proxy target
+ws_proxy_target = "ws://localhost:8080"

@@ -325,8 +325,11 @@ def _task_to_response(task: TaskRecord) -> TaskDetailResponse:
 # Main entry point
 if __name__ == "__main__":
     import uvicorn
+    from pathlib import Path
 
-    config = Config.from_file("config.toml")
+    # Load config from project root
+    config_path = Path(__file__).parent.parent.parent / "config.toml"
+    config = Config.from_file(str(config_path))
     app = create_app(config, str(config.get_db_full_path()))
 
     uvicorn.run(
