@@ -1,0 +1,33 @@
+[server]
+# Web服务端口
+port = 8000
+# 绑定地址
+host = "0.0.0.0"
+
+[workspace]
+# 工作空间根目录（所有运行时文件都在此目录下）
+path = "./workspace"
+
+[execution]
+# 最大并发任务数
+max_jobs = 3
+# 单个任务最大内存限制（GB）
+max_memory_gb = 20
+# 单个任务最长运行时间（小时）
+max_runtime_hours = 24
+# 是否优先使用systemd-run（如果不可用则回退到resource模块）
+use_systemd = true
+
+[database]
+# SQLite数据库路径（相对于workspace或绝对路径）
+path = "tasks.db"
+
+[logging]
+# 日志级别：DEBUG, INFO, WARNING, ERROR
+level = "INFO"
+# 是否输出到控制台
+console = true
+# 是否写入文件
+file = true
+# 日志文件路径
+file_path = "server.log"
