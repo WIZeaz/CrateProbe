@@ -20,12 +20,13 @@ class TaskRecord:
     status: TaskStatus
     created_at: datetime
     started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
     case_count: Optional[int] = None
     poc_count: Optional[int] = None
     pid: Optional[int] = None
     exit_code: Optional[int] = None
     error_message: Optional[str] = None
+    memory_used_mb: Optional[float] = None
 
 
 class Database:
@@ -62,13 +63,20 @@ class Database:
                 status TEXT NOT NULL DEFAULT 'pending',
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 started_at TIMESTAMP,
-                completed_at TIMESTAMP,
+                finished_at TIMESTAMP,
                 case_count INTEGER,
                 poc_count INTEGER,
                 pid INTEGER,
                 exit_code INTEGER,
-                error_message TEXT
+                error_message TEXT,
+                memory_used_mb REAL
             )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_created_at ON tasks(created_at DESC)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_status ON tasks(status)
         """)
         self.conn.commit()
 
@@ -141,7 +149,7 @@ class Database:
         task_id: int,
         status: TaskStatus,
         started_at: Optional[datetime] = None,
-        completed_at: Optional[datetime] = None,
+        finished_at: Optional[datetime] = None,
         exit_code: Optional[int] = None,
         error_message: Optional[str] = None
     ):
@@ -151,7 +159,7 @@ class Database:
             task_id: Task ID to update
             status: New task status
             started_at: Task start time (optional)
-            completed_at: Task completion time (optional)
+            finished_at: Task completion time (optional)
             exit_code: Exit code (optional)
             error_message: Error message (optional)
         """
@@ -164,9 +172,9 @@ class Database:
             updates.append("started_at = ?")
             params.append(started_at)
 
-        if completed_at is not None:
-            updates.append("completed_at = ?")
-            params.append(completed_at)
+        if finished_at is not None:
+            updates.append("finished_at = ?")
+            params.append(finished_at)
 
         if exit_code is not None:
             updates.append("exit_code = ?")
@@ -265,12 +273,13 @@ class Database:
             status=TaskStatus(row['status']),
             created_at=self._parse_datetime(row['created_at']),
             started_at=self._parse_datetime(row['started_at']) if row['started_at'] else None,
-            completed_at=self._parse_datetime(row['completed_at']) if row['completed_at'] else None,
+            finished_at=self._parse_datetime(row['finished_at']) if row['finished_at'] else None,
             case_count=row['case_count'],
             poc_count=row['poc_count'],
             pid=row['pid'],
             exit_code=row['exit_code'],
-            error_message=row['error_message']
+            error_message=row['error_message'],
+            memory_used_mb=row['memory_used_mb']
         )
 
     def _parse_datetime(self, dt_str: str) -> datetime:
