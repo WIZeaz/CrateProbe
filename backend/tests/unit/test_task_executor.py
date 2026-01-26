@@ -1,0 +1,122 @@
+import pytest
+from unittest.mock import Mock, patch, AsyncMock, MagicMock
+from pathlib import Path
+from app.services.task_executor import TaskExecutor
+from app.database import Database, TaskRecord
+from app.models import TaskStatus
+from app.config import Config
+
+
+@pytest.fixture
+def config(tmp_path):
+    return Config(
+        workspace_path=tmp_path / "workspace",
+        max_memory_gb=1,
+        max_runtime_hours=1,
+        use_systemd=False
+    )
+
+
+@pytest.fixture
+def db(tmp_path):
+    db_path = tmp_path / "test.db"
+    database = Database(str(db_path))
+    database.init_db()
+    return database
+
+
+@pytest.fixture
+def executor(config, db):
+    return TaskExecutor(config, db)
+
+
+@pytest.mark.asyncio
+async def test_prepare_workspace_downloads_crate(executor, config, tmp_path):
+    """Test workspace preparation downloads and extracts crate"""
+    task_id = 1
+    crate_name = "serde"
+    version = "1.0.0"
+
+    with patch.object(executor.crates_api, "download_crate", new_callable=AsyncMock) as mock_download:
+        with patch("tarfile.open") as mock_tarfile:
+            mock_tar = MagicMock()
+            mock_tarfile.return_value.__enter__.return_value = mock_tar
+
+            workspace_path = await executor.prepare_workspace(task_id, crate_name, version)
+
+            assert workspace_path.exists()
+            mock_download.assert_called_once()
+            mock_tar.extractall.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_execute_task_updates_database(executor, db, config):
+    """Test that task execution updates database status"""
+    task_id = db.create_task(
+        "test-crate", "1.0.0",
+        str(config.workspace_path / "repos" / "test-crate-1.0.0"),
+        str(config.workspace_path / "logs" / "1-stdout.log"),
+        str(config.workspace_path / "logs" / "1-stderr.log")
+    )
+
+    with patch.object(executor, "prepare_workspace", new_callable=AsyncMock) as mock_prep:
+        mock_prep.return_value = config.workspace_path / "repos" / "test-crate-1.0.0"
+
+        with patch("asyncio.create_subprocess_exec") as mock_subprocess:
+            mock_process = AsyncMock()
+            mock_process.pid = 12345
+            mock_process.wait.return_value = 0
+            mock_process.returncode = 0
+            mock_subprocess.return_value = mock_process
+
+            await executor.execute_task(task_id)
+
+            task = db.get_task(task_id)
+            assert task.status == TaskStatus.COMPLETED
+            assert task.finished_at is not None
+
+
+@pytest.mark.asyncio
+async def test_execute_task_handles_failure(executor, db, config):
+    """Test that task execution handles process failure"""
+    task_id = db.create_task(
+        "test-crate", "1.0.0",
+        str(config.workspace_path / "repos" / "test-crate-1.0.0"),
+        str(config.workspace_path / "logs" / "1-stdout.log"),
+        str(config.workspace_path / "logs" / "1-stderr.log")
+    )
+
+    with patch.object(executor, "prepare_workspace", new_callable=AsyncMock):
+        with patch("asyncio.create_subprocess_exec") as mock_subprocess:
+            mock_process = AsyncMock()
+            mock_process.pid = 12345
+            mock_process.wait.return_value = 1
+            mock_process.returncode = 1
+            mock_subprocess.return_value = mock_process
+
+            await executor.execute_task(task_id)
+
+            task = db.get_task(task_id)
+            assert task.status == TaskStatus.FAILED
+            assert task.exit_code == 1
+
+
+@pytest.mark.asyncio
+async def test_count_generated_items(executor, tmp_path):
+    """Test counting testgen output directories"""
+    testgen_dir = tmp_path / "testgen"
+    tests_dir = testgen_dir / "tests"
+    poc_dir = testgen_dir / "poc"
+
+    tests_dir.mkdir(parents=True)
+    poc_dir.mkdir(parents=True)
+
+    # Create some test case directories
+    (tests_dir / "case1").mkdir()
+    (tests_dir / "case2").mkdir()
+    (poc_dir / "poc1").mkdir()
+
+    case_count, poc_count = executor.count_generated_items(tmp_path)
+
+    assert case_count == 2
+    assert poc_count == 1
