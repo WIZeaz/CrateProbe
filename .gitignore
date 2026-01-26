@@ -38,3 +38,8 @@ htmlcov/
 
 # Git worktrees
 .worktrees/
+
+# CLAUDE
+/.claude
+CLAUDE.md
+.venv/
