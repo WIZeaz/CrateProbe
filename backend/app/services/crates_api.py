@@ -3,7 +3,7 @@
 import asyncio
 from pathlib import Path
 from typing import Optional
-import aiohttp
+import httpx
 
 
 class CrateNotFoundError(Exception):
@@ -20,39 +20,39 @@ class CratesAPI:
     """Client for interacting with the crates.io API."""
 
     BASE_URL = "https://crates.io/api/v1"
-    DOWNLOAD_URL = "https://crates.io"
+    DOWNLOAD_URL = "https://static.crates.io/crates"
     MAX_RETRIES = 3
     RETRY_DELAY = 2
 
     def __init__(self):
         """Initialize the API client."""
-        self.session = aiohttp.ClientSession()
+        self.client = httpx.AsyncClient()
 
-    async def close(self):
+    def close(self):
         """Close the HTTP session."""
-        await self.session.close()
+        asyncio.create_task(self.client.aclose())
 
-    async def _request_with_retry(self, url: str, **kwargs) -> aiohttp.ClientResponse:
+    async def _request_with_retry(self, url: str, **kwargs) -> httpx.Response:
         """Make HTTP request with retry logic.
 
         Args:
             url: URL to request
-            **kwargs: Additional arguments to pass to session.get()
+            **kwargs: Additional arguments to pass to client.get()
 
         Returns:
             Response object
 
         Raises:
-            aiohttp.ClientError: If all retries fail
+            httpx.HTTPError: If all retries fail
         """
         last_error = None
 
         for attempt in range(self.MAX_RETRIES):
             try:
-                async with self.session.get(url, **kwargs) as response:
-                    response.raise_for_status()
-                    return response
-            except aiohttp.ClientError as e:
+                response = await self.client.get(url, **kwargs)
+                response.raise_for_status()
+                return response
+            except httpx.HTTPError as e:
                 last_error = e
                 if attempt < self.MAX_RETRIES - 1:
                     await asyncio.sleep(self.RETRY_DELAY)
@@ -78,15 +78,15 @@ class CratesAPI:
         last_error = None
         for attempt in range(self.MAX_RETRIES):
             try:
-                async with self.session.get(url, headers=headers) as response:
-                    response.raise_for_status()
-                    data = await response.json()
-                    return data["crate"]["max_version"]
-            except aiohttp.ClientResponseError as e:
-                if e.status == 404:
+                response = await self.client.get(url, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+                return data["crate"]["max_version"]
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 404:
                     raise CrateNotFoundError(f"Crate '{crate_name}' not found")
                 raise
-            except aiohttp.ClientError as e:
+            except httpx.HTTPError as e:
                 last_error = e
                 if attempt < self.MAX_RETRIES - 1:
                     await asyncio.sleep(self.RETRY_DELAY)
@@ -108,13 +108,13 @@ class CratesAPI:
         headers = {"User-Agent": "experiment-platform"}
 
         try:
-            async with self.session.get(url, headers=headers) as response:
-                response.raise_for_status()
-                data = await response.json()
-                versions = [v["num"] for v in data["versions"]]
-                return version in versions
-        except aiohttp.ClientResponseError as e:
-            if e.status == 404:
+            response = await self.client.get(url, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            versions = [v["num"] for v in data["versions"]]
+            return version in versions
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
                 raise CrateNotFoundError(f"Crate '{crate_name}' not found")
             raise
 
@@ -131,12 +131,12 @@ class CratesAPI:
         Raises:
             VersionNotFoundError: If version doesn't exist
         """
-        url = f"{self.DOWNLOAD_URL}/api/v1/crates/{crate_name}/{version}/download"
+        url = f"{self.DOWNLOAD_URL}/{crate_name}/{crate_name}-{version}.crate"
         headers = {"User-Agent": "experiment-platform"}
 
-        async with self.session.get(url, headers=headers) as response:
-            response.raise_for_status()
-            content = await response.read()
+        response = await self.client.get(url, headers=headers)
+        response.raise_for_status()
+        content = response.content
 
         with open(output_path, "wb") as f:
             f.write(content)
