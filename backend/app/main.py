@@ -1,15 +1,18 @@
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import RedirectResponse, PlainTextResponse
 from pydantic import BaseModel
 from typing import Optional, List
+from pathlib import Path
 from app.config import Config
 from app.database import Database, TaskRecord
 from app.models import TaskStatus
 from app.services.crates_api import CratesAPI, CrateNotFoundError
 from app.services.scheduler import TaskScheduler
 from app.services.system_monitor import SystemMonitor
+from app.utils.file_utils import read_last_n_lines
+from app.utils.file_utils import FileNotFoundError as CustomFileNotFoundError
 
 
 # Request/Response models
@@ -164,6 +167,58 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         """Get system resource statistics"""
         monitor = SystemMonitor()
         return monitor.get_system_stats()
+
+    @app.get("/api/tasks/{task_id}/logs/stdout")
+    async def get_stdout_logs(task_id: int, lines: int = Query(default=1000, ge=0)):
+        """Get last N lines of stdout log"""
+        task = db.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        try:
+            log_lines = read_last_n_lines(task.stdout_log, lines)
+            return {"lines": log_lines}
+        except CustomFileNotFoundError:
+            raise HTTPException(status_code=404, detail="Log file not found")
+
+    @app.get("/api/tasks/{task_id}/logs/stderr")
+    async def get_stderr_logs(task_id: int, lines: int = Query(default=1000, ge=0)):
+        """Get last N lines of stderr log"""
+        task = db.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        try:
+            log_lines = read_last_n_lines(task.stderr_log, lines)
+            return {"lines": log_lines}
+        except CustomFileNotFoundError:
+            raise HTTPException(status_code=404, detail="Log file not found")
+
+    @app.get("/api/tasks/{task_id}/logs/stdout/raw", response_class=PlainTextResponse)
+    async def download_stdout_raw(task_id: int):
+        """Download full stdout log file"""
+        task = db.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        log_path = Path(task.stdout_log)
+        if not log_path.exists():
+            raise HTTPException(status_code=404, detail="Log file not found")
+
+        return PlainTextResponse(log_path.read_text(encoding='utf-8', errors='replace'))
+
+    @app.get("/api/tasks/{task_id}/logs/stderr/raw", response_class=PlainTextResponse)
+    async def download_stderr_raw(task_id: int):
+        """Download full stderr log file"""
+        task = db.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        log_path = Path(task.stderr_log)
+        if not log_path.exists():
+            raise HTTPException(status_code=404, detail="Log file not found")
+
+        return PlainTextResponse(log_path.read_text(encoding='utf-8', errors='replace'))
 
     return app
 

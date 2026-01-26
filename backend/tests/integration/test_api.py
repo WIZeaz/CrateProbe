@@ -119,3 +119,81 @@ def test_dashboard_system(client):
     assert isinstance(data["memory"], dict)
     assert isinstance(data["disk"], dict)
     assert 0.0 <= data["cpu_percent"] <= 100.0
+
+
+def test_get_task_stdout_logs(client, config):
+    """Test getting stdout logs for a task"""
+    # Create a task
+    create_resp = client.post("/api/tasks", json={"crate_name": "serde", "version": "1.0.0"})
+    task_id = create_resp.json()["task_id"]
+
+    # Create a fake log file
+    log_file = config.workspace_path / "logs" / f"serde-1.0.0-stdout.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    log_file.write_text("\n".join([f"Log line {i}" for i in range(1, 21)]))
+
+    # Get last 10 lines
+    response = client.get(f"/api/tasks/{task_id}/logs/stdout?lines=10")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "lines" in data
+    assert len(data["lines"]) == 10
+    assert data["lines"][0] == "Log line 11"
+    assert data["lines"][-1] == "Log line 20"
+
+
+def test_get_task_stderr_logs(client, config):
+    """Test getting stderr logs for a task"""
+    create_resp = client.post("/api/tasks", json={"crate_name": "tokio", "version": "1.0.0"})
+    task_id = create_resp.json()["task_id"]
+
+    # Create a fake log file
+    log_file = config.workspace_path / "logs" / f"tokio-1.0.0-stderr.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    log_file.write_text("Error line 1\nError line 2\nError line 3")
+
+    response = client.get(f"/api/tasks/{task_id}/logs/stderr?lines=100")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["lines"]) == 3
+
+
+def test_get_task_logs_not_found(client):
+    """Test getting logs for non-existent task"""
+    response = client.get("/api/tasks/9999/logs/stdout")
+
+    assert response.status_code == 404
+
+
+def test_get_task_logs_file_missing(client, config):
+    """Test getting logs when file doesn't exist"""
+    # Use serde which exists
+    create_resp = client.post("/api/tasks", json={"crate_name": "serde", "version": "1.0.0"})
+    task_id = create_resp.json()["task_id"]
+
+    # Don't create the log file - it should be missing
+    response = client.get(f"/api/tasks/{task_id}/logs/stdout")
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+def test_download_stdout_raw(client, config):
+    """Test downloading full stdout log"""
+    # Use serde which exists
+    create_resp = client.post("/api/tasks", json={"crate_name": "serde", "version": "1.0.0"})
+    task_id = create_resp.json()["task_id"]
+
+    # Create a fake log file
+    log_file = config.workspace_path / "logs" / f"serde-1.0.0-stdout.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    log_content = "Full log content\nLine 2\nLine 3"
+    log_file.write_text(log_content)
+
+    response = client.get(f"/api/tasks/{task_id}/logs/stdout/raw")
+
+    assert response.status_code == 200
+    assert response.text == log_content
+    assert "text/plain" in response.headers["content-type"]
