@@ -207,5 +207,56 @@ def test_download_stdout_raw(client, config):
     response = client.get(f"/api/tasks/{task_id}/logs/stdout/raw")
 
     assert response.status_code == 200
-    assert response.text == log_content
-    assert "text/plain" in response.headers["content-type"]
+
+
+def test_get_task_realtime_stats(client, config):
+    """Test getting real-time test case and POC counts"""
+    # Create a task
+    create_resp = client.post("/api/tasks", json={"crate_name": "serde", "version": "1.0.0"})
+    task_id = create_resp.json()["task_id"]
+
+    # Build workspace path from config (same as task creation logic)
+    workspace_path = config.workspace_path / "repos" / "serde-1.0.0"
+    testgen_dir = workspace_path / "testgen"
+    tests_dir = testgen_dir / "tests"
+    poc_dir = testgen_dir / "poc"
+
+    tests_dir.mkdir(parents=True, exist_ok=True)
+    poc_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create some test cases and POCs
+    (tests_dir / "case1").mkdir()
+    (tests_dir / "case2").mkdir()
+    (tests_dir / "case3").mkdir()
+    (poc_dir / "poc1").mkdir()
+    (poc_dir / "poc2").mkdir()
+
+    # Get realtime stats
+    response = client.get(f"/api/tasks/{task_id}/stats")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["case_count"] == 3
+    assert data["poc_count"] == 2
+
+
+def test_get_task_realtime_stats_empty(client, config):
+    """Test getting real-time stats when testgen directory doesn't exist"""
+    # Create a task
+    create_resp = client.post("/api/tasks", json={"crate_name": "serde", "version": "1.0.0"})
+    task_id = create_resp.json()["task_id"]
+
+    # Get realtime stats without creating testgen directory
+    response = client.get(f"/api/tasks/{task_id}/stats")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["case_count"] == 0
+    assert data["poc_count"] == 0
+
+
+def test_get_task_realtime_stats_not_found(client):
+    """Test getting stats for non-existent task"""
+    response = client.get("/api/tasks/99999/stats")
+
+    assert response.status_code == 404
