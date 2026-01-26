@@ -27,10 +27,20 @@ class TaskExecutor:
     async def prepare_workspace(self, task_id: int, crate_name: str, version: str) -> Path:
         """Download and extract crate to workspace"""
         workspace_dir = self.config.workspace_path / "repos" / f"{crate_name}-{version}"
+
+        # If workspace directory already exists (e.g., from retry), clean it first
+        if workspace_dir.exists():
+            shutil.rmtree(workspace_dir)
+
         workspace_dir.mkdir(parents=True, exist_ok=True)
 
         # Download crate file
         crate_file = self.config.workspace_path / "repos" / f"{crate_name}-{version}.crate"
+
+        # Remove old crate file if it exists
+        if crate_file.exists():
+            crate_file.unlink()
+
         await self.crates_api.download_crate(crate_name, version, str(crate_file))
 
         # Extract crate - .crate files contain a top-level directory we need to strip

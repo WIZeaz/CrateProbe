@@ -72,13 +72,18 @@ def test_get_task_by_id(client):
 
 
 def test_delete_task_not_running(client):
-    """Test deleting non-running task returns error"""
+    """Test deleting non-running task succeeds"""
     create_resp = client.post("/api/tasks", json={"crate_name": "serde", "version": "1.0.0"})
     task_id = create_resp.json()["task_id"]
 
     response = client.delete(f"/api/tasks/{task_id}")
 
-    assert response.status_code == 400
+    assert response.status_code == 200
+    assert response.json()["message"] == "Task deleted"
+
+    # Verify task is actually deleted
+    get_response = client.get(f"/api/tasks/{task_id}")
+    assert get_response.status_code == 404
 
 
 def test_dashboard_stats(client, app):
@@ -112,12 +117,19 @@ def test_dashboard_system(client):
 
     assert response.status_code == 200
     data = response.json()
+
+    # Verify flat structure
     assert "cpu_percent" in data
-    assert "memory" in data
-    assert "disk" in data
+    assert "memory_percent" in data
+    assert "memory_used_gb" in data
+    assert "memory_total_gb" in data
+    assert "disk_percent" in data
+    assert "disk_used_gb" in data
+    assert "disk_total_gb" in data
+
     assert isinstance(data["cpu_percent"], float)
-    assert isinstance(data["memory"], dict)
-    assert isinstance(data["disk"], dict)
+    assert isinstance(data["memory_percent"], float)
+    assert isinstance(data["disk_percent"], float)
     assert 0.0 <= data["cpu_percent"] <= 100.0
 
 

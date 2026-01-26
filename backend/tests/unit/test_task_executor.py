@@ -102,6 +102,32 @@ async def test_execute_task_handles_failure(executor, db, config):
 
 
 @pytest.mark.asyncio
+async def test_prepare_workspace_cleans_existing_directory(executor, config):
+    """Test that prepare_workspace cleans existing directory for retry"""
+    task_id = 1
+    crate_name = "serde"
+    version = "1.0.0"
+
+    workspace_dir = config.workspace_path / "repos" / f"{crate_name}-{version}"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create some existing files to simulate previous run
+    old_file = workspace_dir / "old_file.txt"
+    old_file.write_text("old content")
+
+    with patch.object(executor.crates_api, "download_crate", new_callable=AsyncMock):
+        with patch("tarfile.open") as mock_tarfile:
+            mock_tar = MagicMock()
+            mock_tarfile.return_value.__enter__.return_value = mock_tar
+
+            workspace_path = await executor.prepare_workspace(task_id, crate_name, version)
+
+            # Verify old file was removed
+            assert not old_file.exists()
+            assert workspace_path.exists()
+
+
+@pytest.mark.asyncio
 async def test_count_generated_items(executor, tmp_path):
     """Test counting testgen output directories"""
     testgen_dir = tmp_path / "testgen"

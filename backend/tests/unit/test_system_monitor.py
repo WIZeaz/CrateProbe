@@ -44,9 +44,15 @@ def test_get_system_stats():
     monitor = SystemMonitor()
     stats = monitor.get_system_stats()
 
+    # Verify flat structure (not nested)
     assert "cpu_percent" in stats
-    assert "memory" in stats
-    assert "disk" in stats
+    assert "memory_percent" in stats
+    assert "memory_used_gb" in stats
+    assert "memory_total_gb" in stats
+    assert "disk_percent" in stats
+    assert "disk_used_gb" in stats
+    assert "disk_total_gb" in stats
+
     assert isinstance(stats["cpu_percent"], float)
-    assert isinstance(stats["memory"], dict)
-    assert isinstance(stats["disk"], dict)
+    assert isinstance(stats["memory_percent"], float)
+    assert isinstance(stats["disk_percent"], float)

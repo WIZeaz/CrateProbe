@@ -55,9 +55,22 @@ async function retryTask() {
   }
 }
 
-function handleTaskUpdate(data) {
+async function handleTaskUpdate(data) {
   if (data.task_id === parseInt(taskId.value)) {
-    fetchTask()
+    // Only update task metadata (status, counts, timestamps, etc.)
+    // LogViewer component handles its own log updates independently via auto-refresh
+    try {
+      const updatedTask = await api.getTask(taskId.value)
+      // Only update if task object is loaded to avoid race conditions
+      if (task.value) {
+        // Update task data without replacing the entire object
+        // This minimizes re-renders of child components
+        Object.assign(task.value, updatedTask)
+      }
+    } catch (err) {
+      // Silently fail on update errors to avoid disrupting user experience
+      console.error('Failed to update task:', err)
+    }
   }
 }
 
@@ -201,7 +214,7 @@ onUnmounted(() => {
       </div>
 
       <!-- Log Viewer -->
-      <LogViewer :task-id="taskId" :auto-scroll="task.status === 'running'" />
+      <LogViewer :key="`log-viewer-${taskId}`" :task-id="taskId" :auto-scroll="task.status === 'running'" />
     </div>
   </div>
 </template>
