@@ -37,13 +37,13 @@ export default {
   },
 
   // Dashboard endpoints
-  async getDashboard() {
-    const response = await api.get('/dashboard')
+  async getDashboardStats() {
+    const response = await api.get('/dashboard/stats')
     return response.data
   },
 
   async getSystemStats() {
-    const response = await api.get('/system/stats')
+    const response = await api.get('/dashboard/system')
     return response.data
   },
 

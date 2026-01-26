@@ -19,8 +19,24 @@ const error = ref(null)
 
 async function fetchDashboard() {
   try {
-    const data = await api.getDashboard()
-    dashboard.value = data
+    // Fetch dashboard stats and tasks
+    const [stats, tasks] = await Promise.all([
+      api.getDashboardStats(),
+      api.getAllTasks()
+    ])
+
+    // Map backend field names to frontend expected format
+    dashboard.value = {
+      total_tasks: stats.total,
+      running_tasks: stats.running,
+      completed_tasks: stats.completed,
+      failed_tasks: stats.failed,
+      pending_tasks: stats.pending,
+      cancelled_tasks: stats.cancelled,
+      timeout_tasks: stats.timeout,
+      oom_tasks: stats.oom,
+      recent_tasks: tasks.slice(0, 10) // Get 10 most recent tasks
+    }
     loading.value = false
   } catch (err) {
     error.value = err.message
