@@ -127,12 +127,20 @@ onUnmounted(() => {
   <div>
     <div class="flex items-center justify-between mb-8">
       <h1 class="text-3xl font-bold text-gray-900">Tasks</h1>
-      <router-link
-        to="/tasks/new"
-        class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
-      >
-        + New Task
-      </router-link>
+      <div class="flex gap-3">
+        <router-link
+          to="/tasks/batch"
+          class="px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+        >
+          📋 Batch Create
+        </router-link>
+        <router-link
+          to="/tasks/new"
+          class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
+        >
+          + New Task
+        </router-link>
+      </div>
     </div>
 
     <!-- Filter -->
