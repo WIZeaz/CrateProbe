@@ -114,3 +114,52 @@ def test_update_task_pid(db):
     task = db.get_task(task_id)
 
     assert task.pid == 12345
+
+
+def test_reset_task_for_retry(db):
+    """Test resetting task state for retry"""
+    from datetime import datetime
+    from app.models import TaskStatus
+
+    # Create and complete a task
+    task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
+
+    # Simulate task execution
+    db.update_task_status(task_id, TaskStatus.RUNNING, started_at=datetime.now())
+    db.update_task_pid(task_id, 12345)
+    db.update_task_counts(task_id, case_count=10, poc_count=5)
+    db.update_task_status(
+        task_id,
+        TaskStatus.COMPLETED,
+        finished_at=datetime.now(),
+        exit_code=0
+    )
+
+    # Verify task is completed
+    task = db.get_task(task_id)
+    assert task.status == TaskStatus.COMPLETED
+    assert task.case_count == 10
+    assert task.poc_count == 5
+    assert task.exit_code == 0
+    assert task.pid == 12345
+    assert task.started_at is not None
+    assert task.finished_at is not None
+
+    # Reset task for retry
+    db.reset_task_for_retry(task_id)
+
+    # Verify task is reset
+    task = db.get_task(task_id)
+    assert task.status == TaskStatus.PENDING
+    assert task.case_count == 0
+    assert task.poc_count == 0
+    assert task.exit_code is None
+    assert task.pid is None
+    assert task.started_at is None
+    assert task.finished_at is None
+    assert task.error_message is None
+
+    # Verify crate info is preserved
+    assert task.crate_name == "serde"
+    assert task.version == "1.0.0"
+    assert task.workspace_path == "/path"

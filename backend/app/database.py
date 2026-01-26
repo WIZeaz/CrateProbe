@@ -236,6 +236,30 @@ class Database:
         cursor.execute("UPDATE tasks SET pid = ? WHERE id = ?", (pid, task_id))
         self.conn.commit()
 
+    def reset_task_for_retry(self, task_id: int):
+        """Reset task state for retry
+
+        Resets task to pending status and clears execution results.
+        Keeps crate_name, version, and workspace paths intact.
+
+        Args:
+            task_id: Task ID to reset
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            UPDATE tasks SET
+                status = ?,
+                started_at = NULL,
+                finished_at = NULL,
+                exit_code = NULL,
+                error_message = NULL,
+                case_count = 0,
+                poc_count = 0,
+                pid = NULL
+            WHERE id = ?
+        """, (TaskStatus.PENDING.value, task_id))
+        self.conn.commit()
+
     def get_tasks_by_status(self, status: TaskStatus) -> List[TaskRecord]:
         """Get tasks filtered by status
 

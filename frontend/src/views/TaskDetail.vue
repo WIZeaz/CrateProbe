@@ -71,14 +71,15 @@ async function cancelTask() {
 }
 
 async function retryTask() {
-  if (!confirm(`Retry task #${taskId.value} (${task.value.crate_name} ${task.value.version})?\n\nThis will create a new task with the same configuration.`)) {
+  if (!confirm(`Retry task #${taskId.value} (${task.value.crate_name} ${task.value.version})?\n\nThis will reset the task and re-execute it.`)) {
     return
   }
 
   try {
-    const newTask = await api.retryTask(taskId.value)
-    // Navigate to the new task
-    router.push(`/tasks/${newTask.task_id}`)
+    await api.retryTask(taskId.value)
+    // Refresh task data to show reset state
+    await fetchTask()
+    await fetchRealtimeStats()
   } catch (err) {
     alert('Failed to retry task: ' + (err.response?.data?.detail || err.message))
   }

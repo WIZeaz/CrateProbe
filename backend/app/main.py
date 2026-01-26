@@ -180,27 +180,20 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
     @app.post("/api/tasks/{task_id}/retry", response_model=TaskResponse)
     async def retry_task(task_id: int):
-        """Retry/re-execute a task by creating a new task with same configuration"""
+        """Retry/re-execute a task by resetting it to pending state"""
         task = db.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
 
-        # Create workspace paths for new task
-        workspace_path = config.workspace_path / "repos" / f"{task.crate_name}-{task.version}"
-        stdout_log = config.workspace_path / "logs" / f"{task.crate_name}-{task.version}-stdout.log"
-        stderr_log = config.workspace_path / "logs" / f"{task.crate_name}-{task.version}-stderr.log"
+        # Cannot retry a task that's currently running
+        if task.status == TaskStatus.RUNNING:
+            raise HTTPException(status_code=400, detail="Cannot retry a running task")
 
-        # Create new task in database
-        new_task_id = db.create_task(
-            crate_name=task.crate_name,
-            version=task.version,
-            workspace_path=str(workspace_path),
-            stdout_log=str(stdout_log),
-            stderr_log=str(stderr_log)
-        )
+        # Reset task to pending state
+        db.reset_task_for_retry(task_id)
 
         return TaskResponse(
-            task_id=new_task_id,
+            task_id=task_id,
             crate_name=task.crate_name,
             version=task.version,
             status=TaskStatus.PENDING.value
