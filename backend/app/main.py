@@ -1,10 +1,11 @@
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse, PlainTextResponse
 from pydantic import BaseModel
 from typing import Optional, List
 from pathlib import Path
+import asyncio
 from app.config import Config
 from app.database import Database, TaskRecord
 from app.models import TaskStatus
@@ -13,6 +14,7 @@ from app.services.scheduler import TaskScheduler
 from app.services.system_monitor import SystemMonitor
 from app.utils.file_utils import read_last_n_lines
 from app.utils.file_utils import FileNotFoundError as CustomFileNotFoundError
+from app.api.websocket import get_manager
 
 
 # Request/Response models
@@ -51,6 +53,9 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
     # Create scheduler
     scheduler = TaskScheduler(config, db)
+
+    # Get WebSocket manager
+    ws_manager = get_manager()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -220,7 +225,84 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
         return PlainTextResponse(log_path.read_text(encoding='utf-8', errors='replace'))
 
+    @app.websocket("/ws/tasks/{task_id}")
+    async def websocket_task_endpoint(websocket: WebSocket, task_id: int):
+        """WebSocket endpoint for real-time task status updates"""
+        # Check if task exists
+        task = db.get_task(task_id)
+        if not task:
+            await websocket.close(code=1000)
+            return
+
+        # Connect and send initial state
+        await ws_manager.connect_task(task_id, websocket)
+
+        try:
+            # Send initial task state
+            await websocket.send_json(_task_to_dict(task))
+
+            # Keep connection alive and wait for client messages or disconnection
+            while True:
+                try:
+                    # Wait for a message from client (or disconnection)
+                    await websocket.receive_text()
+                except WebSocketDisconnect:
+                    break
+        except Exception:
+            pass
+        finally:
+            ws_manager.disconnect_task(task_id, websocket)
+
+    @app.websocket("/ws/dashboard")
+    async def websocket_dashboard_endpoint(websocket: WebSocket):
+        """WebSocket endpoint for real-time dashboard updates"""
+        await ws_manager.connect_dashboard(websocket)
+
+        try:
+            # Send initial dashboard stats
+            all_tasks = db.get_all_tasks()
+            stats = {
+                "total": len(all_tasks),
+                "pending": len([t for t in all_tasks if t.status == TaskStatus.PENDING]),
+                "running": len([t for t in all_tasks if t.status == TaskStatus.RUNNING]),
+                "completed": len([t for t in all_tasks if t.status == TaskStatus.COMPLETED]),
+                "failed": len([t for t in all_tasks if t.status == TaskStatus.FAILED]),
+                "cancelled": len([t for t in all_tasks if t.status == TaskStatus.CANCELLED]),
+                "timeout": len([t for t in all_tasks if t.status == TaskStatus.TIMEOUT]),
+                "oom": len([t for t in all_tasks if t.status == TaskStatus.OOM]),
+            }
+            await websocket.send_json(stats)
+
+            # Keep connection alive and wait for client messages or disconnection
+            while True:
+                try:
+                    # Wait for a message from client (or disconnection)
+                    await websocket.receive_text()
+                except WebSocketDisconnect:
+                    break
+        except Exception:
+            pass
+        finally:
+            ws_manager.disconnect_dashboard(websocket)
+
     return app
+
+
+def _task_to_dict(task: TaskRecord) -> dict:
+    """Convert TaskRecord to dictionary for WebSocket"""
+    return {
+        "id": task.id,
+        "crate_name": task.crate_name,
+        "version": task.version,
+        "status": task.status.value,
+        "exit_code": task.exit_code,
+        "created_at": task.created_at.isoformat() if task.created_at else None,
+        "started_at": task.started_at.isoformat() if task.started_at else None,
+        "finished_at": task.finished_at.isoformat() if task.finished_at else None,
+        "case_count": task.case_count or 0,
+        "poc_count": task.poc_count or 0,
+        "error_message": task.error_message
+    }
 
 
 def _task_to_response(task: TaskRecord) -> TaskDetailResponse:
