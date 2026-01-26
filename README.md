@@ -30,10 +30,19 @@ cp config.toml.example config.toml
 
 ### 后端
 
+本项目使用 [uv](https://github.com/astral-sh/uv) 进行Python依赖管理。
+
 ```bash
 cd backend
-pip install -r requirements.txt
-python -m app.main
+
+# 安装依赖
+uv sync
+
+# 运行测试
+uv run pytest
+
+# 启动后端服务
+uv run python -m app.main
 ```
 
 ### 前端
