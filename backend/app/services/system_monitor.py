@@ -29,8 +29,15 @@ class SystemMonitor:
 
     def get_system_stats(self) -> Dict:
         """Get all system statistics at once"""
+        memory = self.get_memory_usage()
+        disk = self.get_disk_usage()
+
         return {
             "cpu_percent": self.get_cpu_usage(),
-            "memory": self.get_memory_usage(),
-            "disk": self.get_disk_usage()
+            "memory_percent": memory["percent"],
+            "memory_used_gb": memory["used_mb"] / 1024,
+            "memory_total_gb": memory["total_mb"] / 1024,
+            "disk_percent": disk["percent"],
+            "disk_used_gb": disk["used_gb"],
+            "disk_total_gb": disk["total_gb"]
         }

@@ -32,6 +32,11 @@ export default {
   },
 
   async cancelTask(taskId) {
+    const response = await api.post(`/tasks/${taskId}/cancel`)
+    return response.data
+  },
+
+  async deleteTask(taskId) {
     const response = await api.delete(`/tasks/${taskId}`)
     return response.data
   },

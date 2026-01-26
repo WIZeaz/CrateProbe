@@ -93,6 +93,22 @@ function formatDuration(startStr, endStr) {
   return `${hours}h ${minutes}m`
 }
 
+async function handleDelete(task) {
+  if (!confirm(`Are you sure you want to delete task #${task.id} (${task.crate_name})?`)) {
+    return
+  }
+
+  try {
+    await api.deleteTask(task.id)
+    // Remove from local list immediately for better UX
+    tasks.value = tasks.value.filter(t => t.id !== task.id)
+  } catch (err) {
+    alert(`Failed to delete task: ${err.message}`)
+    // Refresh to get accurate state
+    fetchTasks()
+  }
+}
+
 onMounted(() => {
   fetchTasks()
   websocket.on('task_update', handleTaskUpdate)
@@ -209,40 +225,55 @@ onUnmounted(() => {
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
               Runtime
             </th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+              Actions
+            </th>
           </tr>
         </thead>
         <tbody class="divide-y divide-gray-200">
           <tr
             v-for="task in filteredAndSortedTasks"
             :key="task.id"
-            @click="viewTask(task.id)"
-            class="hover:bg-gray-50 cursor-pointer transition-colors"
+            class="hover:bg-gray-50 transition-colors"
           >
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer" @click="viewTask(task.id)">
               #{{ task.id }}
             </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
+            <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900 cursor-pointer" @click="viewTask(task.id)">
               {{ task.crate_name }}
             </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer" @click="viewTask(task.id)">
               {{ task.version }}
             </td>
-            <td class="px-4 py-3 whitespace-nowrap">
+            <td class="px-4 py-3 whitespace-nowrap cursor-pointer" @click="viewTask(task.id)">
               <span :class="['status-badge', `status-${task.status}`]">
                 {{ task.status }}
               </span>
             </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer" @click="viewTask(task.id)">
               {{ task.case_count }}
             </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer" @click="viewTask(task.id)">
               {{ task.poc_count }}
             </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer" @click="viewTask(task.id)">
               {{ formatDate(task.created_at) }}
             </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer" @click="viewTask(task.id)">
               {{ formatDuration(task.started_at, task.finished_at) }}
+            </td>
+            <td class="px-4 py-3 whitespace-nowrap text-right text-sm font-medium">
+              <button
+                v-if="task.status !== 'running'"
+                @click.stop="handleDelete(task)"
+                class="text-red-600 hover:text-red-900 transition-colors"
+                title="Delete task"
+              >
+                🗑️ Delete
+              </button>
+              <span v-else class="text-gray-400" title="Cannot delete running task">
+                —
+              </span>
             </td>
           </tr>
         </tbody>

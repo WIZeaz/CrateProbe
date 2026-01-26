@@ -307,6 +307,20 @@ class Database:
         # If all formats fail, raise error
         raise ValueError(f"Cannot parse datetime: {dt_str}")
 
+    def delete_task(self, task_id: int) -> bool:
+        """Delete a task from database
+
+        Args:
+            task_id: Task ID to delete
+
+        Returns:
+            True if task was deleted, False if task not found
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+        self.conn.commit()
+        return cursor.rowcount > 0
+
     def close(self):
         """Close database connection"""
         if self.conn:

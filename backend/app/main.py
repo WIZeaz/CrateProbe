@@ -136,9 +136,9 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             raise HTTPException(status_code=404, detail="Task not found")
         return _task_to_response(task)
 
-    @app.delete("/api/tasks/{task_id}")
-    async def cancel_task(task_id: int):
-        """Cancel a running task"""
+    @app.post("/api/tasks/{task_id}/cancel")
+    async def cancel_running_task(task_id: int):
+        """Cancel a running task (does not delete from database)"""
         task = db.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
@@ -148,6 +148,25 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
         await scheduler.cancel_task(task_id)
         return {"message": "Task cancelled"}
+
+    @app.delete("/api/tasks/{task_id}")
+    async def delete_task(task_id: int):
+        """Delete a task from database (cannot delete running tasks)"""
+        task = db.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        if task.status == TaskStatus.RUNNING:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot delete running task. Cancel it first."
+            )
+
+        deleted = db.delete_task(task_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        return {"message": "Task deleted"}
 
     @app.get("/api/dashboard/stats")
     async def get_dashboard_stats():
