@@ -79,3 +79,43 @@ def test_delete_task_not_running(client):
     response = client.delete(f"/api/tasks/{task_id}")
 
     assert response.status_code == 400
+
+
+def test_dashboard_stats(client, app):
+    """Test getting dashboard statistics"""
+    # Create some tasks with different statuses
+    from app.models import TaskStatus
+
+    # Access the database through the app's dependency injection
+    db = app.dependency_overrides.get("get_db")
+    if not db:
+        # Create tasks via API
+        client.post("/api/tasks", json={"crate_name": "serde", "version": "1.0.0"})
+        client.post("/api/tasks", json={"crate_name": "tokio", "version": "1.0.0"})
+
+    response = client.get("/api/dashboard/stats")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "total" in data
+    assert "pending" in data
+    assert "running" in data
+    assert "completed" in data
+    assert "failed" in data
+    assert isinstance(data["total"], int)
+    assert data["total"] >= 0
+
+
+def test_dashboard_system(client):
+    """Test getting system resource stats"""
+    response = client.get("/api/dashboard/system")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "cpu_percent" in data
+    assert "memory" in data
+    assert "disk" in data
+    assert isinstance(data["cpu_percent"], float)
+    assert isinstance(data["memory"], dict)
+    assert isinstance(data["disk"], dict)
+    assert 0.0 <= data["cpu_percent"] <= 100.0

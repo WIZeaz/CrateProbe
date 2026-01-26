@@ -9,6 +9,7 @@ from app.database import Database, TaskRecord
 from app.models import TaskStatus
 from app.services.crates_api import CratesAPI, CrateNotFoundError
 from app.services.scheduler import TaskScheduler
+from app.services.system_monitor import SystemMonitor
 
 
 # Request/Response models
@@ -139,6 +140,30 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
         await scheduler.cancel_task(task_id)
         return {"message": "Task cancelled"}
+
+    @app.get("/api/dashboard/stats")
+    async def get_dashboard_stats():
+        """Get task statistics for dashboard"""
+        all_tasks = db.get_all_tasks()
+
+        stats = {
+            "total": len(all_tasks),
+            "pending": len([t for t in all_tasks if t.status == TaskStatus.PENDING]),
+            "running": len([t for t in all_tasks if t.status == TaskStatus.RUNNING]),
+            "completed": len([t for t in all_tasks if t.status == TaskStatus.COMPLETED]),
+            "failed": len([t for t in all_tasks if t.status == TaskStatus.FAILED]),
+            "cancelled": len([t for t in all_tasks if t.status == TaskStatus.CANCELLED]),
+            "timeout": len([t for t in all_tasks if t.status == TaskStatus.TIMEOUT]),
+            "oom": len([t for t in all_tasks if t.status == TaskStatus.OOM]),
+        }
+
+        return stats
+
+    @app.get("/api/dashboard/system")
+    async def get_system_stats():
+        """Get system resource statistics"""
+        monitor = SystemMonitor()
+        return monitor.get_system_stats()
 
     return app
 
