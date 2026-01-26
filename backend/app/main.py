@@ -253,9 +253,9 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
 
-        # Construct path to miri_report.txt in workspace
+        # Construct path to miri_report.txt in testgen directory
         workspace_path = Path(task.workspace_path)
-        miri_report_path = workspace_path / f"{task.crate_name}-{task.version}" / "miri_report.txt"
+        miri_report_path = workspace_path / "testgen" / "miri_report.txt"
 
         try:
             log_lines = read_last_n_lines(str(miri_report_path), lines)
@@ -297,7 +297,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             raise HTTPException(status_code=404, detail="Task not found")
 
         workspace_path = Path(task.workspace_path)
-        miri_report_path = workspace_path / f"{task.crate_name}-{task.version}" / "miri_report.txt"
+        miri_report_path = workspace_path / "testgen" / "miri_report.txt"
 
         if not miri_report_path.exists():
             raise HTTPException(status_code=404, detail="Miri report file not found")
