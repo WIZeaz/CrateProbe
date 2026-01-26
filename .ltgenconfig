@@ -1,0 +1,5 @@
+max_complexity = 16
+max_iteration = 1000
+max_run = 10000
+override = true
+timeout = 60 # 60 seconds to kill a case
