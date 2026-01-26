@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 import tarfile
 from pathlib import Path
 from datetime import datetime
@@ -32,9 +33,29 @@ class TaskExecutor:
         crate_file = self.config.workspace_path / "repos" / f"{crate_name}-{version}.crate"
         await self.crates_api.download_crate(crate_name, version, str(crate_file))
 
-        # Extract crate
-        with tarfile.open(crate_file, "r:gz") as tar:
-            tar.extractall(workspace_dir)
+        # Extract crate - .crate files contain a top-level directory we need to strip
+        temp_extract_dir = self.config.workspace_path / "repos" / f"_temp_{crate_name}-{version}"
+        temp_extract_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            with tarfile.open(crate_file, "r:gz") as tar:
+                tar.extractall(temp_extract_dir)
+
+            # Move contents from the inner directory to workspace_dir
+            # .crate files have structure: crate-name-version/...
+            inner_dir = temp_extract_dir / f"{crate_name}-{version}"
+            if inner_dir.exists():
+                # Move all contents from inner_dir to workspace_dir
+                for item in inner_dir.iterdir():
+                    shutil.move(str(item), str(workspace_dir))
+            else:
+                # Fallback: if structure is different, move everything
+                for item in temp_extract_dir.iterdir():
+                    shutil.move(str(item), str(workspace_dir))
+        finally:
+            # Clean up temp directory
+            if temp_extract_dir.exists():
+                shutil.rmtree(temp_extract_dir)
 
         # Remove crate file after extraction
         if crate_file.exists():
@@ -117,12 +138,8 @@ class TaskExecutor:
 
     def count_generated_items(self, workspace_dir: Path) -> Tuple[int, int]:
         """Count generated test cases and POCs"""
-        # First try looking in workspace_dir/crate-name/testgen
-        testgen_dir = workspace_dir / f"{workspace_dir.name}" / "testgen"
-
-        # If that doesn't exist, try workspace_dir/testgen (for tests)
-        if not testgen_dir.exists():
-            testgen_dir = workspace_dir / "testgen"
+        # Now that we've fixed extraction, testgen should be directly in workspace_dir
+        testgen_dir = workspace_dir / "testgen"
 
         case_count = 0
         poc_count = 0
