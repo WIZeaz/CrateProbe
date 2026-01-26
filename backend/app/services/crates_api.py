@@ -28,9 +28,9 @@ class CratesAPI:
         """Initialize the API client."""
         self.client = httpx.AsyncClient()
 
-    def close(self):
+    async def close(self):
         """Close the HTTP session."""
-        asyncio.create_task(self.client.aclose())
+        await self.client.aclose()
 
     async def _request_with_retry(self, url: str, **kwargs) -> httpx.Response:
         """Make HTTP request with retry logic.
