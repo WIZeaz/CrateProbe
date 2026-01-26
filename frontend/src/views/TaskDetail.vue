@@ -41,6 +41,20 @@ async function cancelTask() {
   }
 }
 
+async function retryTask() {
+  if (!confirm(`Retry task #${taskId.value} (${task.value.crate_name} ${task.value.version})?\n\nThis will create a new task with the same configuration.`)) {
+    return
+  }
+
+  try {
+    const newTask = await api.retryTask(taskId.value)
+    // Navigate to the new task
+    router.push(`/tasks/${newTask.task_id}`)
+  } catch (err) {
+    alert('Failed to retry task: ' + (err.response?.data?.detail || err.message))
+  }
+}
+
 function handleTaskUpdate(data) {
   if (data.task_id === parseInt(taskId.value)) {
     fetchTask()
@@ -123,6 +137,14 @@ onUnmounted(() => {
           >
             <span v-if="cancelling" class="spinner border-white"></span>
             {{ cancelling ? 'Cancelling...' : 'Cancel Task' }}
+          </button>
+          <button
+            v-if="task.status !== 'running' && task.status !== 'pending'"
+            @click="retryTask"
+            class="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2"
+            title="Create a new task with the same configuration"
+          >
+            🔄 Retry Task
           </button>
         </div>
       </div>

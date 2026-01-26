@@ -41,6 +41,11 @@ export default {
     return response.data
   },
 
+  async retryTask(taskId) {
+    const response = await api.post(`/tasks/${taskId}/retry`)
+    return response.data
+  },
+
   // Dashboard endpoints
   async getDashboardStats() {
     const response = await api.get('/dashboard/stats')

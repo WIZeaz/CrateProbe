@@ -149,6 +149,34 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         await scheduler.cancel_task(task_id)
         return {"message": "Task cancelled"}
 
+    @app.post("/api/tasks/{task_id}/retry", response_model=TaskResponse)
+    async def retry_task(task_id: int):
+        """Retry/re-execute a task by creating a new task with same configuration"""
+        task = db.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        # Create workspace paths for new task
+        workspace_path = config.workspace_path / "repos" / f"{task.crate_name}-{task.version}"
+        stdout_log = config.workspace_path / "logs" / f"{task.crate_name}-{task.version}-stdout.log"
+        stderr_log = config.workspace_path / "logs" / f"{task.crate_name}-{task.version}-stderr.log"
+
+        # Create new task in database
+        new_task_id = db.create_task(
+            crate_name=task.crate_name,
+            version=task.version,
+            workspace_path=str(workspace_path),
+            stdout_log=str(stdout_log),
+            stderr_log=str(stderr_log)
+        )
+
+        return TaskResponse(
+            task_id=new_task_id,
+            crate_name=task.crate_name,
+            version=task.version,
+            status=TaskStatus.PENDING.value
+        )
+
     @app.delete("/api/tasks/{task_id}")
     async def delete_task(task_id: int):
         """Delete a task from database (cannot delete running tasks)"""
