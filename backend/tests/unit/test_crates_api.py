@@ -37,7 +37,7 @@ async def test_get_latest_version_success():
             headers={"User-Agent": "experiment-platform"}
         )
 
-    api.close()
+    await api.close()
 
 
 @pytest.mark.asyncio
@@ -61,7 +61,7 @@ async def test_get_latest_version_not_found():
         with pytest.raises(CrateNotFoundError, match="Crate 'nonexistent' not found"):
             await api.get_latest_version("nonexistent")
 
-    api.close()
+    await api.close()
 
 
 @pytest.mark.asyncio
@@ -86,7 +86,7 @@ async def test_verify_version_exists_success():
 
         assert exists is True
 
-    api.close()
+    await api.close()
 
 
 @pytest.mark.asyncio
@@ -111,7 +111,7 @@ async def test_verify_version_not_exists():
 
         assert exists is False
 
-    api.close()
+    await api.close()
 
 
 @pytest.mark.asyncio
@@ -139,7 +139,7 @@ async def test_download_crate_success():
                 mock_content
             )
 
-    api.close()
+    await api.close()
 
 
 @pytest.mark.asyncio
@@ -178,4 +178,4 @@ async def test_api_retry_on_failure():
         assert version == "1.70.0"
         assert call_count == 3
 
-    api.close()
+    await api.close()
