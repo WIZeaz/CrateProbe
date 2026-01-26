@@ -16,14 +16,19 @@ const loading = ref(true)
 const error = ref(null)
 let refreshInterval = null
 
-async function fetchStats() {
+async function fetchStats(isRefresh = false) {
   try {
     const data = await api.getSystemStats()
     stats.value = data
-    loading.value = false
+    // Only hide loading spinner after initial load
+    if (!isRefresh) {
+      loading.value = false
+    }
   } catch (err) {
     error.value = err.message
-    loading.value = false
+    if (!isRefresh) {
+      loading.value = false
+    }
   }
 }
 
@@ -39,7 +44,7 @@ onMounted(() => {
 
   // Auto-refresh every 5 seconds
   refreshInterval = setInterval(() => {
-    fetchStats()
+    fetchStats(true)
   }, 5000)
 })
 

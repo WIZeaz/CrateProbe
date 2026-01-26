@@ -18,7 +18,7 @@ const loading = ref(true)
 const error = ref(null)
 let refreshInterval = null
 
-async function fetchDashboard() {
+async function fetchDashboard(isRefresh = false) {
   try {
     // Fetch dashboard stats and tasks
     const [stats, tasks] = await Promise.all([
@@ -38,16 +38,21 @@ async function fetchDashboard() {
       oom_tasks: stats.oom,
       recent_tasks: tasks.slice(0, 10) // Get 10 most recent tasks
     }
-    loading.value = false
+    // Only hide loading spinner after initial load
+    if (!isRefresh) {
+      loading.value = false
+    }
   } catch (err) {
     error.value = err.message
-    loading.value = false
+    if (!isRefresh) {
+      loading.value = false
+    }
   }
 }
 
 function handleTaskUpdate(data) {
-  // Refresh dashboard on task updates
-  fetchDashboard()
+  // Refresh dashboard on task updates (non-intrusive)
+  fetchDashboard(true)
 }
 
 function viewTask(taskId) {
@@ -79,9 +84,9 @@ onMounted(() => {
   websocket.on('task_created', handleTaskUpdate)
   websocket.on('task_completed', handleTaskUpdate)
 
-  // Auto-refresh every 5 seconds
+  // Auto-refresh every 5 seconds (non-intrusive)
   refreshInterval = setInterval(() => {
-    fetchDashboard()
+    fetchDashboard(true)
   }, 5000)
 })
 

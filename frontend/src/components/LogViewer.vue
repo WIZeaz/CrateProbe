@@ -37,11 +37,22 @@ async function loadLog(logType, isRefresh = false) {
     return
   }
 
-  loading.value[logType] = true
+  // Only show loading spinner for initial load, not for auto-refresh
+  if (!isRefresh) {
+    loading.value[logType] = true
+  }
   error.value = null
 
   try {
     const data = await api.getLog(props.taskId, logType, 1000)
+
+    // Check if user is at bottom before updating (for auto-refresh)
+    let wasAtBottom = false
+    if (isRefresh && logContainer.value) {
+      const threshold = 50 // pixels from bottom
+      wasAtBottom = logContainer.value.scrollHeight - logContainer.value.scrollTop - logContainer.value.clientHeight < threshold
+    }
+
     // Backend returns { lines: [...] } - join array into string
     if (data.lines && Array.isArray(data.lines)) {
       logs.value[logType] = data.lines.join('\n') || 'No content available'
@@ -49,14 +60,19 @@ async function loadLog(logType, isRefresh = false) {
       logs.value[logType] = data.content || 'No content available'
     }
 
-    if (props.autoScroll) {
+    // Auto-scroll only if:
+    // 1. It's a manual load (not refresh) and autoScroll is enabled, OR
+    // 2. It's an auto-refresh and user was already at the bottom
+    if ((!isRefresh && props.autoScroll) || (isRefresh && wasAtBottom)) {
       scrollToBottom()
     }
   } catch (err) {
     error.value = err.response?.data?.detail || err.message
     logs.value[logType] = `Error loading log: ${error.value}`
   } finally {
-    loading.value[logType] = false
+    if (!isRefresh) {
+      loading.value[logType] = false
+    }
   }
 }
 
