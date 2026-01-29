@@ -6,8 +6,14 @@ defineProps({
   color: {
     type: String,
     default: 'blue'
+  },
+  clickable: {
+    type: Boolean,
+    default: false
   }
 })
+
+const emit = defineEmits(['click'])
 
 const colorClasses = {
   blue: 'bg-blue-50 text-blue-600',
@@ -17,10 +23,19 @@ const colorClasses = {
   purple: 'bg-purple-50 text-purple-600',
   gray: 'bg-gray-50 text-gray-600'
 }
+
+function handleClick() {
+  if (clickable) {
+    emit('click')
+  }
+}
 </script>
 
 <template>
-  <div class="bento-card">
+  <div
+    :class="['bento-card', { 'cursor-pointer hover:shadow-lg transition-shadow': clickable }]"
+    @click="handleClick"
+  >
     <div class="flex items-center justify-between">
       <div>
         <p class="text-sm font-medium text-gray-600">{{ title }}</p>
