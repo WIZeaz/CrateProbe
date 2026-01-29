@@ -78,6 +78,14 @@ function formatDuration(startStr, endStr) {
   return `${hours}h ${minutes}m`
 }
 
+function navigateToTasks(status = 'all') {
+  if (status === 'all') {
+    router.push('/tasks')
+  } else {
+    router.push(`/tasks?status=${status}`)
+  }
+}
+
 onMounted(() => {
   fetchDashboard()
   websocket.on('task_update', handleTaskUpdate)
@@ -116,30 +124,46 @@ onUnmounted(() => {
 
     <div v-else>
       <!-- Stats Grid -->
-      <div class="bento-grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 mb-8">
+      <div class="bento-grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 mb-8">
         <StatCard
           title="Total Tasks"
           :value="dashboard.total_tasks"
           icon="📊"
           color="blue"
+          :clickable="true"
+          @click="navigateToTasks('all')"
         />
         <StatCard
           title="Running"
           :value="dashboard.running_tasks"
           icon="▶️"
           color="yellow"
+          :clickable="true"
+          @click="navigateToTasks('running')"
         />
         <StatCard
           title="Completed"
           :value="dashboard.completed_tasks"
           icon="✅"
           color="green"
+          :clickable="true"
+          @click="navigateToTasks('completed')"
         />
         <StatCard
           title="Failed"
           :value="dashboard.failed_tasks"
           icon="❌"
           color="red"
+          :clickable="true"
+          @click="navigateToTasks('failed')"
+        />
+        <StatCard
+          title="Pending"
+          :value="dashboard.pending_tasks || 0"
+          icon="⏳"
+          color="purple"
+          :clickable="true"
+          @click="navigateToTasks('pending')"
         />
       </div>
 
