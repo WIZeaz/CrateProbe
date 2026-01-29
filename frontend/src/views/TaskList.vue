@@ -111,7 +111,7 @@ async function handleDelete(task) {
 }
 
 async function handleRetry(task) {
-  if (!confirm(`重试任务 #${task.id} (${task.crate_name} ${task.version})?\n\n这将重置任务并重新执行。`)) {
+  if (!confirm(`Retry task #${task.id} (${task.crate_name} ${task.version})?\n\nThis will reset and re-execute the task.`)) {
     return
   }
 
@@ -120,7 +120,7 @@ async function handleRetry(task) {
     // Refresh task list to show updated status
     fetchTasks()
   } catch (err) {
-    alert(`重试任务失败: ${err.message}`)
+    alert(`Failed to retry task: ${err.message}`)
   }
 }
 
@@ -297,7 +297,7 @@ onUnmounted(() => {
                   v-if="task.status !== 'running'"
                   @click.stop="handleRetry(task)"
                   class="text-green-600 hover:text-green-900 transition-colors"
-                  title="重试任务"
+                  title="Retry task"
                 >
                   🔄 Retry
                 </button>
@@ -305,11 +305,11 @@ onUnmounted(() => {
                   v-if="task.status !== 'running'"
                   @click.stop="handleDelete(task)"
                   class="text-red-600 hover:text-red-900 transition-colors"
-                  title="删除任务"
+                  title="Delete task"
                 >
                   🗑️ Delete
                 </button>
-                <span v-if="task.status === 'running'" class="text-gray-400" title="任务运行中">
+                <span v-if="task.status === 'running'" class="text-gray-400" title="Task is running">
                   —
                 </span>
               </div>
