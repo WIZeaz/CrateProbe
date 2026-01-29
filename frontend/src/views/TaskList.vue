@@ -1,10 +1,11 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import api from '../services/api'
 import websocket from '../services/websocket'
 
 const router = useRouter()
+const route = useRoute()
 const tasks = ref([])
 const loading = ref(true)
 const error = ref(null)
@@ -110,6 +111,12 @@ async function handleDelete(task) {
 }
 
 onMounted(() => {
+  // Parse URL query parameter for status filter
+  const statusParam = route.query.status
+  if (statusParam && statusOptions.find(opt => opt.value === statusParam)) {
+    filterStatus.value = statusParam
+  }
+
   fetchTasks()
   websocket.on('task_update', handleTaskUpdate)
   websocket.on('task_created', handleTaskUpdate)
