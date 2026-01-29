@@ -1,11 +1,18 @@
 <script setup>
 defineProps({
-  title: String,
-  value: [String, Number],
+  title: {
+    type: String,
+    required: true
+  },
+  value: {
+    type: [String, Number],
+    required: true
+  },
   icon: String,
   color: {
     type: String,
-    default: 'blue'
+    default: 'blue',
+    validator: (value) => ['blue', 'green', 'red', 'yellow', 'purple', 'gray'].includes(value)
   },
   clickable: {
     type: Boolean,
