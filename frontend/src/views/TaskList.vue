@@ -110,6 +110,20 @@ async function handleDelete(task) {
   }
 }
 
+async function handleRetry(task) {
+  if (!confirm(`重试任务 #${task.id} (${task.crate_name} ${task.version})?\n\n这将重置任务并重新执行。`)) {
+    return
+  }
+
+  try {
+    await api.retryTask(task.id)
+    // Refresh task list to show updated status
+    fetchTasks()
+  } catch (err) {
+    alert(`重试任务失败: ${err.message}`)
+  }
+}
+
 onMounted(() => {
   // Parse URL query parameter for status filter
   const statusParam = route.query.status
@@ -278,17 +292,27 @@ onUnmounted(() => {
               {{ formatDuration(task.started_at, task.finished_at) }}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-right text-sm font-medium">
-              <button
-                v-if="task.status !== 'running'"
-                @click.stop="handleDelete(task)"
-                class="text-red-600 hover:text-red-900 transition-colors"
-                title="Delete task"
-              >
-                🗑️ Delete
-              </button>
-              <span v-else class="text-gray-400" title="Cannot delete running task">
-                —
-              </span>
+              <div class="flex items-center justify-end gap-2">
+                <button
+                  v-if="task.status !== 'running'"
+                  @click.stop="handleRetry(task)"
+                  class="text-green-600 hover:text-green-900 transition-colors"
+                  title="重试任务"
+                >
+                  🔄 Retry
+                </button>
+                <button
+                  v-if="task.status !== 'running'"
+                  @click.stop="handleDelete(task)"
+                  class="text-red-600 hover:text-red-900 transition-colors"
+                  title="删除任务"
+                >
+                  🗑️ Delete
+                </button>
+                <span v-if="task.status === 'running'" class="text-gray-400" title="任务运行中">
+                  —
+                </span>
+              </div>
             </td>
           </tr>
         </tbody>
