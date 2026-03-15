@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import api from '../services/api'
 
 const props = defineProps({
@@ -10,69 +10,64 @@ const props = defineProps({
   }
 })
 
-const activeTab = ref('stdout')
+const activeLog = ref('runner')
 const logs = ref({
+  runner: '',
   stdout: '',
   stderr: '',
   miri_report: ''
 })
 const loading = ref({
+  runner: false,
   stdout: false,
   stderr: false,
   miri_report: false
 })
-const error = ref(null)
 const logContainer = ref(null)
 let refreshInterval = null
 
-const tabs = [
-  { id: 'stdout', label: 'Standard Output' },
-  { id: 'stderr', label: 'Standard Error' },
-  { id: 'miri_report', label: 'Miri Report' }
+const logFiles = [
+  { id: 'runner', label: 'runner', icon: '⚙' },
+  { id: 'stdout', label: 'stdout', icon: '📄' },
+  { id: 'stderr', label: 'stderr', icon: '📄' },
+  { id: 'miri_report', label: 'miri_report', icon: '📄' },
 ]
 
-const activeTabLabel = computed(() => {
-  return tabs.find(tab => tab.id === activeTab.value)?.label || 'Log'
-})
-
 async function loadLog(logType, isRefresh = false) {
-  // Skip if already loading (prevent duplicate requests)
-  if (!isRefresh && loading.value[logType]) {
-    return
-  }
+  if (!isRefresh && loading.value[logType]) return
 
-  // Only show loading spinner for initial load, not for auto-refresh
   if (!isRefresh) {
     loading.value[logType] = true
   }
-  error.value = null
 
   try {
     const data = await api.getLog(props.taskId, logType, 1000)
 
-    // Check if user is at bottom before updating (for auto-refresh)
     let wasAtBottom = false
     if (isRefresh && logContainer.value) {
-      const threshold = 50 // pixels from bottom
-      wasAtBottom = logContainer.value.scrollHeight - logContainer.value.scrollTop - logContainer.value.clientHeight < threshold
+      const threshold = 50
+      wasAtBottom =
+        logContainer.value.scrollHeight -
+          logContainer.value.scrollTop -
+          logContainer.value.clientHeight <
+        threshold
     }
 
-    // Backend returns { lines: [...] } - join array into string
     if (data.lines && Array.isArray(data.lines)) {
       logs.value[logType] = data.lines.join('\n') || 'No content available'
     } else {
       logs.value[logType] = data.content || 'No content available'
     }
 
-    // Auto-scroll only if:
-    // 1. It's a manual load (not refresh) and autoScroll is enabled, OR
-    // 2. It's an auto-refresh and user was already at the bottom
     if ((!isRefresh && props.autoScroll) || (isRefresh && wasAtBottom)) {
       scrollToBottom()
     }
   } catch (err) {
-    error.value = err.response?.data?.detail || err.message
-    logs.value[logType] = `Error loading log: ${error.value}`
+    if (err.response?.status === 404) {
+      logs.value[logType] = 'No content available'
+    } else {
+      logs.value[logType] = `Error loading log: ${err.response?.data?.detail || err.message}`
+    }
   } finally {
     if (!isRefresh) {
       loading.value[logType] = false
@@ -81,9 +76,8 @@ async function loadLog(logType, isRefresh = false) {
 }
 
 function startAutoRefresh() {
-  // Refresh current tab every 5 seconds
   refreshInterval = setInterval(() => {
-    loadLog(activeTab.value, true)
+    loadLog(activeLog.value, true)
   }, 5000)
 }
 
@@ -96,20 +90,12 @@ function stopAutoRefresh() {
 
 async function downloadLog() {
   try {
-    const blob = await api.downloadLog(props.taskId, activeTab.value)
+    const blob = await api.downloadLog(props.taskId, activeLog.value)
     const url = window.URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-
-    // Set filename based on log type
-    let filename
-    if (activeTab.value === 'miri_report') {
-      filename = `task-${props.taskId}-miri_report.txt`
-    } else {
-      filename = `task-${props.taskId}-${activeTab.value}.log`
-    }
-    a.download = filename
-
+    const ext = activeLog.value === 'miri_report' ? 'txt' : 'log'
+    a.download = `task-${props.taskId}-${activeLog.value}.${ext}`
     document.body.appendChild(a)
     a.click()
     window.URL.revokeObjectURL(url)
@@ -128,16 +114,16 @@ function scrollToBottom() {
   }, 100)
 }
 
-watch(activeTab, (newTab) => {
-  if (!logs.value[newTab]) {
-    loadLog(newTab)
+watch(activeLog, (newLog) => {
+  if (!logs.value[newLog]) {
+    loadLog(newLog)
   } else if (props.autoScroll) {
     scrollToBottom()
   }
 })
 
 onMounted(() => {
-  loadLog(activeTab.value)
+  loadLog(activeLog.value)
   startAutoRefresh()
 })
 
@@ -153,41 +139,57 @@ onUnmounted(() => {
       <button
         @click="downloadLog"
         class="px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
-        :title="`Download complete ${activeTabLabel}`"
+        :title="`Download ${activeLog}`"
       >
-        Download {{ activeTabLabel }}
+        Download {{ activeLog }}
       </button>
     </div>
 
-    <!-- Tabs -->
-    <div class="border-b border-gray-200 mb-4">
-      <nav class="-mb-px flex space-x-8">
-        <button
-          v-for="tab in tabs"
-          :key="tab.id"
-          @click="activeTab = tab.id"
-          :class="[
-            'py-2 px-1 border-b-2 font-medium text-sm transition-colors',
-            activeTab === tab.id
-              ? 'border-blue-500 text-blue-600'
-              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-          ]"
-        >
-          {{ tab.label }}
-        </button>
-      </nav>
-    </div>
+    <div class="flex" style="min-height: 400px;">
+      <!-- Left: file list -->
+      <div
+        class="flex flex-col flex-shrink-0 border-r border-gray-200"
+        style="width: 160px;"
+      >
+        <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide px-3 py-2">
+          Files
+        </div>
 
-    <!-- Log Content -->
-    <div
-      ref="logContainer"
-      class="log-viewer"
-      style="max-height: 500px; overflow-y: auto;"
-    >
-      <div v-if="loading[activeTab]" class="flex justify-center py-8">
-        <div class="spinner border-white"></div>
+        <div class="flex flex-col gap-1 px-2 flex-1">
+          <button
+            v-for="file in logFiles"
+            :key="file.id"
+            @click="activeLog = file.id"
+            :class="[
+              'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-left transition-colors w-full',
+              activeLog === file.id
+                ? 'bg-blue-50 border border-blue-200 text-blue-700'
+                : 'text-gray-600 hover:bg-gray-100'
+            ]"
+          >
+            <span>{{ file.icon }}</span>
+            <span class="truncate">{{ file.label }}</span>
+          </button>
+        </div>
+
+        <div class="px-3 py-2 text-xs text-gray-400 border-t border-gray-100 mt-2">
+          ↻ 5s refresh
+        </div>
       </div>
-      <pre v-else class="text-sm">{{ logs[activeTab] || 'No content available' }}</pre>
+
+      <!-- Right: log content -->
+      <div class="flex-1 min-w-0">
+        <div
+          ref="logContainer"
+          class="log-viewer h-full"
+          style="max-height: 500px; overflow-y: auto;"
+        >
+          <div v-if="loading[activeLog]" class="flex justify-center py-8">
+            <div class="spinner border-white"></div>
+          </div>
+          <pre v-else class="text-sm">{{ logs[activeLog] || 'No content available' }}</pre>
+        </div>
+      </div>
     </div>
   </div>
 </template>
