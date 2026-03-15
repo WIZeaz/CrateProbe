@@ -17,7 +17,11 @@ class Config:
     max_jobs: int = 3
     max_memory_gb: int = 20
     max_runtime_hours: int = 24
+    max_cpus: int = 4
     use_systemd: bool = True
+    execution_mode: str = "systemd"
+    docker_image: str = "rust-cargo-rapx:latest"
+    docker_pull_policy: str = "if-not-present"
     db_path: str = "tasks.db"
     log_level: str = "INFO"
     log_console: bool = True
@@ -35,14 +39,21 @@ class Config:
         with open(config_path, "rb") as f:
             data = tomllib.load(f)
 
+        execution = data.get("execution", {})
+        docker_config = execution.get("docker", {})
+
         return cls(
             server_port=data.get("server", {}).get("port", 8000),
             server_host=data.get("server", {}).get("host", "0.0.0.0"),
             workspace_path=Path(data.get("workspace", {}).get("path", "./workspace")),
-            max_jobs=data.get("execution", {}).get("max_jobs", 3),
-            max_memory_gb=data.get("execution", {}).get("max_memory_gb", 20),
-            max_runtime_hours=data.get("execution", {}).get("max_runtime_hours", 24),
-            use_systemd=data.get("execution", {}).get("use_systemd", True),
+            max_jobs=execution.get("max_jobs", 3),
+            max_memory_gb=execution.get("max_memory_gb", 20),
+            max_runtime_hours=execution.get("max_runtime_hours", 24),
+            max_cpus=execution.get("max_cpus", 4),
+            use_systemd=execution.get("use_systemd", True),
+            execution_mode=execution.get("execution_mode", "systemd"),
+            docker_image=docker_config.get("image", "rust-cargo-rapx:latest"),
+            docker_pull_policy=docker_config.get("pull_policy", "if-not-present"),
             db_path=data.get("database", {}).get("path", "tasks.db"),
             log_level=data.get("logging", {}).get("level", "INFO"),
             log_console=data.get("logging", {}).get("console", True),

@@ -63,3 +63,35 @@ def test_config_creates_workspace_directory(tmp_path):
     assert workspace.exists()
     assert (workspace / "repos").exists()
     assert (workspace / "logs").exists()
+
+
+def test_config_loads_docker_settings():
+    """Test that docker configuration is loaded correctly"""
+    import tempfile
+    import os
+
+    config_content = b"""
+[execution]
+execution_mode = "docker"
+max_jobs = 5
+max_memory_gb = 16
+max_runtime_hours = 8
+max_cpus = 4
+
+[execution.docker]
+image = "my-rust-image:latest"
+pull_policy = "always"
+"""
+
+    with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.toml') as f:
+        f.write(config_content)
+        config_path = f.name
+
+    try:
+        config = Config.from_file(config_path)
+        assert config.execution_mode == "docker"
+        assert config.max_cpus == 4
+        assert config.docker_image == "my-rust-image:latest"
+        assert config.docker_pull_policy == "always"
+    finally:
+        os.unlink(config_path)
