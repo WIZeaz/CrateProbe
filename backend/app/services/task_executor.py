@@ -90,6 +90,9 @@ class TaskExecutor:
                 for item in temp_extract_dir.iterdir():
                     shutil.move(str(item), str(workspace_dir))
             task_logger.info("Extraction complete")
+        except Exception as e:
+            task_logger.error(f"Extraction failed: {e}")
+            raise
         finally:
             # Clean up temp directory
             if temp_extract_dir.exists():
@@ -167,6 +170,9 @@ class TaskExecutor:
                     f"-test-crate={task.crate_name}",
                 ]
                 task_logger.info(f"Running command: {' '.join(cmd)}")
+                task_logger.info(
+                    "Starting Docker container (PID not available in Docker mode)..."
+                )
 
                 exit_code = await self.docker_runner.run(
                     command=cmd,
