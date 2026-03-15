@@ -44,6 +44,16 @@ class TaskDetailResponse(BaseModel):
     error_message: Optional[str]
 
 
+LOG_PATH_RESOLVERS = {
+    "stdout": lambda task, _cfg: Path(task.stdout_log),
+    "stderr": lambda task, _cfg: Path(task.stderr_log),
+    "runner": lambda task, cfg: cfg.workspace_path / "logs" / f"{task.id}-runner.log",
+    "miri_report": lambda task, _cfg: Path(task.workspace_path)
+    / "testgen"
+    / "miri_report.txt",
+}
+
+
 def create_app(config: Config, db_path: str) -> FastAPI:
     """Create FastAPI application"""
 
@@ -257,95 +267,45 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         monitor = SystemMonitor()
         return monitor.get_system_stats()
 
-    @app.get("/api/tasks/{task_id}/logs/stdout")
-    async def get_stdout_logs(task_id: int, lines: int = Query(default=1000, ge=0)):
-        """Get last N lines of stdout log"""
-        task = db.get_task(task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail="Task not found")
-
-        try:
-            log_lines = read_last_n_lines(task.stdout_log, lines)
-            return {"lines": log_lines}
-        except CustomFileNotFoundError:
-            raise HTTPException(status_code=404, detail="Log file not found")
-
-    @app.get("/api/tasks/{task_id}/logs/stderr")
-    async def get_stderr_logs(task_id: int, lines: int = Query(default=1000, ge=0)):
-        """Get last N lines of stderr log"""
-        task = db.get_task(task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail="Task not found")
-
-        try:
-            log_lines = read_last_n_lines(task.stderr_log, lines)
-            return {"lines": log_lines}
-        except CustomFileNotFoundError:
-            raise HTTPException(status_code=404, detail="Log file not found")
-
-    @app.get("/api/tasks/{task_id}/logs/miri_report")
-    async def get_miri_report_logs(
-        task_id: int, lines: int = Query(default=1000, ge=0)
+    @app.get("/api/tasks/{task_id}/logs/{log_name}")
+    async def get_task_log(
+        task_id: int, log_name: str, lines: int = Query(default=1000, ge=0)
     ):
-        """Get last N lines of miri_report.txt"""
+        """Get last N lines of any task log by name"""
+        if log_name not in LOG_PATH_RESOLVERS:
+            raise HTTPException(status_code=404, detail="Unknown log type")
+
         task = db.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
 
-        # Construct path to miri_report.txt in testgen directory
-        workspace_path = Path(task.workspace_path)
-        miri_report_path = workspace_path / "testgen" / "miri_report.txt"
+        log_path = LOG_PATH_RESOLVERS[log_name](task, config)
 
         try:
-            log_lines = read_last_n_lines(str(miri_report_path), lines)
+            log_lines = read_last_n_lines(str(log_path), lines)
             return {"lines": log_lines}
         except CustomFileNotFoundError:
-            raise HTTPException(status_code=404, detail="Miri report file not found")
-
-    @app.get("/api/tasks/{task_id}/logs/stdout/raw", response_class=PlainTextResponse)
-    async def download_stdout_raw(task_id: int):
-        """Download full stdout log file"""
-        task = db.get_task(task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail="Task not found")
-
-        log_path = Path(task.stdout_log)
-        if not log_path.exists():
             raise HTTPException(status_code=404, detail="Log file not found")
-
-        return PlainTextResponse(log_path.read_text(encoding="utf-8", errors="replace"))
-
-    @app.get("/api/tasks/{task_id}/logs/stderr/raw", response_class=PlainTextResponse)
-    async def download_stderr_raw(task_id: int):
-        """Download full stderr log file"""
-        task = db.get_task(task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail="Task not found")
-
-        log_path = Path(task.stderr_log)
-        if not log_path.exists():
-            raise HTTPException(status_code=404, detail="Log file not found")
-
-        return PlainTextResponse(log_path.read_text(encoding="utf-8", errors="replace"))
 
     @app.get(
-        "/api/tasks/{task_id}/logs/miri_report/raw", response_class=PlainTextResponse
+        "/api/tasks/{task_id}/logs/{log_name}/raw",
+        response_class=PlainTextResponse,
     )
-    async def download_miri_report_raw(task_id: int):
-        """Download full miri_report.txt file"""
+    async def get_task_log_raw(task_id: int, log_name: str):
+        """Download full content of any task log by name"""
+        if log_name not in LOG_PATH_RESOLVERS:
+            raise HTTPException(status_code=404, detail="Unknown log type")
+
         task = db.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
 
-        workspace_path = Path(task.workspace_path)
-        miri_report_path = workspace_path / "testgen" / "miri_report.txt"
+        log_path = LOG_PATH_RESOLVERS[log_name](task, config)
 
-        if not miri_report_path.exists():
-            raise HTTPException(status_code=404, detail="Miri report file not found")
+        if not log_path.exists():
+            raise HTTPException(status_code=404, detail="Log file not found")
 
-        return PlainTextResponse(
-            miri_report_path.read_text(encoding="utf-8", errors="replace")
-        )
+        return PlainTextResponse(log_path.read_text(encoding="utf-8", errors="replace"))
 
     @app.websocket("/ws/tasks/{task_id}")
     async def websocket_task_endpoint(websocket: WebSocket, task_id: int):

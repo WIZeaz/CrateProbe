@@ -320,3 +320,146 @@ def test_retry_nonexistent_task(client):
     """Test retrying a non-existent task returns 404"""
     response = client.post("/api/tasks/99999/retry")
     assert response.status_code == 404
+
+
+def test_generic_log_endpoint_stdout(client, config):
+    """GET /api/tasks/{id}/logs/stdout returns last N lines"""
+    create_resp = client.post(
+        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
+    )
+    task_id = create_resp.json()["task_id"]
+
+    log_file = config.workspace_path / "logs" / "serde-1.0.0-stdout.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    log_file.write_text("\n".join([f"line {i}" for i in range(1, 6)]))
+
+    response = client.get(f"/api/tasks/{task_id}/logs/stdout?lines=3")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "lines" in data
+    assert len(data["lines"]) == 3
+    assert data["lines"][-1] == "line 5"
+
+
+def test_generic_log_endpoint_runner(client, config):
+    """GET /api/tasks/{id}/logs/runner returns runner log content"""
+    create_resp = client.post(
+        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
+    )
+    task_id = create_resp.json()["task_id"]
+
+    runner_log = config.workspace_path / "logs" / f"{task_id}-runner.log"
+    runner_log.parent.mkdir(parents=True, exist_ok=True)
+    runner_log.write_text("[INFO] Task started\n[INFO] Downloading...\n[INFO] Done")
+
+    response = client.get(f"/api/tasks/{task_id}/logs/runner")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "lines" in data
+    assert any("Task started" in line for line in data["lines"])
+
+
+def test_generic_log_endpoint_unknown_name(client):
+    """GET /api/tasks/{id}/logs/{unknown} returns 404 Unknown log type"""
+    create_resp = client.post(
+        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
+    )
+    task_id = create_resp.json()["task_id"]
+
+    response = client.get(f"/api/tasks/{task_id}/logs/unknown_log_type")
+
+    assert response.status_code == 404
+    assert "Unknown log type" in response.json()["detail"]
+
+
+def test_generic_log_raw_unknown_name(client):
+    """GET /api/tasks/{id}/logs/{unknown}/raw returns 404 Unknown log type"""
+    create_resp = client.post(
+        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
+    )
+    task_id = create_resp.json()["task_id"]
+
+    response = client.get(f"/api/tasks/{task_id}/logs/unknown_log_type/raw")
+
+    assert response.status_code == 404
+    assert "Unknown log type" in response.json()["detail"]
+
+
+def test_generic_log_raw_endpoint(client, config):
+    """GET /api/tasks/{id}/logs/{name}/raw returns full plain text content"""
+    create_resp = client.post(
+        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
+    )
+    task_id = create_resp.json()["task_id"]
+
+    log_file = config.workspace_path / "logs" / "serde-1.0.0-stdout.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    log_content = "Full content line 1\nFull content line 2"
+    log_file.write_text(log_content)
+
+    response = client.get(f"/api/tasks/{task_id}/logs/stdout/raw")
+
+    assert response.status_code == 200
+    assert log_content in response.text
+
+
+def test_generic_log_endpoint_file_missing(client):
+    """GET /api/tasks/{id}/logs/{name} returns 404 when file doesn't exist"""
+    create_resp = client.post(
+        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
+    )
+    task_id = create_resp.json()["task_id"]
+
+    response = client.get(f"/api/tasks/{task_id}/logs/stdout")
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+def test_log_path_resolvers_all_types(config):
+    """LOG_PATH_RESOLVERS produces correct paths for all 4 known log types"""
+    from app.main import LOG_PATH_RESOLVERS
+
+    task = type(
+        "Task",
+        (),
+        {
+            "id": 7,
+            "crate_name": "serde",
+            "version": "1.0.0",
+            "stdout_log": str(
+                config.workspace_path / "logs" / "serde-1.0.0-stdout.log"
+            ),
+            "stderr_log": str(
+                config.workspace_path / "logs" / "serde-1.0.0-stderr.log"
+            ),
+            "workspace_path": str(config.workspace_path / "repos" / "serde-1.0.0"),
+        },
+    )()
+
+    stdout_path = LOG_PATH_RESOLVERS["stdout"](task, config)
+    assert stdout_path == Path(task.stdout_log)
+
+    stderr_path = LOG_PATH_RESOLVERS["stderr"](task, config)
+    assert stderr_path == Path(task.stderr_log)
+
+    runner_path = LOG_PATH_RESOLVERS["runner"](task, config)
+    assert runner_path == config.workspace_path / "logs" / "7-runner.log"
+
+    miri_path = LOG_PATH_RESOLVERS["miri_report"](task, config)
+    assert miri_path == Path(task.workspace_path) / "testgen" / "miri_report.txt"
+
+
+def test_miri_report_file_missing_uses_unified_error(client):
+    """miri_report file-not-found returns unified 'Log file not found' message"""
+    create_resp = client.post(
+        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
+    )
+    task_id = create_resp.json()["task_id"]
+
+    response = client.get(f"/api/tasks/{task_id}/logs/miri_report")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Log file not found"
