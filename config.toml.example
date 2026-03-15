@@ -36,9 +36,23 @@ max_memory_gb = 20
 # Maximum runtime per task (hours)
 max_runtime_hours = 24
 
-# 是否优先使用systemd-run（如果不可用则回退到resource模块）
-# Prefer systemd-run (fallback to resource module if unavailable)
-use_systemd = true
+# 任务执行模式：systemd, resource, docker
+# Task execution mode
+execution_mode = "systemd"
+
+# 单个任务最大CPU核心数（Docker模式生效）
+# Maximum CPU cores per task (effective in Docker mode)
+max_cpus = 4
+
+# Docker 配置（当 execution_mode = "docker" 时生效）
+[execution.docker]
+# Docker 镜像名称
+# Docker image name
+image = "rust-cargo-rapx:latest"
+
+# 镜像拉取策略：always, if-not-present, never
+# Image pull policy
+pull_policy = "if-not-present"
 
 [database]
 # SQLite数据库路径（相对于workspace或绝对路径）
