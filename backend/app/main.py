@@ -23,6 +23,10 @@ class CreateTaskRequest(BaseModel):
     version: Optional[str] = None
 
 
+class BatchTaskRequest(BaseModel):
+    task_ids: List[int]
+
+
 class TaskResponse(BaseModel):
     task_id: int
     crate_name: str
@@ -228,6 +232,40 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             raise HTTPException(status_code=404, detail="Task not found")
 
         return {"message": "Task deleted"}
+
+    @app.post("/api/tasks/batch-retry")
+    async def batch_retry_tasks(request: BatchTaskRequest):
+        """Batch retry multiple tasks"""
+        results = {"retried": [], "skipped": [], "not_found": []}
+
+        for task_id in request.task_ids:
+            task = db.get_task(task_id)
+            if not task:
+                results["not_found"].append(task_id)
+            elif task.status == TaskStatus.RUNNING:
+                results["skipped"].append(task_id)
+            else:
+                db.reset_task_for_retry(task_id)
+                results["retried"].append(task_id)
+
+        return results
+
+    @app.post("/api/tasks/batch-delete")
+    async def batch_delete_tasks(request: BatchTaskRequest):
+        """Batch delete multiple tasks"""
+        results = {"deleted": [], "skipped": [], "not_found": []}
+
+        for task_id in request.task_ids:
+            task = db.get_task(task_id)
+            if not task:
+                results["not_found"].append(task_id)
+            elif task.status == TaskStatus.RUNNING:
+                results["skipped"].append(task_id)
+            else:
+                db.delete_task(task_id)
+                results["deleted"].append(task_id)
+
+        return results
 
     @app.get("/api/dashboard/stats")
     async def get_dashboard_stats():

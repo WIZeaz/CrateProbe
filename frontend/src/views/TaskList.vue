@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import api from '../services/api'
 import websocket from '../services/websocket'
@@ -12,6 +12,8 @@ const error = ref(null)
 const filterStatus = ref('all')
 const sortColumn = ref('created_at')
 const sortDirection = ref('desc')
+const selectedIds = ref(new Set())
+const batchLoading = ref(false)
 
 const statusOptions = [
   { value: 'all', label: 'All' },
@@ -19,7 +21,9 @@ const statusOptions = [
   { value: 'running', label: 'Running' },
   { value: 'completed', label: 'Completed' },
   { value: 'failed', label: 'Failed' },
-  { value: 'cancelled', label: 'Cancelled' }
+  { value: 'cancelled', label: 'Cancelled' },
+  { value: 'timeout', label: 'Timeout' },
+  { value: 'oom', label: 'OOM' }
 ]
 
 const filteredAndSortedTasks = computed(() => {
@@ -48,10 +52,50 @@ const filteredAndSortedTasks = computed(() => {
   return result
 })
 
+// Selectable tasks (exclude running)
+const selectableTasks = computed(() => {
+  return filteredAndSortedTasks.value.filter(t => t.status !== 'running')
+})
+
+const allSelected = computed(() => {
+  return selectableTasks.value.length > 0 && selectableTasks.value.every(t => selectedIds.value.has(t.id))
+})
+
+const someSelected = computed(() => {
+  return selectedIds.value.size > 0 && !allSelected.value
+})
+
+// Clear selection when filter changes
+watch(filterStatus, () => {
+  selectedIds.value = new Set()
+})
+
+function toggleSelectAll() {
+  if (allSelected.value) {
+    selectedIds.value = new Set()
+  } else {
+    selectedIds.value = new Set(selectableTasks.value.map(t => t.id))
+  }
+}
+
+function toggleSelect(taskId) {
+  const next = new Set(selectedIds.value)
+  if (next.has(taskId)) {
+    next.delete(taskId)
+  } else {
+    next.add(taskId)
+  }
+  selectedIds.value = next
+}
+
 async function fetchTasks() {
   try {
     tasks.value = await api.getAllTasks()
     loading.value = false
+    // Remove selected ids that no longer exist
+    const existingIds = new Set(tasks.value.map(t => t.id))
+    const cleaned = new Set([...selectedIds.value].filter(id => existingIds.has(id)))
+    selectedIds.value = cleaned
   } catch (err) {
     error.value = err.message
     loading.value = false
@@ -94,33 +138,43 @@ function formatDuration(startStr, endStr) {
   return `${hours}h ${minutes}m`
 }
 
-async function handleDelete(task) {
-  if (!confirm(`Are you sure you want to delete task #${task.id} (${task.crate_name})?`)) {
-    return
-  }
+async function handleBatchRetry() {
+  const ids = [...selectedIds.value]
+  if (ids.length === 0) return
+  if (!confirm(`Retry ${ids.length} selected task(s)?`)) return
 
+  batchLoading.value = true
   try {
-    await api.deleteTask(task.id)
-    // Remove from local list immediately for better UX
-    tasks.value = tasks.value.filter(t => t.id !== task.id)
-  } catch (err) {
-    alert(`Failed to delete task: ${err.message}`)
-    // Refresh to get accurate state
+    const result = await api.batchRetry(ids)
+    selectedIds.value = new Set()
     fetchTasks()
+    if (result.skipped?.length > 0) {
+      alert(`Retried ${result.retried.length} task(s). Skipped ${result.skipped.length} running task(s).`)
+    }
+  } catch (err) {
+    alert(`Batch retry failed: ${err.message}`)
+  } finally {
+    batchLoading.value = false
   }
 }
 
-async function handleRetry(task) {
-  if (!confirm(`Retry task #${task.id} (${task.crate_name} ${task.version})?\n\nThis will reset and re-execute the task.`)) {
-    return
-  }
+async function handleBatchDelete() {
+  const ids = [...selectedIds.value]
+  if (ids.length === 0) return
+  if (!confirm(`Delete ${ids.length} selected task(s)? This cannot be undone.`)) return
 
+  batchLoading.value = true
   try {
-    await api.retryTask(task.id)
-    // Refresh task list to show updated status
+    const result = await api.batchDelete(ids)
+    selectedIds.value = new Set()
     fetchTasks()
+    if (result.skipped?.length > 0) {
+      alert(`Deleted ${result.deleted.length} task(s). Skipped ${result.skipped.length} running task(s).`)
+    }
   } catch (err) {
-    alert(`Failed to retry task: ${err.message}`)
+    alert(`Batch delete failed: ${err.message}`)
+  } finally {
+    batchLoading.value = false
   }
 }
 
@@ -153,7 +207,7 @@ onUnmounted(() => {
           to="/tasks/batch"
           class="px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
         >
-          📋 Batch Create
+          Batch Create
         </router-link>
         <router-link
           to="/tasks/new"
@@ -164,8 +218,8 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- Filter -->
-    <div class="mb-6">
+    <!-- Filter + Batch Actions -->
+    <div class="mb-6 flex items-center justify-between">
       <div class="flex items-center gap-2">
         <label for="filter" class="text-sm font-medium text-gray-700">Filter by status:</label>
         <select
@@ -177,6 +231,25 @@ onUnmounted(() => {
             {{ option.label }}
           </option>
         </select>
+      </div>
+
+      <!-- Batch action toolbar -->
+      <div v-if="selectedIds.size > 0" class="flex items-center gap-3">
+        <span class="text-sm text-gray-600">{{ selectedIds.size }} selected</span>
+        <button
+          @click="handleBatchRetry"
+          :disabled="batchLoading"
+          class="px-3 py-1.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+        >
+          Retry Selected
+        </button>
+        <button
+          @click="handleBatchDelete"
+          :disabled="batchLoading"
+          class="px-3 py-1.5 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors"
+        >
+          Delete Selected
+        </button>
       </div>
     </div>
 
@@ -202,6 +275,15 @@ onUnmounted(() => {
       <table class="min-w-full divide-y divide-gray-200">
         <thead>
           <tr>
+            <th class="px-4 py-3 text-left">
+              <input
+                type="checkbox"
+                :checked="allSelected"
+                :indeterminate="someSelected"
+                @change="toggleSelectAll"
+                class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+            </th>
             <th
               @click="sortBy('id')"
               class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-50"
@@ -254,17 +336,25 @@ onUnmounted(() => {
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
               Runtime
             </th>
-            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Actions
-            </th>
           </tr>
         </thead>
         <tbody class="divide-y divide-gray-200">
           <tr
             v-for="task in filteredAndSortedTasks"
             :key="task.id"
-            class="hover:bg-gray-50 transition-colors"
+            :class="['hover:bg-gray-50 transition-colors', selectedIds.has(task.id) ? 'bg-blue-50' : '']"
           >
+            <td class="px-4 py-3 whitespace-nowrap">
+              <input
+                v-if="task.status !== 'running'"
+                type="checkbox"
+                :checked="selectedIds.has(task.id)"
+                @change="toggleSelect(task.id)"
+                @click.stop
+                class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span v-else class="inline-block h-4 w-4"></span>
+            </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer" @click="viewTask(task.id)">
               #{{ task.id }}
             </td>
@@ -290,29 +380,6 @@ onUnmounted(() => {
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer" @click="viewTask(task.id)">
               {{ formatDuration(task.started_at, task.finished_at) }}
-            </td>
-            <td class="px-4 py-3 whitespace-nowrap text-right text-sm font-medium">
-              <div class="flex items-center justify-end gap-2">
-                <button
-                  v-if="task.status !== 'running'"
-                  @click.stop="handleRetry(task)"
-                  class="text-green-600 hover:text-green-900 transition-colors"
-                  title="Retry task"
-                >
-                  🔄 Retry
-                </button>
-                <button
-                  v-if="task.status !== 'running'"
-                  @click.stop="handleDelete(task)"
-                  class="text-red-600 hover:text-red-900 transition-colors"
-                  title="Delete task"
-                >
-                  🗑️ Delete
-                </button>
-                <span v-if="task.status === 'running'" class="text-gray-400" title="Task is running">
-                  —
-                </span>
-              </div>
             </td>
           </tr>
         </tbody>

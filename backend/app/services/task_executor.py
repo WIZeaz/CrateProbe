@@ -43,7 +43,8 @@ class TaskExecutor:
         self, task_id: int, crate_name: str, version: str
     ) -> Path:
         """Download and extract crate to workspace"""
-        workspace_dir = self.config.workspace_path / "repos" / f"{crate_name}-{version}"
+        workspace_dir = self.config.workspace_path / \
+            "repos" / f"{crate_name}-{version}"
 
         # If workspace directory already exists (e.g., from retry), clean it first
         if workspace_dir.exists():
@@ -53,7 +54,8 @@ class TaskExecutor:
 
         # Download crate file
         crate_file = (
-            self.config.workspace_path / "repos" / f"{crate_name}-{version}.crate"
+            self.config.workspace_path / "repos" /
+            f"{crate_name}-{version}.crate"
         )
 
         # Remove old crate file if it exists
@@ -64,7 +66,8 @@ class TaskExecutor:
 
         # Extract crate - .crate files contain a top-level directory we need to strip
         temp_extract_dir = (
-            self.config.workspace_path / "repos" / f"_temp_{crate_name}-{version}"
+            self.config.workspace_path / "repos" /
+            f"_temp_{crate_name}-{version}"
         )
         temp_extract_dir.mkdir(parents=True, exist_ok=True)
 
@@ -133,8 +136,8 @@ class TaskExecutor:
                     command=[
                         "cargo",
                         "rapx",
-                        "-testgen",
                         f"-test-crate={task.crate_name}",
+                        "test",
                     ],
                     workspace_dir=workspace_dir,
                     stdout_log=Path(task.stdout_log),
@@ -142,7 +145,8 @@ class TaskExecutor:
                 )
 
                 # Final count of generated items
-                case_count, poc_count = self.count_generated_items(workspace_dir)
+                case_count, poc_count = self.count_generated_items(
+                    workspace_dir)
                 self.db.update_task_counts(task_id, case_count, poc_count)
 
                 # Update final status
@@ -226,11 +230,27 @@ class TaskExecutor:
         case_count, poc_count = self.count_generated_items(workspace_dir)
         self.db.update_task_counts(task_id, case_count, poc_count)
 
-        # Update final status
+        # Update final status based on exit code
         if process.returncode == 0:
             self.db.update_task_status(
                 task_id,
                 TaskStatus.COMPLETED,
+                finished_at=datetime.now(),
+                exit_code=process.returncode,
+            )
+        elif process.returncode in (-9, 137):
+            # SIGKILL (from OOM killer or systemd MemoryMax)
+            self.db.update_task_status(
+                task_id,
+                TaskStatus.OOM,
+                finished_at=datetime.now(),
+                exit_code=process.returncode,
+            )
+        elif process.returncode in (-24, -14):
+            # SIGXCPU (CPU time limit) or SIGALRM (wall-clock timeout)
+            self.db.update_task_status(
+                task_id,
+                TaskStatus.TIMEOUT,
                 finished_at=datetime.now(),
                 exit_code=process.returncode,
             )
@@ -256,7 +276,8 @@ class TaskExecutor:
                 break
             except asyncio.TimeoutError:
                 # Process still running, update stats
-                case_count, poc_count = self.count_generated_items(workspace_dir)
+                case_count, poc_count = self.count_generated_items(
+                    workspace_dir)
                 self.db.update_task_counts(task_id, case_count, poc_count)
                 # Continue waiting
 

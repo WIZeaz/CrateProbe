@@ -46,6 +46,16 @@ export default {
     return response.data
   },
 
+  async batchRetry(taskIds) {
+    const response = await api.post('/tasks/batch-retry', { task_ids: taskIds })
+    return response.data
+  },
+
+  async batchDelete(taskIds) {
+    const response = await api.post('/tasks/batch-delete', { task_ids: taskIds })
+    return response.data
+  },
+
   async getTaskRealtimeStats(taskId) {
     const response = await api.get(`/tasks/${taskId}/stats`)
     return response.data
