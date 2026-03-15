@@ -123,37 +123,56 @@ class DockerRunner:
                 **resource_limits,
             )
 
-            # Wait for container with timeout
             timeout_seconds = self.max_runtime_hours * 3600
-            try:
-                result = container.wait(timeout=timeout_seconds)
-                exit_code = result.get("StatusCode", -1)
-            except Exception:
-                # Timeout or error - stop the container
-                container.stop(timeout=10)
-                exit_code = -1
+            loop = asyncio.get_running_loop()
 
-            # Get logs
-            logs = container.logs(stdout=True, stderr=False).decode(
-                "utf-8", errors="replace"
+            def _stream_to_file(log_path: Path, log_kwargs: dict) -> None:
+                """Stream Docker logs to a file, writing each chunk as it arrives.
+
+                log_kwargs is passed as a plain positional arg because
+                run_in_executor() does not support keyword argument forwarding.
+                """
+                with log_path.open("w", encoding="utf-8", errors="replace") as f:
+                    for chunk in container.logs(stream=True, follow=True, **log_kwargs):
+                        if isinstance(chunk, bytes):
+                            f.write(chunk.decode("utf-8", errors="replace"))
+                        else:
+                            f.write(chunk)
+                        f.flush()
+
+            def _wait_container() -> int:
+                try:
+                    result = container.wait(timeout=timeout_seconds)
+                    return result.get("StatusCode", -1)
+                except Exception:
+                    container.stop(timeout=10)
+                    return -1
+
+            # Run wait and both log streams concurrently in thread executors.
+            # Each runs in a separate thread since Docker SDK is synchronous.
+            # IMPORTANT: pass log_kwargs as a positional arg — run_in_executor
+            # does not support **kwargs forwarding.
+            wait_future = loop.run_in_executor(None, _wait_container)
+            stdout_future = loop.run_in_executor(
+                None, _stream_to_file, stdout_log, {"stdout": True, "stderr": False}
             )
-            stderr_logs = container.logs(stdout=False, stderr=True).decode(
-                "utf-8", errors="replace"
+            stderr_future = loop.run_in_executor(
+                None, _stream_to_file, stderr_log, {"stdout": False, "stderr": True}
             )
 
-            # Write logs to files
-            stdout_log.write_text(logs)
-            stderr_log.write_text(stderr_logs)
+            results = await asyncio.gather(
+                wait_future, stdout_future, stderr_future, return_exceptions=True
+            )
+            exit_code = results[0] if not isinstance(results[0], Exception) else -1
 
             # Cleanup
-            container.remove(force=True)
+            try:
+                container.remove(force=True)
+            except Exception:
+                pass
 
             return exit_code
 
-        except APIError as e:
-            # Write error to stderr log
-            stderr_log.write_text(f"Docker API error: {e}")
-            return -1
         except Exception as e:
             stderr_log.write_text(f"Unexpected error: {e}")
             return -1
