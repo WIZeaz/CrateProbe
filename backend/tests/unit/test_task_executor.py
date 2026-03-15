@@ -192,3 +192,140 @@ async def test_task_executor_uses_docker_when_configured(mock_config, mock_datab
         mock_runner_class.assert_called_once_with(
             image="rust:test", max_memory_gb=8, max_runtime_hours=2, max_cpus=4
         )
+
+
+import logging
+
+
+@pytest.mark.asyncio
+async def test_execute_task_creates_runner_log(executor, db, config, tmp_path):
+    """Runner log file is created when a task executes"""
+    config.workspace_path.mkdir(parents=True, exist_ok=True)
+    (config.workspace_path / "logs").mkdir(parents=True, exist_ok=True)
+
+    task_id = db.create_task(
+        "test-crate",
+        "1.0.0",
+        str(config.workspace_path / "repos" / "test-crate-1.0.0"),
+        str(config.workspace_path / "logs" / "test-crate-1.0.0-stdout.log"),
+        str(config.workspace_path / "logs" / "test-crate-1.0.0-stderr.log"),
+    )
+
+    with patch.object(
+        executor, "prepare_workspace", new_callable=AsyncMock
+    ) as mock_prep:
+        mock_prep.return_value = config.workspace_path / "repos" / "test-crate-1.0.0"
+        with patch("asyncio.create_subprocess_exec") as mock_subprocess:
+            mock_process = AsyncMock()
+            mock_process.pid = 12345
+            mock_process.wait.return_value = 0
+            mock_process.returncode = 0
+            mock_subprocess.return_value = mock_process
+
+            await executor.execute_task(task_id)
+
+    runner_log = config.workspace_path / "logs" / f"{task_id}-runner.log"
+    assert runner_log.exists(), "Runner log file must be created"
+    content = runner_log.read_text()
+    assert "started" in content.lower()
+
+
+@pytest.mark.asyncio
+async def test_execute_task_runner_log_uses_task_id(executor, db, config):
+    """Runner log path uses task ID, not crate name"""
+    config.workspace_path.mkdir(parents=True, exist_ok=True)
+    (config.workspace_path / "logs").mkdir(parents=True, exist_ok=True)
+
+    task_id = db.create_task(
+        "serde",
+        "1.0.0",
+        str(config.workspace_path / "repos" / "serde-1.0.0"),
+        str(config.workspace_path / "logs" / "serde-1.0.0-stdout.log"),
+        str(config.workspace_path / "logs" / "serde-1.0.0-stderr.log"),
+    )
+
+    with patch.object(
+        executor, "prepare_workspace", new_callable=AsyncMock
+    ) as mock_prep:
+        mock_prep.return_value = config.workspace_path / "repos" / "serde-1.0.0"
+        with patch("asyncio.create_subprocess_exec") as mock_subprocess:
+            mock_process = AsyncMock()
+            mock_process.pid = 99
+            mock_process.wait.return_value = 0
+            mock_process.returncode = 0
+            mock_subprocess.return_value = mock_process
+
+            await executor.execute_task(task_id)
+
+    expected_path = config.workspace_path / "logs" / f"{task_id}-runner.log"
+    bad_path = config.workspace_path / "logs" / "serde-1.0.0-runner.log"
+    assert expected_path.exists()
+    assert not bad_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_execute_task_runner_log_records_exception(executor, db, config):
+    """Runner log captures exceptions that cause task failure"""
+    config.workspace_path.mkdir(parents=True, exist_ok=True)
+    (config.workspace_path / "logs").mkdir(parents=True, exist_ok=True)
+
+    task_id = db.create_task(
+        "bad-crate",
+        "1.0.0",
+        str(config.workspace_path / "repos" / "bad-crate-1.0.0"),
+        str(config.workspace_path / "logs" / "bad-crate-1.0.0-stdout.log"),
+        str(config.workspace_path / "logs" / "bad-crate-1.0.0-stderr.log"),
+    )
+
+    with patch.object(
+        executor,
+        "prepare_workspace",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("Download failed: connection refused"),
+    ):
+        await executor.execute_task(task_id)
+
+    runner_log = config.workspace_path / "logs" / f"{task_id}-runner.log"
+    assert runner_log.exists()
+    content = runner_log.read_text()
+    assert "Download failed" in content or "ERROR" in content
+
+
+@pytest.mark.asyncio
+async def test_runner_logger_named_by_task_id(executor, db, config):
+    """Runner logger is named f'task.{task_id}' to avoid collisions"""
+    config.workspace_path.mkdir(parents=True, exist_ok=True)
+    (config.workspace_path / "logs").mkdir(parents=True, exist_ok=True)
+
+    task_id = db.create_task(
+        "test-crate",
+        "1.0.0",
+        str(config.workspace_path / "repos" / "test-crate-1.0.0"),
+        str(config.workspace_path / "logs" / "test-crate-1.0.0-stdout.log"),
+        str(config.workspace_path / "logs" / "test-crate-1.0.0-stderr.log"),
+    )
+
+    captured_logger_names = []
+    original_get_logger = logging.getLogger
+
+    def spy_get_logger(name=None):
+        if name and name.startswith("task."):
+            captured_logger_names.append(name)
+        return original_get_logger(name)
+
+    with patch("logging.getLogger", side_effect=spy_get_logger):
+        with patch.object(
+            executor, "prepare_workspace", new_callable=AsyncMock
+        ) as mock_prep:
+            mock_prep.return_value = (
+                config.workspace_path / "repos" / "test-crate-1.0.0"
+            )
+            with patch("asyncio.create_subprocess_exec") as mock_subprocess:
+                mock_process = AsyncMock()
+                mock_process.pid = 1
+                mock_process.wait.return_value = 0
+                mock_process.returncode = 0
+                mock_subprocess.return_value = mock_process
+                await executor.execute_task(task_id)
+
+    assert f"task.{task_id}" in captured_logger_names
