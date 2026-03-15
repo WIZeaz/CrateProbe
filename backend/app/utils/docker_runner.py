@@ -111,6 +111,7 @@ class DockerRunner:
         volumes = {str(workspace_dir.resolve()): {"bind": "/workspace", "mode": "rw"}}
 
         # Run container
+        container = None
         try:
             container = self.client.containers.run(
                 image=self.image,
@@ -163,19 +164,17 @@ class DockerRunner:
             results = await asyncio.gather(
                 wait_future, stdout_future, stderr_future, return_exceptions=True
             )
-            exit_code = results[0] if not isinstance(results[0], Exception) else -1
-
-            # Cleanup
-            try:
-                container.remove(force=True)
-            except Exception:
-                pass
-
-            return exit_code
+            return results[0] if not isinstance(results[0], Exception) else -1
 
         except Exception as e:
             stderr_log.write_text(f"Unexpected error: {e}")
             return -1
+        finally:
+            if container is not None:
+                try:
+                    container.remove(force=True)
+                except Exception:
+                    pass
 
     def is_available(self) -> bool:
         """Check if Docker is available on this system"""

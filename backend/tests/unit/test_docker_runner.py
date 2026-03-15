@@ -1,7 +1,8 @@
 import pytest
 from pathlib import Path
 from unittest.mock import Mock, patch, AsyncMock
-from app.utils.docker_runner import DockerRunner, ExecutionResult
+from docker.errors import ImageNotFound
+from app.utils.docker_runner import DockerRunner
 
 
 @pytest.fixture
@@ -19,7 +20,7 @@ def test_docker_runner_initialization(docker_runner):
 
 
 @pytest.mark.asyncio
-async def test_run_builds_correct_command(docker_runner):
+async def test_run_builds_correct_command(docker_runner, tmp_path):
     """Test that Docker command is built with correct resource limits"""
     with patch("docker.from_env") as mock_docker:
         mock_client = Mock()
@@ -29,9 +30,10 @@ async def test_run_builds_correct_command(docker_runner):
         mock_client.containers.run.return_value = mock_container
         mock_docker.return_value = mock_client
 
-        workspace = Path("/tmp/workspace")
-        stdout_log = Path("/tmp/stdout.log")
-        stderr_log = Path("/tmp/stderr.log")
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        stdout_log = tmp_path / "stdout.log"
+        stderr_log = tmp_path / "stderr.log"
 
         result = await docker_runner.run(
             command=["cargo", "rapx"],
@@ -46,9 +48,6 @@ async def test_run_builds_correct_command(docker_runner):
         assert call_kwargs["mem_limit"] == "8g"
         assert call_kwargs["cpu_quota"] == 200000  # 2 CPUs
         assert call_kwargs["command"] == ["cargo", "rapx"]
-
-
-from docker.errors import ImageNotFound
 
 
 def test_ensure_image_with_if_not_present_policy(docker_runner):
