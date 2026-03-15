@@ -146,3 +146,42 @@ async def test_count_generated_items(executor, tmp_path):
 
     assert case_count == 2
     assert poc_count == 1
+
+
+@pytest.fixture
+def mock_config():
+    config = Mock(spec=Config)
+    config.execution_mode = "docker"
+    config.docker_image = "rust:test"
+    config.docker_pull_policy = "if-not-present"
+    config.max_memory_gb = 8
+    config.max_runtime_hours = 2
+    config.max_cpus = 4
+    config.workspace_path = Path("/tmp/workspace")
+    return config
+
+
+@pytest.fixture
+def mock_database():
+    db = Mock()
+    return db
+
+
+@pytest.mark.asyncio
+async def test_task_executor_uses_docker_when_configured(mock_config, mock_database):
+    """Test that TaskExecutor uses DockerRunner when execution_mode is docker"""
+    with patch('app.services.task_executor.DockerRunner') as mock_runner_class:
+        mock_runner = Mock()
+        mock_runner.is_available.return_value = True
+        mock_runner.run = AsyncMock(return_value=0)
+        mock_runner_class.return_value = mock_runner
+
+        executor = TaskExecutor(mock_config, mock_database)
+
+        # Verify DockerRunner was initialized
+        mock_runner_class.assert_called_once_with(
+            image="rust:test",
+            max_memory_gb=8,
+            max_runtime_hours=2,
+            max_cpus=4
+        )
