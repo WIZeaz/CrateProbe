@@ -43,8 +43,11 @@ class TaskExecutor:
         self, task_id: int, crate_name: str, version: str
     ) -> Path:
         """Download and extract crate to workspace"""
-        workspace_dir = self.config.workspace_path / \
-            "repos" / f"{crate_name}-{version}"
+        import logging
+
+        task_logger = logging.getLogger(f"task.{task_id}")
+
+        workspace_dir = self.config.workspace_path / "repos" / f"{crate_name}-{version}"
 
         # If workspace directory already exists (e.g., from retry), clean it first
         if workspace_dir.exists():
@@ -54,8 +57,7 @@ class TaskExecutor:
 
         # Download crate file
         crate_file = (
-            self.config.workspace_path / "repos" /
-            f"{crate_name}-{version}.crate"
+            self.config.workspace_path / "repos" / f"{crate_name}-{version}.crate"
         )
 
         # Remove old crate file if it exists
@@ -63,15 +65,16 @@ class TaskExecutor:
             crate_file.unlink()
 
         await self.crates_api.download_crate(crate_name, version, str(crate_file))
+        task_logger.info(f"[{task_id}] Crate downloaded successfully")
 
         # Extract crate - .crate files contain a top-level directory we need to strip
         temp_extract_dir = (
-            self.config.workspace_path / "repos" /
-            f"_temp_{crate_name}-{version}"
+            self.config.workspace_path / "repos" / f"_temp_{crate_name}-{version}"
         )
         temp_extract_dir.mkdir(parents=True, exist_ok=True)
 
         try:
+            task_logger.info("Extracting crate archive...")
             with tarfile.open(crate_file, "r:gz") as tar:
                 tar.extractall(temp_extract_dir)
 
@@ -86,6 +89,10 @@ class TaskExecutor:
                 # Fallback: if structure is different, move everything
                 for item in temp_extract_dir.iterdir():
                     shutil.move(str(item), str(workspace_dir))
+            task_logger.info("Extraction complete")
+        except Exception as e:
+            task_logger.error(f"Extraction failed: {e}")
+            raise
         finally:
             # Clean up temp directory
             if temp_extract_dir.exists():
@@ -99,54 +106,84 @@ class TaskExecutor:
 
     async def execute_task(self, task_id: int):
         """Execute a single task"""
+        import logging
+
         task = self.db.get_task(task_id)
         if not task:
             return
 
+        # Set up per-task runner logger — first action, before status update or any branch
+        runner_log_path = self.config.workspace_path / "logs" / f"{task_id}-runner.log"
+        runner_log_path.parent.mkdir(parents=True, exist_ok=True)
+        task_logger = logging.getLogger(f"task.{task_id}")
+        task_logger.setLevel(logging.DEBUG)
+        # Remove existing handlers to avoid duplicates on retry
+        task_logger.handlers.clear()
+        handler = logging.FileHandler(str(runner_log_path), mode="w")
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+        )
+        task_logger.addHandler(handler)
+
         try:
+            task_logger.info(
+                f"Task #{task_id} started: {task.crate_name} {task.version} "
+                f"(mode={self.execution_mode})"
+            )
+
             # Update status to running
             self.db.update_task_status(
                 task_id, TaskStatus.RUNNING, started_at=datetime.now()
             )
 
             # Prepare workspace
+            task_logger.info(f"Downloading crate {task.crate_name} {task.version}...")
             workspace_dir = await self.prepare_workspace(
                 task_id, task.crate_name, task.version
             )
+            task_logger.info(f"Workspace ready: {workspace_dir}")
 
             # Ensure log directory exists
             Path(task.stdout_log).parent.mkdir(parents=True, exist_ok=True)
             Path(task.stderr_log).parent.mkdir(parents=True, exist_ok=True)
 
             if self.execution_mode == "docker":
-                # Use Docker for execution
+                task_logger.info("Checking Docker availability...")
                 if not self.docker_runner.is_available():
-                    raise RuntimeError(
-                        "Docker is not available but execution_mode is 'docker'"
-                    )
+                    msg = "Docker is not available but execution_mode is 'docker'"
+                    task_logger.error(msg)
+                    raise RuntimeError(msg)
 
-                # Ensure image is available
+                task_logger.info(
+                    f"Ensuring Docker image: {self.config.docker_image} "
+                    f"(policy={self.config.docker_pull_policy})"
+                )
                 if not self.docker_runner.ensure_image(self.config.docker_pull_policy):
-                    raise RuntimeError(
-                        f"Docker image {self.config.docker_image} is not available"
-                    )
+                    msg = f"Docker image {self.config.docker_image} is not available"
+                    task_logger.error(msg)
+                    raise RuntimeError(msg)
 
-                # Run in Docker
+                cmd = [
+                    "cargo",
+                    "rapx",
+                    f"-test-crate={task.crate_name}",
+                    "test",
+                ]
+                task_logger.info(f"Running command: {' '.join(cmd)}")
+                task_logger.info(
+                    "Starting Docker container (PID not available in Docker mode)..."
+                )
+
                 exit_code = await self.docker_runner.run(
-                    command=[
-                        "cargo",
-                        "rapx",
-                        f"-test-crate={task.crate_name}",
-                        "test",
-                    ],
+                    command=cmd,
                     workspace_dir=workspace_dir,
                     stdout_log=Path(task.stdout_log),
                     stderr_log=Path(task.stderr_log),
                 )
+                task_logger.info(f"Process exited with code: {exit_code}")
 
                 # Final count of generated items
-                case_count, poc_count = self.count_generated_items(
-                    workspace_dir)
+                case_count, poc_count = self.count_generated_items(workspace_dir)
                 self.db.update_task_counts(task_id, case_count, poc_count)
 
                 # Update final status
@@ -158,7 +195,6 @@ class TaskExecutor:
                         exit_code=exit_code,
                     )
                 elif exit_code == 137:
-                    # Docker OOM exit code
                     self.db.update_task_status(
                         task_id,
                         TaskStatus.OOM,
@@ -166,7 +202,6 @@ class TaskExecutor:
                         exit_code=exit_code,
                     )
                 elif exit_code == -1:
-                    # Timeout or Docker error
                     self.db.update_task_status(
                         task_id,
                         TaskStatus.TIMEOUT,
@@ -185,20 +220,30 @@ class TaskExecutor:
                 await self._execute_with_limiter(task_id, workspace_dir, task)
 
         except Exception as e:
+            task_logger.error(f"Task failed with exception: {e}")
             self.db.update_task_status(
                 task_id,
                 TaskStatus.FAILED,
                 finished_at=datetime.now(),
                 error_message=str(e),
             )
+        finally:
+            task_logger.info(f"Task #{task_id} runner log closed.")
+            task_logger.removeHandler(handler)
+            handler.close()
 
     async def _execute_with_limiter(self, task_id: int, workspace_dir: Path, task):
         """Execute task using systemd/resource limiter (original implementation)"""
+        import logging
+
+        task_logger = logging.getLogger(f"task.{task_id}")
+
         # Build command
         cmd = self.limiter.build_command(
             ["cargo", "rapx", "-testgen", f"-test-crate={task.crate_name}"],
             cwd=str(workspace_dir),
         )
+        task_logger.info(f"Running command: {' '.join(cmd)}")
 
         # Open log files
         stdout_log = open(task.stdout_log, "w")
@@ -216,6 +261,7 @@ class TaskExecutor:
                 else None
             ),
         )
+        task_logger.info(f"Process started with PID: {process.pid}")
 
         # Store PID
         self.db.update_task_pid(task_id, process.pid)
@@ -225,6 +271,8 @@ class TaskExecutor:
 
         stdout_log.close()
         stderr_log.close()
+
+        task_logger.info(f"Process exited with code: {process.returncode}")
 
         # Final count of generated items
         case_count, poc_count = self.count_generated_items(workspace_dir)
@@ -276,8 +324,7 @@ class TaskExecutor:
                 break
             except asyncio.TimeoutError:
                 # Process still running, update stats
-                case_count, poc_count = self.count_generated_items(
-                    workspace_dir)
+                case_count, poc_count = self.count_generated_items(workspace_dir)
                 self.db.update_task_counts(task_id, case_count, poc_count)
                 # Continue waiting
 
