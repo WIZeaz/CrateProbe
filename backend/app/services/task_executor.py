@@ -21,14 +21,14 @@ class TaskExecutor:
         self.crates_api = CratesAPI()
 
         # Initialize appropriate runner based on execution mode
-        self.execution_mode = getattr(config, 'execution_mode', 'systemd')
+        self.execution_mode = getattr(config, "execution_mode", "systemd")
 
         if self.execution_mode == "docker":
             self.docker_runner = DockerRunner(
                 image=config.docker_image,
                 max_memory_gb=config.max_memory_gb,
                 max_runtime_hours=config.max_runtime_hours,
-                max_cpus=getattr(config, 'max_cpus', 4)
+                max_cpus=getattr(config, "max_cpus", 4),
             )
             self.limiter = None
         else:
@@ -36,10 +36,12 @@ class TaskExecutor:
             self.limiter = ResourceLimiter(
                 use_systemd=config.use_systemd,
                 max_memory_gb=config.max_memory_gb,
-                max_runtime_hours=config.max_runtime_hours
+                max_runtime_hours=config.max_runtime_hours,
             )
 
-    async def prepare_workspace(self, task_id: int, crate_name: str, version: str) -> Path:
+    async def prepare_workspace(
+        self, task_id: int, crate_name: str, version: str
+    ) -> Path:
         """Download and extract crate to workspace"""
         workspace_dir = self.config.workspace_path / "repos" / f"{crate_name}-{version}"
 
@@ -50,7 +52,9 @@ class TaskExecutor:
         workspace_dir.mkdir(parents=True, exist_ok=True)
 
         # Download crate file
-        crate_file = self.config.workspace_path / "repos" / f"{crate_name}-{version}.crate"
+        crate_file = (
+            self.config.workspace_path / "repos" / f"{crate_name}-{version}.crate"
+        )
 
         # Remove old crate file if it exists
         if crate_file.exists():
@@ -59,7 +63,9 @@ class TaskExecutor:
         await self.crates_api.download_crate(crate_name, version, str(crate_file))
 
         # Extract crate - .crate files contain a top-level directory we need to strip
-        temp_extract_dir = self.config.workspace_path / "repos" / f"_temp_{crate_name}-{version}"
+        temp_extract_dir = (
+            self.config.workspace_path / "repos" / f"_temp_{crate_name}-{version}"
+        )
         temp_extract_dir.mkdir(parents=True, exist_ok=True)
 
         try:
@@ -96,10 +102,14 @@ class TaskExecutor:
 
         try:
             # Update status to running
-            self.db.update_task_status(task_id, TaskStatus.RUNNING, started_at=datetime.now())
+            self.db.update_task_status(
+                task_id, TaskStatus.RUNNING, started_at=datetime.now()
+            )
 
             # Prepare workspace
-            workspace_dir = await self.prepare_workspace(task_id, task.crate_name, task.version)
+            workspace_dir = await self.prepare_workspace(
+                task_id, task.crate_name, task.version
+            )
 
             # Ensure log directory exists
             Path(task.stdout_log).parent.mkdir(parents=True, exist_ok=True)
@@ -108,18 +118,27 @@ class TaskExecutor:
             if self.execution_mode == "docker":
                 # Use Docker for execution
                 if not self.docker_runner.is_available():
-                    raise RuntimeError("Docker is not available but execution_mode is 'docker'")
+                    raise RuntimeError(
+                        "Docker is not available but execution_mode is 'docker'"
+                    )
 
                 # Ensure image is available
                 if not self.docker_runner.ensure_image(self.config.docker_pull_policy):
-                    raise RuntimeError(f"Docker image {self.config.docker_image} is not available")
+                    raise RuntimeError(
+                        f"Docker image {self.config.docker_image} is not available"
+                    )
 
                 # Run in Docker
                 exit_code = await self.docker_runner.run(
-                    command=["cargo", "rapx", "-testgen", f"-test-crate={task.crate_name}"],
+                    command=[
+                        "cargo",
+                        "rapx",
+                        "-testgen",
+                        f"-test-crate={task.crate_name}",
+                    ],
                     workspace_dir=workspace_dir,
                     stdout_log=Path(task.stdout_log),
-                    stderr_log=Path(task.stderr_log)
+                    stderr_log=Path(task.stderr_log),
                 )
 
                 # Final count of generated items
@@ -132,7 +151,7 @@ class TaskExecutor:
                         task_id,
                         TaskStatus.COMPLETED,
                         finished_at=datetime.now(),
-                        exit_code=exit_code
+                        exit_code=exit_code,
                     )
                 elif exit_code == 137:
                     # Docker OOM exit code
@@ -140,7 +159,7 @@ class TaskExecutor:
                         task_id,
                         TaskStatus.OOM,
                         finished_at=datetime.now(),
-                        exit_code=exit_code
+                        exit_code=exit_code,
                     )
                 elif exit_code == -1:
                     # Timeout or Docker error
@@ -148,14 +167,14 @@ class TaskExecutor:
                         task_id,
                         TaskStatus.TIMEOUT,
                         finished_at=datetime.now(),
-                        exit_code=exit_code
+                        exit_code=exit_code,
                     )
                 else:
                     self.db.update_task_status(
                         task_id,
                         TaskStatus.FAILED,
                         finished_at=datetime.now(),
-                        exit_code=exit_code
+                        exit_code=exit_code,
                     )
             else:
                 # Use traditional execution with systemd/resource
@@ -166,7 +185,7 @@ class TaskExecutor:
                 task_id,
                 TaskStatus.FAILED,
                 finished_at=datetime.now(),
-                error_message=str(e)
+                error_message=str(e),
             )
 
     async def _execute_with_limiter(self, task_id: int, workspace_dir: Path, task):
@@ -174,7 +193,7 @@ class TaskExecutor:
         # Build command
         cmd = self.limiter.build_command(
             ["cargo", "rapx", "-testgen", f"-test-crate={task.crate_name}"],
-            cwd=str(workspace_dir)
+            cwd=str(workspace_dir),
         )
 
         # Open log files
@@ -187,7 +206,11 @@ class TaskExecutor:
             stdout=stdout_log,
             stderr=stderr_log,
             cwd=workspace_dir,
-            preexec_fn=self.limiter.apply_resource_limits if self.limiter.get_limit_method().value == "resource" else None
+            preexec_fn=(
+                self.limiter.apply_resource_limits
+                if self.limiter.get_limit_method().value == "resource"
+                else None
+            ),
         )
 
         # Store PID
@@ -209,17 +232,19 @@ class TaskExecutor:
                 task_id,
                 TaskStatus.COMPLETED,
                 finished_at=datetime.now(),
-                exit_code=process.returncode
+                exit_code=process.returncode,
             )
         else:
             self.db.update_task_status(
                 task_id,
                 TaskStatus.FAILED,
                 finished_at=datetime.now(),
-                exit_code=process.returncode
+                exit_code=process.returncode,
             )
 
-    async def _wait_with_stats_updates(self, process, task_id: int, workspace_dir: Path):
+    async def _wait_with_stats_updates(
+        self, process, task_id: int, workspace_dir: Path
+    ):
         """Wait for process completion while periodically updating stats in database"""
         update_interval = 10  # Update every 10 seconds
 

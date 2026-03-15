@@ -27,7 +27,9 @@ def client(app):
 def test_websocket_task_updates(client, app):
     """Test WebSocket connection for task updates"""
     # Create a task first
-    response = client.post("/api/tasks", json={"crate_name": "serde", "version": "1.0.0"})
+    response = client.post(
+        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
+    )
     task_id = response.json()["task_id"]
 
     # Connect to WebSocket

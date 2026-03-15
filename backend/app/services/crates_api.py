@@ -8,11 +8,13 @@ import httpx
 
 class CrateNotFoundError(Exception):
     """Raised when a crate is not found on crates.io."""
+
     pass
 
 
 class VersionNotFoundError(Exception):
     """Raised when a specific version of a crate is not found."""
+
     pass
 
 

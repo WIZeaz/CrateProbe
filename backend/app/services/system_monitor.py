@@ -15,7 +15,7 @@ class SystemMonitor:
         return {
             "used_mb": mem.used / (1024 * 1024),
             "total_mb": mem.total / (1024 * 1024),
-            "percent": mem.percent
+            "percent": mem.percent,
         }
 
     def get_disk_usage(self, path: str = "/") -> Dict[str, float]:
@@ -24,7 +24,7 @@ class SystemMonitor:
         return {
             "used_gb": disk.used / (1024 * 1024 * 1024),
             "total_gb": disk.total / (1024 * 1024 * 1024),
-            "percent": disk.percent
+            "percent": disk.percent,
         }
 
     def get_system_stats(self) -> Dict:
@@ -39,5 +39,5 @@ class SystemMonitor:
             "memory_total_gb": memory["total_mb"] / 1024,
             "disk_percent": disk["percent"],
             "disk_used_gb": disk["used_gb"],
-            "disk_total_gb": disk["total_gb"]
+            "disk_total_gb": disk["total_gb"],
         }

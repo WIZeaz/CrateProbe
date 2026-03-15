@@ -30,7 +30,7 @@ def test_create_task(db):
         version="1.0.193",
         workspace_path="/tmp/workspace/repos/serde-1.0.193",
         stdout_log="/tmp/workspace/logs/1-stdout.log",
-        stderr_log="/tmp/workspace/logs/1-stderr.log"
+        stderr_log="/tmp/workspace/logs/1-stderr.log",
     )
 
     assert task_id == 1
@@ -43,7 +43,7 @@ def test_get_task(db):
         version="1.0.193",
         workspace_path="/tmp/workspace/repos/serde-1.0.193",
         stdout_log="/tmp/workspace/logs/1-stdout.log",
-        stderr_log="/tmp/workspace/logs/1-stderr.log"
+        stderr_log="/tmp/workspace/logs/1-stderr.log",
     )
 
     task = db.get_task(task_id)
@@ -129,10 +129,7 @@ def test_reset_task_for_retry(db):
     db.update_task_pid(task_id, 12345)
     db.update_task_counts(task_id, case_count=10, poc_count=5)
     db.update_task_status(
-        task_id,
-        TaskStatus.COMPLETED,
-        finished_at=datetime.now(),
-        exit_code=0
+        task_id, TaskStatus.COMPLETED, finished_at=datetime.now(), exit_code=0
     )
 
     # Verify task is completed

@@ -33,8 +33,7 @@ def test_root_redirect(client):
 def test_create_task_with_version(client):
     """Test creating a task with explicit version"""
     response = client.post(
-        "/api/tasks",
-        json={"crate_name": "serde", "version": "1.0.0"}
+        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
     )
 
     assert response.status_code == 200
@@ -60,7 +59,9 @@ def test_get_all_tasks(client):
 
 def test_get_task_by_id(client):
     """Test retrieving specific task"""
-    create_resp = client.post("/api/tasks", json={"crate_name": "serde", "version": "1.0.0"})
+    create_resp = client.post(
+        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
+    )
     task_id = create_resp.json()["task_id"]
 
     response = client.get(f"/api/tasks/{task_id}")
@@ -73,7 +74,9 @@ def test_get_task_by_id(client):
 
 def test_delete_task_not_running(client):
     """Test deleting non-running task succeeds"""
-    create_resp = client.post("/api/tasks", json={"crate_name": "serde", "version": "1.0.0"})
+    create_resp = client.post(
+        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
+    )
     task_id = create_resp.json()["task_id"]
 
     response = client.delete(f"/api/tasks/{task_id}")
@@ -136,7 +139,9 @@ def test_dashboard_system(client):
 def test_get_task_stdout_logs(client, config):
     """Test getting stdout logs for a task"""
     # Create a task
-    create_resp = client.post("/api/tasks", json={"crate_name": "serde", "version": "1.0.0"})
+    create_resp = client.post(
+        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
+    )
     task_id = create_resp.json()["task_id"]
 
     # Create a fake log file
@@ -157,7 +162,9 @@ def test_get_task_stdout_logs(client, config):
 
 def test_get_task_stderr_logs(client, config):
     """Test getting stderr logs for a task"""
-    create_resp = client.post("/api/tasks", json={"crate_name": "tokio", "version": "1.0.0"})
+    create_resp = client.post(
+        "/api/tasks", json={"crate_name": "tokio", "version": "1.0.0"}
+    )
     task_id = create_resp.json()["task_id"]
 
     # Create a fake log file
@@ -182,7 +189,9 @@ def test_get_task_logs_not_found(client):
 def test_get_task_logs_file_missing(client, config):
     """Test getting logs when file doesn't exist"""
     # Use serde which exists
-    create_resp = client.post("/api/tasks", json={"crate_name": "serde", "version": "1.0.0"})
+    create_resp = client.post(
+        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
+    )
     task_id = create_resp.json()["task_id"]
 
     # Don't create the log file - it should be missing
@@ -195,7 +204,9 @@ def test_get_task_logs_file_missing(client, config):
 def test_download_stdout_raw(client, config):
     """Test downloading full stdout log"""
     # Use serde which exists
-    create_resp = client.post("/api/tasks", json={"crate_name": "serde", "version": "1.0.0"})
+    create_resp = client.post(
+        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
+    )
     task_id = create_resp.json()["task_id"]
 
     # Create a fake log file
@@ -212,7 +223,9 @@ def test_download_stdout_raw(client, config):
 def test_get_task_realtime_stats(client, config):
     """Test getting real-time test case and POC counts"""
     # Create a task
-    create_resp = client.post("/api/tasks", json={"crate_name": "serde", "version": "1.0.0"})
+    create_resp = client.post(
+        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
+    )
     task_id = create_resp.json()["task_id"]
 
     # Build workspace path from config (same as task creation logic)
@@ -243,7 +256,9 @@ def test_get_task_realtime_stats(client, config):
 def test_get_task_realtime_stats_empty(client, config):
     """Test getting real-time stats when testgen directory doesn't exist"""
     # Create a task
-    create_resp = client.post("/api/tasks", json={"crate_name": "serde", "version": "1.0.0"})
+    create_resp = client.post(
+        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
+    )
     task_id = create_resp.json()["task_id"]
 
     # Get realtime stats without creating testgen directory
@@ -268,7 +283,9 @@ def test_retry_task(client, app):
     from datetime import datetime
 
     # Create a task
-    create_resp = client.post("/api/tasks", json={"crate_name": "serde", "version": "1.0.0"})
+    create_resp = client.post(
+        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
+    )
     task_id = create_resp.json()["task_id"]
 
     # Get database from conftest fixture
@@ -279,6 +296,7 @@ def test_retry_task(client, app):
 
     # Get config to find database
     from app.config import Config
+
     with tempfile.TemporaryDirectory() as tmpdir:
         cfg = Config(workspace_path=Path(tmpdir))
         db_path = cfg.get_db_full_path()

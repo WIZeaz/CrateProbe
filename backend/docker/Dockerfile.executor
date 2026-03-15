@@ -1,19 +1,31 @@
-# Rust + cargo-rapx 执行镜像
-FROM rust:1.75-slim-bookworm
+FROM ubuntu:22.04
 
-# 安装必要的系统依赖
-RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
+ENV PATH=/root/.cargo/bin:${PATH} \
+    HOST_TRIPLE=x86_64-unknown-linux-gnu
+
+RUN apt-get update && \
+    apt-get install -y\
+    curl \
+    build-essential \
     git \
-    && rm -rf /var/lib/apt/lists/*
+    ninja-build \
+    clang \
+    python3 \
+    z3 \
+    make \
+    cmake
 
-# 安装 cargo-rapx
-# 注意：根据实际情况可能需要从源码构建或使用特定版本
-RUN cargo install cargo-rapx
+RUN git --version; \
+    ninja --version; \
+    clang++ --version; \
+    python3 --version; \
+    z3 --version; \
+    make --version; \
+    cmake --version;
 
-# 创建工作目录
-WORKDIR /workspace
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; \
+    rustup --version;
 
-# 默认命令显示帮助
-CMD ["cargo", "rapx", "--help"]
+WORKDIR /app
+
+RUN ./install.sh

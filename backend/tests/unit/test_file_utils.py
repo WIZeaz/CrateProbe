@@ -1,6 +1,9 @@
 import pytest
 from pathlib import Path
-from app.utils.file_utils import read_last_n_lines, FileNotFoundError as CustomFileNotFoundError
+from app.utils.file_utils import (
+    read_last_n_lines,
+    FileNotFoundError as CustomFileNotFoundError,
+)
 
 
 def test_read_last_n_lines_basic(tmp_path):

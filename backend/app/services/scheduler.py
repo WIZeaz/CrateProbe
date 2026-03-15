@@ -52,9 +52,7 @@ class TaskScheduler:
                 pass  # Process already ended
 
         self.db.update_task_status(
-            task_id,
-            TaskStatus.CANCELLED,
-            finished_at=datetime.now()
+            task_id, TaskStatus.CANCELLED, finished_at=datetime.now()
         )
 
     async def run(self):

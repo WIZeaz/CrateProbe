@@ -9,10 +9,7 @@ from app.config import Config
 
 @pytest.fixture
 def config(tmp_path):
-    return Config(
-        workspace_path=tmp_path / "workspace",
-        max_jobs=2
-    )
+    return Config(workspace_path=tmp_path / "workspace", max_jobs=2)
 
 
 @pytest.fixture
@@ -35,7 +32,9 @@ async def test_scheduler_starts_pending_tasks(scheduler, db):
     db.create_task("serde", "1.0.0", "/path1", "/log1", "/log2")
     db.create_task("tokio", "1.0.0", "/path2", "/log3", "/log4")
 
-    with patch.object(scheduler.executor, "execute_task", new_callable=AsyncMock) as mock_exec:
+    with patch.object(
+        scheduler.executor, "execute_task", new_callable=AsyncMock
+    ) as mock_exec:
         # Run one scheduling cycle
         await scheduler.schedule_tasks()
 
@@ -55,7 +54,9 @@ async def test_scheduler_respects_max_jobs(scheduler, db, config):
     db.update_task_status(id1, TaskStatus.RUNNING)
     db.update_task_status(id2, TaskStatus.RUNNING)
 
-    with patch.object(scheduler.executor, "execute_task", new_callable=AsyncMock) as mock_exec:
+    with patch.object(
+        scheduler.executor, "execute_task", new_callable=AsyncMock
+    ) as mock_exec:
         await scheduler.schedule_tasks()
 
         # Should not start any new tasks (at capacity)

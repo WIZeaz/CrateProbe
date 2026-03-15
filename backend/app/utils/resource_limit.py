@@ -6,6 +6,7 @@ from typing import List
 
 class LimitMethod(str, Enum):
     """Method for applying resource limits"""
+
     SYSTEMD = "systemd"
     RESOURCE = "resource"
 
@@ -35,7 +36,7 @@ class ResourceLimiter:
                 "--scope",
                 f"--property=MemoryMax={self.max_memory_gb}G",
                 f"--property=CPUQuota=400%",  # Allow using multiple cores
-                "--"
+                "--",
             ] + base_cmd
         else:
             # Resource limits will be applied in preexec_fn

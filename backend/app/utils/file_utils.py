@@ -5,6 +5,7 @@ import os
 
 class FileNotFoundError(Exception):
     """Raised when file is not found"""
+
     pass
 
 
@@ -32,13 +33,13 @@ def read_last_n_lines(file_path: str, n: int) -> List[str]:
 
     # Read file content
     try:
-        with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except Exception as e:
         raise FileNotFoundError(f"Error reading file: {e}")
 
     # Strip newlines and return last n lines
-    lines = [line.rstrip('\n\r') for line in lines]
+    lines = [line.rstrip("\n\r") for line in lines]
 
     if len(lines) <= n:
         return lines

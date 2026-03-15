@@ -23,10 +23,7 @@ def test_build_systemd_command():
     """Test building systemd-run command"""
     limiter = ResourceLimiter(use_systemd=True, max_memory_gb=20, max_runtime_hours=24)
 
-    cmd = limiter.build_command(
-        ["cargo", "rapx", "-testgen"],
-        cwd="/tmp/workspace"
-    )
+    cmd = limiter.build_command(["cargo", "rapx", "-testgen"], cwd="/tmp/workspace")
 
     assert cmd[0] == "systemd-run"
     assert "--user" in cmd
@@ -39,10 +36,7 @@ def test_build_resource_command():
     """Test building command with resource limits"""
     limiter = ResourceLimiter(use_systemd=False, max_memory_gb=20, max_runtime_hours=24)
 
-    cmd = limiter.build_command(
-        ["cargo", "rapx", "-testgen"],
-        cwd="/tmp/workspace"
-    )
+    cmd = limiter.build_command(["cargo", "rapx", "-testgen"], cwd="/tmp/workspace")
 
     # Should return original command (resource limits applied at runtime)
     assert cmd == ["cargo", "rapx", "-testgen"]

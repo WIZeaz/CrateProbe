@@ -1,4 +1,5 @@
 """Database layer for experiment tracking"""
+
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
@@ -11,6 +12,7 @@ from app.models import TaskStatus
 @dataclass
 class TaskRecord:
     """Data model for a task record"""
+
     id: int
     crate_name: str
     version: str
@@ -86,7 +88,7 @@ class Database:
         version: str,
         workspace_path: str,
         stdout_log: str,
-        stderr_log: str
+        stderr_log: str,
     ) -> int:
         """Create a new task
 
@@ -101,16 +103,23 @@ class Database:
             Task ID of the created task
         """
         cursor = self.conn.cursor()
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO tasks (
                 crate_name, version, workspace_path,
                 stdout_log, stderr_log, status, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            crate_name, version, workspace_path,
-            stdout_log, stderr_log, TaskStatus.PENDING.value,
-            datetime.now()
-        ))
+        """,
+            (
+                crate_name,
+                version,
+                workspace_path,
+                stdout_log,
+                stderr_log,
+                TaskStatus.PENDING.value,
+                datetime.now(),
+            ),
+        )
         self.conn.commit()
         return cursor.lastrowid
 
@@ -151,7 +160,7 @@ class Database:
         started_at: Optional[datetime] = None,
         finished_at: Optional[datetime] = None,
         exit_code: Optional[int] = None,
-        error_message: Optional[str] = None
+        error_message: Optional[str] = None,
     ):
         """Update task status and timestamps
 
@@ -194,7 +203,7 @@ class Database:
         self,
         task_id: int,
         case_count: Optional[int] = None,
-        poc_count: Optional[int] = None
+        poc_count: Optional[int] = None,
     ):
         """Update task case and POC counts
 
@@ -246,7 +255,8 @@ class Database:
             task_id: Task ID to reset
         """
         cursor = self.conn.cursor()
-        cursor.execute("""
+        cursor.execute(
+            """
             UPDATE tasks SET
                 status = ?,
                 started_at = NULL,
@@ -257,7 +267,9 @@ class Database:
                 poc_count = 0,
                 pid = NULL
             WHERE id = ?
-        """, (TaskStatus.PENDING.value, task_id))
+        """,
+            (TaskStatus.PENDING.value, task_id),
+        )
         self.conn.commit()
 
     def get_tasks_by_status(self, status: TaskStatus) -> List[TaskRecord]:
@@ -272,7 +284,7 @@ class Database:
         cursor = self.conn.cursor()
         cursor.execute(
             "SELECT * FROM tasks WHERE status = ? ORDER BY created_at DESC",
-            (status.value,)
+            (status.value,),
         )
         rows = cursor.fetchall()
 
@@ -288,22 +300,26 @@ class Database:
             TaskRecord object
         """
         return TaskRecord(
-            id=row['id'],
-            crate_name=row['crate_name'],
-            version=row['version'],
-            workspace_path=row['workspace_path'],
-            stdout_log=row['stdout_log'],
-            stderr_log=row['stderr_log'],
-            status=TaskStatus(row['status']),
-            created_at=self._parse_datetime(row['created_at']),
-            started_at=self._parse_datetime(row['started_at']) if row['started_at'] else None,
-            finished_at=self._parse_datetime(row['finished_at']) if row['finished_at'] else None,
-            case_count=row['case_count'],
-            poc_count=row['poc_count'],
-            pid=row['pid'],
-            exit_code=row['exit_code'],
-            error_message=row['error_message'],
-            memory_used_mb=row['memory_used_mb']
+            id=row["id"],
+            crate_name=row["crate_name"],
+            version=row["version"],
+            workspace_path=row["workspace_path"],
+            stdout_log=row["stdout_log"],
+            stderr_log=row["stderr_log"],
+            status=TaskStatus(row["status"]),
+            created_at=self._parse_datetime(row["created_at"]),
+            started_at=(
+                self._parse_datetime(row["started_at"]) if row["started_at"] else None
+            ),
+            finished_at=(
+                self._parse_datetime(row["finished_at"]) if row["finished_at"] else None
+            ),
+            case_count=row["case_count"],
+            poc_count=row["poc_count"],
+            pid=row["pid"],
+            exit_code=row["exit_code"],
+            error_message=row["error_message"],
+            memory_used_mb=row["memory_used_mb"],
         )
 
     def _parse_datetime(self, dt_str: str) -> datetime:
@@ -320,8 +336,8 @@ class Database:
 
         # Try different datetime formats
         for fmt in [
-            '%Y-%m-%d %H:%M:%S.%f',
-            '%Y-%m-%d %H:%M:%S',
+            "%Y-%m-%d %H:%M:%S.%f",
+            "%Y-%m-%d %H:%M:%S",
         ]:
             try:
                 return datetime.strptime(dt_str, fmt)

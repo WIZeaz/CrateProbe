@@ -10,6 +10,7 @@ from docker.errors import ImageNotFound, APIError
 @dataclass
 class ExecutionResult:
     """Result of container execution"""
+
     exit_code: int
     stdout: str
     stderr: str
@@ -19,11 +20,7 @@ class DockerRunner:
     """Execute tasks in Docker containers with resource limits"""
 
     def __init__(
-        self,
-        image: str,
-        max_memory_gb: int,
-        max_runtime_hours: int,
-        max_cpus: int
+        self, image: str, max_memory_gb: int, max_runtime_hours: int, max_cpus: int
     ):
         self.image = image
         self.max_memory_gb = max_memory_gb
@@ -88,7 +85,7 @@ class DockerRunner:
         command: List[str],
         workspace_dir: Path,
         stdout_log: Path,
-        stderr_log: Path
+        stderr_log: Path,
     ) -> int:
         """
         Run a command in a Docker container with resource limits.
@@ -111,12 +108,7 @@ class DockerRunner:
         resource_limits = self._build_resource_limits()
 
         # Prepare volume mounts
-        volumes = {
-            str(workspace_dir.resolve()): {
-                "bind": "/workspace",
-                "mode": "rw"
-            }
-        }
+        volumes = {str(workspace_dir.resolve()): {"bind": "/workspace", "mode": "rw"}}
 
         # Run container
         try:
@@ -128,7 +120,7 @@ class DockerRunner:
                 detach=True,
                 stdout=True,
                 stderr=True,
-                **resource_limits
+                **resource_limits,
             )
 
             # Wait for container with timeout
@@ -142,8 +134,12 @@ class DockerRunner:
                 exit_code = -1
 
             # Get logs
-            logs = container.logs(stdout=True, stderr=False).decode('utf-8', errors='replace')
-            stderr_logs = container.logs(stdout=False, stderr=True).decode('utf-8', errors='replace')
+            logs = container.logs(stdout=True, stderr=False).decode(
+                "utf-8", errors="replace"
+            )
+            stderr_logs = container.logs(stdout=False, stderr=True).decode(
+                "utf-8", errors="replace"
+            )
 
             # Write logs to files
             stdout_log.write_text(logs)

@@ -63,6 +63,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         config.ensure_workspace_structure()
         # Start scheduler in background
         import asyncio
+
         scheduler_task = asyncio.create_task(scheduler.run())
         yield
         # Shutdown
@@ -73,7 +74,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         title="Experiment Platform",
         description="Automated Rust crate testing platform",
         version="1.0.0",
-        lifespan=lifespan
+        lifespan=lifespan,
     )
 
     @app.get("/", include_in_schema=False)
@@ -92,14 +93,28 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                 version = await crates_api.get_latest_version(request.crate_name)
             else:
                 # Verify version exists
-                exists = await crates_api.verify_version_exists(request.crate_name, version)
+                exists = await crates_api.verify_version_exists(
+                    request.crate_name, version
+                )
                 if not exists:
-                    raise HTTPException(status_code=400, detail=f"Version {version} not found")
+                    raise HTTPException(
+                        status_code=400, detail=f"Version {version} not found"
+                    )
 
             # Create workspace paths
-            workspace_path = config.workspace_path / "repos" / f"{request.crate_name}-{version}"
-            stdout_log = config.workspace_path / "logs" / f"{request.crate_name}-{version}-stdout.log"
-            stderr_log = config.workspace_path / "logs" / f"{request.crate_name}-{version}-stderr.log"
+            workspace_path = (
+                config.workspace_path / "repos" / f"{request.crate_name}-{version}"
+            )
+            stdout_log = (
+                config.workspace_path
+                / "logs"
+                / f"{request.crate_name}-{version}-stdout.log"
+            )
+            stderr_log = (
+                config.workspace_path
+                / "logs"
+                / f"{request.crate_name}-{version}-stderr.log"
+            )
 
             # Create task in database
             task_id = db.create_task(
@@ -107,14 +122,14 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                 version=version,
                 workspace_path=str(workspace_path),
                 stdout_log=str(stdout_log),
-                stderr_log=str(stderr_log)
+                stderr_log=str(stderr_log),
             )
 
             return TaskResponse(
                 task_id=task_id,
                 crate_name=request.crate_name,
                 version=version,
-                status=TaskStatus.PENDING.value
+                status=TaskStatus.PENDING.value,
             )
 
         except CrateNotFoundError as e:
@@ -173,10 +188,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         if poc_dir.exists():
             poc_count = len([d for d in poc_dir.iterdir() if d.is_dir()])
 
-        return {
-            "case_count": case_count,
-            "poc_count": poc_count
-        }
+        return {"case_count": case_count, "poc_count": poc_count}
 
     @app.post("/api/tasks/{task_id}/retry", response_model=TaskResponse)
     async def retry_task(task_id: int):
@@ -196,7 +208,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             task_id=task_id,
             crate_name=task.crate_name,
             version=task.version,
-            status=TaskStatus.PENDING.value
+            status=TaskStatus.PENDING.value,
         )
 
     @app.delete("/api/tasks/{task_id}")
@@ -208,8 +220,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
         if task.status == TaskStatus.RUNNING:
             raise HTTPException(
-                status_code=400,
-                detail="Cannot delete running task. Cancel it first."
+                status_code=400, detail="Cannot delete running task. Cancel it first."
             )
 
         deleted = db.delete_task(task_id)
@@ -227,9 +238,13 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             "total": len(all_tasks),
             "pending": len([t for t in all_tasks if t.status == TaskStatus.PENDING]),
             "running": len([t for t in all_tasks if t.status == TaskStatus.RUNNING]),
-            "completed": len([t for t in all_tasks if t.status == TaskStatus.COMPLETED]),
+            "completed": len(
+                [t for t in all_tasks if t.status == TaskStatus.COMPLETED]
+            ),
             "failed": len([t for t in all_tasks if t.status == TaskStatus.FAILED]),
-            "cancelled": len([t for t in all_tasks if t.status == TaskStatus.CANCELLED]),
+            "cancelled": len(
+                [t for t in all_tasks if t.status == TaskStatus.CANCELLED]
+            ),
             "timeout": len([t for t in all_tasks if t.status == TaskStatus.TIMEOUT]),
             "oom": len([t for t in all_tasks if t.status == TaskStatus.OOM]),
         }
@@ -269,7 +284,9 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             raise HTTPException(status_code=404, detail="Log file not found")
 
     @app.get("/api/tasks/{task_id}/logs/miri_report")
-    async def get_miri_report_logs(task_id: int, lines: int = Query(default=1000, ge=0)):
+    async def get_miri_report_logs(
+        task_id: int, lines: int = Query(default=1000, ge=0)
+    ):
         """Get last N lines of miri_report.txt"""
         task = db.get_task(task_id)
         if not task:
@@ -296,7 +313,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         if not log_path.exists():
             raise HTTPException(status_code=404, detail="Log file not found")
 
-        return PlainTextResponse(log_path.read_text(encoding='utf-8', errors='replace'))
+        return PlainTextResponse(log_path.read_text(encoding="utf-8", errors="replace"))
 
     @app.get("/api/tasks/{task_id}/logs/stderr/raw", response_class=PlainTextResponse)
     async def download_stderr_raw(task_id: int):
@@ -309,9 +326,11 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         if not log_path.exists():
             raise HTTPException(status_code=404, detail="Log file not found")
 
-        return PlainTextResponse(log_path.read_text(encoding='utf-8', errors='replace'))
+        return PlainTextResponse(log_path.read_text(encoding="utf-8", errors="replace"))
 
-    @app.get("/api/tasks/{task_id}/logs/miri_report/raw", response_class=PlainTextResponse)
+    @app.get(
+        "/api/tasks/{task_id}/logs/miri_report/raw", response_class=PlainTextResponse
+    )
     async def download_miri_report_raw(task_id: int):
         """Download full miri_report.txt file"""
         task = db.get_task(task_id)
@@ -324,7 +343,9 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         if not miri_report_path.exists():
             raise HTTPException(status_code=404, detail="Miri report file not found")
 
-        return PlainTextResponse(miri_report_path.read_text(encoding='utf-8', errors='replace'))
+        return PlainTextResponse(
+            miri_report_path.read_text(encoding="utf-8", errors="replace")
+        )
 
     @app.websocket("/ws/tasks/{task_id}")
     async def websocket_task_endpoint(websocket: WebSocket, task_id: int):
@@ -364,12 +385,22 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             all_tasks = db.get_all_tasks()
             stats = {
                 "total": len(all_tasks),
-                "pending": len([t for t in all_tasks if t.status == TaskStatus.PENDING]),
-                "running": len([t for t in all_tasks if t.status == TaskStatus.RUNNING]),
-                "completed": len([t for t in all_tasks if t.status == TaskStatus.COMPLETED]),
+                "pending": len(
+                    [t for t in all_tasks if t.status == TaskStatus.PENDING]
+                ),
+                "running": len(
+                    [t for t in all_tasks if t.status == TaskStatus.RUNNING]
+                ),
+                "completed": len(
+                    [t for t in all_tasks if t.status == TaskStatus.COMPLETED]
+                ),
                 "failed": len([t for t in all_tasks if t.status == TaskStatus.FAILED]),
-                "cancelled": len([t for t in all_tasks if t.status == TaskStatus.CANCELLED]),
-                "timeout": len([t for t in all_tasks if t.status == TaskStatus.TIMEOUT]),
+                "cancelled": len(
+                    [t for t in all_tasks if t.status == TaskStatus.CANCELLED]
+                ),
+                "timeout": len(
+                    [t for t in all_tasks if t.status == TaskStatus.TIMEOUT]
+                ),
                 "oom": len([t for t in all_tasks if t.status == TaskStatus.OOM]),
             }
             await websocket.send_json(stats)
@@ -402,7 +433,7 @@ def _task_to_dict(task: TaskRecord) -> dict:
         "finished_at": task.finished_at.isoformat() if task.finished_at else None,
         "case_count": task.case_count or 0,
         "poc_count": task.poc_count or 0,
-        "error_message": task.error_message
+        "error_message": task.error_message,
     }
 
 
@@ -419,7 +450,7 @@ def _task_to_response(task: TaskRecord) -> TaskDetailResponse:
         finished_at=task.finished_at.isoformat() if task.finished_at else None,
         case_count=task.case_count or 0,
         poc_count=task.poc_count or 0,
-        error_message=task.error_message
+        error_message=task.error_message,
     )
 
 
@@ -437,5 +468,5 @@ if __name__ == "__main__":
         app,
         host=config.server_host,
         port=config.server_port,
-        log_level=config.log_level.lower()
+        log_level=config.log_level.lower(),
     )

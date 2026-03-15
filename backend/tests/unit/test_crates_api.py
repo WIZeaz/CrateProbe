@@ -19,14 +19,10 @@ async def test_get_latest_version_success():
 
     mock_response = Mock()
     mock_response.status_code = 200
-    mock_response.json = Mock(return_value={
-        "crate": {
-            "max_version": "1.70.0"
-        }
-    })
+    mock_response.json = Mock(return_value={"crate": {"max_version": "1.70.0"}})
     mock_response.raise_for_status = Mock()
 
-    with patch.object(api.client, 'get', new_callable=AsyncMock) as mock_get:
+    with patch.object(api.client, "get", new_callable=AsyncMock) as mock_get:
         mock_get.return_value = mock_response
 
         version = await api.get_latest_version("serde")
@@ -34,7 +30,7 @@ async def test_get_latest_version_success():
         assert version == "1.70.0"
         mock_get.assert_called_once_with(
             "https://crates.io/api/v1/crates/serde",
-            headers={"User-Agent": "experiment-platform"}
+            headers={"User-Agent": "experiment-platform"},
         )
 
     await api.close()
@@ -48,13 +44,11 @@ async def test_get_latest_version_not_found():
     mock_response = Mock()
     mock_response.status_code = 404
 
-    with patch.object(api.client, 'get', new_callable=AsyncMock) as mock_get:
+    with patch.object(api.client, "get", new_callable=AsyncMock) as mock_get:
         mock_get.return_value = mock_response
         mock_response.raise_for_status = Mock(
             side_effect=httpx.HTTPStatusError(
-                message="Not Found",
-                request=Mock(),
-                response=mock_response
+                message="Not Found", request=Mock(), response=mock_response
             )
         )
 
@@ -71,15 +65,17 @@ async def test_verify_version_exists_success():
 
     mock_response = Mock()
     mock_response.status_code = 200
-    mock_response.json = Mock(return_value={
-        "versions": [
-            {"num": "1.70.0"},
-            {"num": "1.69.0"},
-        ]
-    })
+    mock_response.json = Mock(
+        return_value={
+            "versions": [
+                {"num": "1.70.0"},
+                {"num": "1.69.0"},
+            ]
+        }
+    )
     mock_response.raise_for_status = Mock()
 
-    with patch.object(api.client, 'get', new_callable=AsyncMock) as mock_get:
+    with patch.object(api.client, "get", new_callable=AsyncMock) as mock_get:
         mock_get.return_value = mock_response
 
         exists = await api.verify_version_exists("serde", "1.70.0")
@@ -96,15 +92,17 @@ async def test_verify_version_not_exists():
 
     mock_response = Mock()
     mock_response.status_code = 200
-    mock_response.json = Mock(return_value={
-        "versions": [
-            {"num": "1.70.0"},
-            {"num": "1.69.0"},
-        ]
-    })
+    mock_response.json = Mock(
+        return_value={
+            "versions": [
+                {"num": "1.70.0"},
+                {"num": "1.69.0"},
+            ]
+        }
+    )
     mock_response.raise_for_status = Mock()
 
-    with patch.object(api.client, 'get', new_callable=AsyncMock) as mock_get:
+    with patch.object(api.client, "get", new_callable=AsyncMock) as mock_get:
         mock_get.return_value = mock_response
 
         exists = await api.verify_version_exists("serde", "999.0.0")
@@ -126,7 +124,7 @@ async def test_download_crate_success():
     mock_response.content = mock_content
     mock_response.raise_for_status = Mock()
 
-    with patch.object(api.client, 'get', new_callable=AsyncMock) as mock_get:
+    with patch.object(api.client, "get", new_callable=AsyncMock) as mock_get:
         mock_get.return_value = mock_response
 
         output_path = Path("/tmp/test_crate.tar.gz")
@@ -160,19 +158,15 @@ async def test_api_retry_on_failure():
         else:
             # Succeed on 3rd try
             mock_resp.status_code = 200
-            mock_resp.json = Mock(return_value={
-                "crate": {
-                    "max_version": "1.70.0"
-                }
-            })
+            mock_resp.json = Mock(return_value={"crate": {"max_version": "1.70.0"}})
             mock_resp.raise_for_status = Mock()
 
         return mock_resp
 
-    with patch.object(api.client, 'get', new_callable=AsyncMock) as mock_get:
+    with patch.object(api.client, "get", new_callable=AsyncMock) as mock_get:
         mock_get.side_effect = mock_get_side_effect
 
-        with patch('asyncio.sleep', return_value=None):
+        with patch("asyncio.sleep", return_value=None):
             version = await api.get_latest_version("serde")
 
         assert version == "1.70.0"

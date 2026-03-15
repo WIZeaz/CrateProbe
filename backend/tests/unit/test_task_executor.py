@@ -13,7 +13,7 @@ def config(tmp_path):
         workspace_path=tmp_path / "workspace",
         max_memory_gb=1,
         max_runtime_hours=1,
-        use_systemd=False
+        use_systemd=False,
     )
 
 
@@ -37,12 +37,16 @@ async def test_prepare_workspace_downloads_crate(executor, config, tmp_path):
     crate_name = "serde"
     version = "1.0.0"
 
-    with patch.object(executor.crates_api, "download_crate", new_callable=AsyncMock) as mock_download:
+    with patch.object(
+        executor.crates_api, "download_crate", new_callable=AsyncMock
+    ) as mock_download:
         with patch("tarfile.open") as mock_tarfile:
             mock_tar = MagicMock()
             mock_tarfile.return_value.__enter__.return_value = mock_tar
 
-            workspace_path = await executor.prepare_workspace(task_id, crate_name, version)
+            workspace_path = await executor.prepare_workspace(
+                task_id, crate_name, version
+            )
 
             assert workspace_path.exists()
             mock_download.assert_called_once()
@@ -53,13 +57,16 @@ async def test_prepare_workspace_downloads_crate(executor, config, tmp_path):
 async def test_execute_task_updates_database(executor, db, config):
     """Test that task execution updates database status"""
     task_id = db.create_task(
-        "test-crate", "1.0.0",
+        "test-crate",
+        "1.0.0",
         str(config.workspace_path / "repos" / "test-crate-1.0.0"),
         str(config.workspace_path / "logs" / "1-stdout.log"),
-        str(config.workspace_path / "logs" / "1-stderr.log")
+        str(config.workspace_path / "logs" / "1-stderr.log"),
     )
 
-    with patch.object(executor, "prepare_workspace", new_callable=AsyncMock) as mock_prep:
+    with patch.object(
+        executor, "prepare_workspace", new_callable=AsyncMock
+    ) as mock_prep:
         mock_prep.return_value = config.workspace_path / "repos" / "test-crate-1.0.0"
 
         with patch("asyncio.create_subprocess_exec") as mock_subprocess:
@@ -80,10 +87,11 @@ async def test_execute_task_updates_database(executor, db, config):
 async def test_execute_task_handles_failure(executor, db, config):
     """Test that task execution handles process failure"""
     task_id = db.create_task(
-        "test-crate", "1.0.0",
+        "test-crate",
+        "1.0.0",
         str(config.workspace_path / "repos" / "test-crate-1.0.0"),
         str(config.workspace_path / "logs" / "1-stdout.log"),
-        str(config.workspace_path / "logs" / "1-stderr.log")
+        str(config.workspace_path / "logs" / "1-stderr.log"),
     )
 
     with patch.object(executor, "prepare_workspace", new_callable=AsyncMock):
@@ -120,7 +128,9 @@ async def test_prepare_workspace_cleans_existing_directory(executor, config):
             mock_tar = MagicMock()
             mock_tarfile.return_value.__enter__.return_value = mock_tar
 
-            workspace_path = await executor.prepare_workspace(task_id, crate_name, version)
+            workspace_path = await executor.prepare_workspace(
+                task_id, crate_name, version
+            )
 
             # Verify old file was removed
             assert not old_file.exists()
@@ -170,7 +180,7 @@ def mock_database():
 @pytest.mark.asyncio
 async def test_task_executor_uses_docker_when_configured(mock_config, mock_database):
     """Test that TaskExecutor uses DockerRunner when execution_mode is docker"""
-    with patch('app.services.task_executor.DockerRunner') as mock_runner_class:
+    with patch("app.services.task_executor.DockerRunner") as mock_runner_class:
         mock_runner = Mock()
         mock_runner.is_available.return_value = True
         mock_runner.run = AsyncMock(return_value=0)
@@ -180,8 +190,5 @@ async def test_task_executor_uses_docker_when_configured(mock_config, mock_datab
 
         # Verify DockerRunner was initialized
         mock_runner_class.assert_called_once_with(
-            image="rust:test",
-            max_memory_gb=8,
-            max_runtime_hours=2,
-            max_cpus=4
+            image="rust:test", max_memory_gb=8, max_runtime_hours=2, max_cpus=4
         )

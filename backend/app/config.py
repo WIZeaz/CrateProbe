@@ -11,6 +11,7 @@ else:
 @dataclass
 class Config:
     """Application configuration"""
+
     server_port: int = 8000
     server_host: str = "0.0.0.0"
     workspace_path: Path = Path("./workspace")

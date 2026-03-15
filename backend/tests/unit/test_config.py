@@ -83,7 +83,7 @@ image = "my-rust-image:latest"
 pull_policy = "always"
 """
 
-    with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.toml') as f:
+    with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=".toml") as f:
         f.write(config_content)
         config_path = f.name
 
