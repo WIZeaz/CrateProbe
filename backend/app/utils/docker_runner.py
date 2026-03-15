@@ -2,18 +2,8 @@ import asyncio
 import shutil
 from pathlib import Path
 from typing import List, Optional
-from dataclasses import dataclass
 import docker
 from docker.errors import ImageNotFound, APIError
-
-
-@dataclass
-class ExecutionResult:
-    """Result of container execution"""
-
-    exit_code: int
-    stdout: str
-    stderr: str
 
 
 class DockerRunner:
