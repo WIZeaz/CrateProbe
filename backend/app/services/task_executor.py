@@ -43,6 +43,10 @@ class TaskExecutor:
         self, task_id: int, crate_name: str, version: str
     ) -> Path:
         """Download and extract crate to workspace"""
+        import logging
+
+        task_logger = logging.getLogger(f"task.{task_id}")
+
         workspace_dir = self.config.workspace_path / "repos" / f"{crate_name}-{version}"
 
         # If workspace directory already exists (e.g., from retry), clean it first
@@ -61,6 +65,7 @@ class TaskExecutor:
             crate_file.unlink()
 
         await self.crates_api.download_crate(crate_name, version, str(crate_file))
+        task_logger.info(f"[{task_id}] Crate downloaded successfully")
 
         # Extract crate - .crate files contain a top-level directory we need to strip
         temp_extract_dir = (
@@ -69,6 +74,7 @@ class TaskExecutor:
         temp_extract_dir.mkdir(parents=True, exist_ok=True)
 
         try:
+            task_logger.info("Extracting crate archive...")
             with tarfile.open(crate_file, "r:gz") as tar:
                 tar.extractall(temp_extract_dir)
 
@@ -83,6 +89,7 @@ class TaskExecutor:
                 # Fallback: if structure is different, move everything
                 for item in temp_extract_dir.iterdir():
                     shutil.move(str(item), str(workspace_dir))
+            task_logger.info("Extraction complete")
         finally:
             # Clean up temp directory
             if temp_extract_dir.exists():
@@ -128,14 +135,10 @@ class TaskExecutor:
 
             # Prepare workspace
             task_logger.info(f"Downloading crate {task.crate_name} {task.version}...")
-            try:
-                workspace_dir = await self.prepare_workspace(
-                    task_id, task.crate_name, task.version
-                )
-                task_logger.info(f"Workspace ready: {workspace_dir}")
-            except Exception as e:
-                task_logger.error(f"Workspace preparation failed: {e}")
-                raise
+            workspace_dir = await self.prepare_workspace(
+                task_id, task.crate_name, task.version
+            )
+            task_logger.info(f"Workspace ready: {workspace_dir}")
 
             # Ensure log directory exists
             Path(task.stdout_log).parent.mkdir(parents=True, exist_ok=True)
