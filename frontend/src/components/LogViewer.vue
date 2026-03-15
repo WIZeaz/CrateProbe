@@ -23,6 +23,12 @@ const loading = ref({
   stderr: false,
   miri_report: false
 })
+const fetched = ref({
+  runner: false,
+  stdout: false,
+  stderr: false,
+  miri_report: false
+})
 const logContainer = ref(null)
 let refreshInterval = null
 
@@ -71,6 +77,7 @@ async function loadLog(logType, isRefresh = false) {
   } finally {
     if (!isRefresh) {
       loading.value[logType] = false
+      fetched.value[logType] = true
     }
   }
 }
@@ -115,7 +122,7 @@ function scrollToBottom() {
 }
 
 watch(activeLog, (newLog) => {
-  if (!logs.value[newLog]) {
+  if (!fetched.value[newLog]) {
     loadLog(newLog)
   } else if (props.autoScroll) {
     scrollToBottom()
@@ -185,7 +192,7 @@ onUnmounted(() => {
           style="max-height: 500px; overflow-y: auto;"
         >
           <div v-if="loading[activeLog]" class="flex justify-center py-8">
-            <div class="spinner border-white"></div>
+            <div class="spinner"></div>
           </div>
           <pre v-else class="text-sm">{{ logs[activeLog] || 'No content available' }}</pre>
         </div>
