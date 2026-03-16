@@ -94,9 +94,28 @@ class Config:
             if not Path(container_path).is_absolute():
                 raise ValueError("Docker mount container path must be absolute")
 
+            if len(parts) == 3:
+                Config._validate_docker_mount_mode(parts[2])
+
             validated_mounts.append(mount)
 
         return validated_mounts
+
+    @staticmethod
+    def _validate_docker_mount_mode(mode: str) -> None:
+        if not mode:
+            raise ValueError("Invalid docker mount mode")
+
+        options = mode.split(",")
+        if any(not option for option in options):
+            raise ValueError("Invalid docker mount mode")
+
+        allowed_options = {"ro", "rw", "z", "Z"}
+        if any(option not in allowed_options for option in options):
+            raise ValueError("Invalid docker mount mode")
+
+        if "ro" in options and "rw" in options:
+            raise ValueError("Invalid docker mount mode")
 
     def ensure_workspace_structure(self):
         """Create workspace directory structure if it doesn't exist"""

@@ -171,3 +171,55 @@ mounts = ["/host/data:relative/container"]
         ValueError, match="Docker mount container path must be absolute"
     ):
         Config.from_file(str(config_file))
+
+
+def test_config_rejects_empty_mode_in_docker_mount(tmp_path):
+    """Test that empty mode in 3-part mount is rejected."""
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+[execution]
+execution_mode = "docker"
+
+[execution.docker]
+mounts = ["/host/data:/container/data:"]
+"""
+    )
+
+    with pytest.raises(ValueError, match="Invalid docker mount mode"):
+        Config.from_file(str(config_file))
+
+
+def test_config_rejects_invalid_docker_mount_mode(tmp_path):
+    """Test that unsupported docker mount mode is rejected."""
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+[execution]
+execution_mode = "docker"
+
+[execution.docker]
+mounts = ["/host/data:/container/data:banana"]
+"""
+    )
+
+    with pytest.raises(ValueError, match="Invalid docker mount mode"):
+        Config.from_file(str(config_file))
+
+
+def test_config_accepts_docker_mount_mode_with_selinux_option(tmp_path):
+    """Test that Docker-compatible SELinux mount mode is accepted."""
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+[execution]
+execution_mode = "docker"
+
+[execution.docker]
+mounts = ["/host/data:/container/data:ro,z"]
+"""
+    )
+
+    config = Config.from_file(str(config_file))
+
+    assert config.docker_mounts == ["/host/data:/container/data:ro,z"]
