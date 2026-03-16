@@ -73,49 +73,70 @@ class Config:
     @staticmethod
     def _validate_docker_mounts(mounts: object) -> list[str]:
         if not isinstance(mounts, list):
-            raise ValueError("Invalid docker mounts: expected a list")
+            raise ValueError(f"Invalid docker mounts: expected a list, got {mounts!r}")
 
         validated_mounts: list[str] = []
-        for mount in mounts:
+        for index, mount in enumerate(mounts):
+            mount_prefix = f"Docker mount at index {index}"
             if not isinstance(mount, str):
-                raise ValueError("Invalid docker mount format")
+                raise ValueError(
+                    f"Invalid docker mount format: {mount_prefix} must be a string, got {mount!r}"
+                )
 
             parts = mount.split(":")
             if len(parts) not in (2, 3):
-                raise ValueError("Invalid docker mount format")
+                raise ValueError(
+                    f"Invalid docker mount format: {mount_prefix} has invalid value {mount!r}"
+                )
 
             host_path, container_path = parts[0], parts[1]
             if not host_path or not container_path:
-                raise ValueError("Invalid docker mount format")
+                raise ValueError(
+                    f"Invalid docker mount format: {mount_prefix} has invalid value {mount!r}"
+                )
 
             if not Path(host_path).is_absolute():
-                raise ValueError("Docker mount host path must be absolute")
+                raise ValueError(
+                    f"Docker mount host path must be absolute: {mount_prefix} has invalid value {mount!r}"
+                )
 
             if not Path(container_path).is_absolute():
-                raise ValueError("Docker mount container path must be absolute")
+                raise ValueError(
+                    f"Docker mount container path must be absolute: {mount_prefix} has invalid value {mount!r}"
+                )
 
             if len(parts) == 3:
-                Config._validate_docker_mount_mode(parts[2])
+                Config._validate_docker_mount_mode(parts[2], index, mount)
 
             validated_mounts.append(mount)
 
         return validated_mounts
 
     @staticmethod
-    def _validate_docker_mount_mode(mode: str) -> None:
+    def _validate_docker_mount_mode(mode: str, index: int, mount: str) -> None:
+        mount_prefix = f"Docker mount at index {index}"
         if not mode:
-            raise ValueError("Invalid docker mount mode")
+            raise ValueError(
+                f"Invalid docker mount mode: {mount_prefix} has invalid value {mount!r}"
+            )
 
         options = mode.split(",")
         if any(not option for option in options):
-            raise ValueError("Invalid docker mount mode")
+            raise ValueError(
+                f"Invalid docker mount mode: {mount_prefix} has invalid value {mount!r}"
+            )
 
         allowed_options = {"ro", "rw", "z", "Z"}
         if any(option not in allowed_options for option in options):
-            raise ValueError("Invalid docker mount mode")
+            raise ValueError(
+                f"Invalid docker mount mode: {mount_prefix} has invalid value {mount!r}; "
+                f"allowed options are {sorted(allowed_options)}"
+            )
 
         if "ro" in options and "rw" in options:
-            raise ValueError("Invalid docker mount mode")
+            raise ValueError(
+                f"Invalid docker mount mode: {mount_prefix} has conflicting options in {mount!r}"
+            )
 
     def ensure_workspace_structure(self):
         """Create workspace directory structure if it doesn't exist"""

@@ -137,6 +137,23 @@ mounts = ["/host-only"]
         Config.from_file(str(config_file))
 
 
+def test_config_rejects_non_list_docker_mounts(tmp_path):
+    """Test that non-list docker mounts value is rejected."""
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+[execution]
+execution_mode = "docker"
+
+[execution.docker]
+mounts = "/host/data:/container/data"
+"""
+    )
+
+    with pytest.raises(ValueError, match="Invalid docker mounts: expected a list"):
+        Config.from_file(str(config_file))
+
+
 def test_config_rejects_relative_docker_mount_host_path(tmp_path):
     """Test that relative host path in mount is rejected"""
     config_file = tmp_path / "config.toml"
@@ -223,3 +240,20 @@ mounts = ["/host/data:/container/data:ro,z"]
     config = Config.from_file(str(config_file))
 
     assert config.docker_mounts == ["/host/data:/container/data:ro,z"]
+
+
+def test_config_rejects_conflicting_read_only_and_read_write_mount_modes(tmp_path):
+    """Test that conflicting ro,rw mode combination is rejected."""
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+[execution]
+execution_mode = "docker"
+
+[execution.docker]
+mounts = ["/host/data:/container/data:ro,rw"]
+"""
+    )
+
+    with pytest.raises(ValueError, match="conflicting options"):
+        Config.from_file(str(config_file))

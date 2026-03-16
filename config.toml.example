@@ -58,6 +58,8 @@ pull_policy = "if-not-present"
 # Additional bind mounts (optional)
 # 格式: "宿主机绝对路径:容器绝对路径[:模式]"
 # Format: "host_abs_path:container_abs_path[:mode]"
+# 模式仅允许以下子集（按平台统一校验）: ro, rw, z, Z（可逗号组合；ro 与 rw 不能同时出现）
+# Enforced mode subset (platform-validated): ro, rw, z, Z (comma-combinable; ro and rw are mutually exclusive)
 # 示例:
 # mounts = [
 #   "/data/cache:/workspace/cache",
