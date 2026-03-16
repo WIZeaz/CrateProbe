@@ -17,7 +17,7 @@ class Config:
     workspace_path: Path = Path("./workspace")
     max_jobs: int = 3
     max_memory_gb: int = 20
-    max_runtime_hours: int = 24
+    max_runtime_seconds: int = 86400  # 24 hours
     max_cpus: int = 4
     use_systemd: bool = True
     execution_mode: str = "systemd"
@@ -49,7 +49,7 @@ class Config:
             workspace_path=Path(data.get("workspace", {}).get("path", "./workspace")),
             max_jobs=execution.get("max_jobs", 3),
             max_memory_gb=execution.get("max_memory_gb", 20),
-            max_runtime_hours=execution.get("max_runtime_hours", 24),
+            max_runtime_seconds=execution.get("max_runtime_seconds", 86400),
             max_cpus=execution.get("max_cpus", 4),
             use_systemd=execution.get("use_systemd", True),
             execution_mode=execution.get("execution_mode", "systemd"),

@@ -12,7 +12,7 @@ def config(tmp_path):
     return Config(
         workspace_path=tmp_path / "workspace",
         max_memory_gb=1,
-        max_runtime_hours=1,
+        max_runtime_seconds=3600,  # 1 hour
         use_systemd=False,
     )
 
@@ -165,7 +165,7 @@ def mock_config():
     config.docker_image = "rust:test"
     config.docker_pull_policy = "if-not-present"
     config.max_memory_gb = 8
-    config.max_runtime_hours = 2
+    config.max_runtime_seconds = 7200  # 2 hours
     config.max_cpus = 4
     config.workspace_path = Path("/tmp/workspace")
     return config
@@ -190,7 +190,7 @@ async def test_task_executor_uses_docker_when_configured(mock_config, mock_datab
 
         # Verify DockerRunner was initialized
         mock_runner_class.assert_called_once_with(
-            image="rust:test", max_memory_gb=8, max_runtime_hours=2, max_cpus=4
+            image="rust:test", max_memory_gb=8, max_runtime_seconds=7200, max_cpus=4
         )
 
 

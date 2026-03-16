@@ -17,7 +17,7 @@ path = "/tmp/test-workspace"
 [execution]
 max_jobs = 2
 max_memory_gb = 10
-max_runtime_hours = 12
+max_runtime_seconds = 43200  # 12 hours
 use_systemd = false
 
 [database]
@@ -37,7 +37,7 @@ file_path = "test.log"
     assert config.workspace_path == Path("/tmp/test-workspace")
     assert config.max_jobs == 2
     assert config.max_memory_gb == 10
-    assert config.max_runtime_hours == 12
+    assert config.max_runtime_seconds == 43200
     assert config.use_systemd is False
 
 
@@ -50,7 +50,7 @@ def test_config_uses_defaults_when_file_missing():
     assert config.workspace_path == Path("./workspace")
     assert config.max_jobs == 3
     assert config.max_memory_gb == 20
-    assert config.max_runtime_hours == 24
+    assert config.max_runtime_seconds == 86400
     assert config.use_systemd is True
 
 

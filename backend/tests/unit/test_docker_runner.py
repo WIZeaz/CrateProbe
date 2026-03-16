@@ -3,19 +3,20 @@ from pathlib import Path
 from unittest.mock import Mock, patch, AsyncMock
 from docker.errors import ImageNotFound
 from app.utils.docker_runner import DockerRunner
+import asyncio
 
 
 @pytest.fixture
 def docker_runner():
     return DockerRunner(
-        image="rust:test", max_memory_gb=8, max_runtime_hours=2, max_cpus=2
+        image="rust:test", max_memory_gb=8, max_runtime_seconds=7200, max_cpus=2  # 2 hours
     )
 
 
 def test_docker_runner_initialization(docker_runner):
     assert docker_runner.image == "rust:test"
     assert docker_runner.max_memory_gb == 8
-    assert docker_runner.max_runtime_hours == 2
+    assert docker_runner.max_runtime_seconds == 7200
     assert docker_runner.max_cpus == 2
 
 
@@ -144,6 +145,8 @@ async def test_logs_call_uses_stream_and_follow(docker_runner, tmp_path):
 @pytest.mark.asyncio
 async def test_docker_timeout_stops_container(docker_runner, tmp_path):
     """On timeout, the container is stopped and exit_code is -1."""
+    import threading
+
     stdout_log = tmp_path / "stdout.log"
     stderr_log = tmp_path / "stderr.log"
     workspace = tmp_path / "workspace"
@@ -152,13 +155,24 @@ async def test_docker_timeout_stops_container(docker_runner, tmp_path):
     with patch("docker.from_env") as mock_docker:
         mock_client = Mock()
         mock_container = Mock()
-        mock_container.wait.side_effect = Exception("Read timeout")
+
+        # Simulate container that never finishes (blocks until timeout)
+        # Docker SDK's container.wait() is a SYNC method, so we use sync blocking
+        wait_event = threading.Event()
+        def blocking_wait():
+            wait_event.wait()  # Block forever
+            return {"StatusCode": 0}
+
+        mock_container.wait.side_effect = blocking_wait
         mock_container.logs.return_value = iter([])
         mock_client.containers.run.return_value = mock_container
         mock_docker.return_value = mock_client
 
+        # Set a very short timeout to trigger the timeout quickly
+        docker_runner.max_runtime_seconds = 1
+
         exit_code = await docker_runner.run(
-            command=["cargo", "rapx"],
+            command=["blah"],
             workspace_dir=workspace,
             stdout_log=stdout_log,
             stderr_log=stderr_log,
@@ -167,3 +181,5 @@ async def test_docker_timeout_stops_container(docker_runner, tmp_path):
         assert exit_code == -1
         mock_container.stop.assert_called_once()
         mock_container.remove.assert_called_once()
+        wait_event.set()  # Unblock the wait thread to allow test to finish
+        

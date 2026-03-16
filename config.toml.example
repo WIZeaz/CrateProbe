@@ -32,9 +32,9 @@ max_jobs = 3
 # Maximum memory limit per task (GB)
 max_memory_gb = 20
 
-# 单个任务最长运行时间（小时）
-# Maximum runtime per task (hours)
-max_runtime_hours = 24
+# 单个任务最长运行时间（秒）
+# Maximum runtime per task (seconds)
+max_runtime_seconds = 86400  # 24 hours
 
 # 任务执行模式：systemd, resource, docker
 # Task execution mode

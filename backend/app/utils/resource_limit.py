@@ -14,10 +14,10 @@ class LimitMethod(str, Enum):
 class ResourceLimiter:
     """Utility for applying resource limits to subprocesses"""
 
-    def __init__(self, use_systemd: bool, max_memory_gb: int, max_runtime_hours: int):
+    def __init__(self, use_systemd: bool, max_memory_gb: int, max_runtime_seconds: int):
         self.prefer_systemd = use_systemd
         self.max_memory_gb = max_memory_gb
-        self.max_runtime_hours = max_runtime_hours
+        self.max_runtime_seconds = max_runtime_seconds
 
     def get_limit_method(self) -> LimitMethod:
         """Determine which method to use for resource limiting"""
@@ -53,5 +53,6 @@ class ResourceLimiter:
             pass
 
         # CPU time limit (in seconds)
-        cpu_seconds = self.max_runtime_hours * 3600
-        resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
+        resource.setrlimit(
+            resource.RLIMIT_CPU, (self.max_runtime_seconds, self.max_runtime_seconds)
+        )

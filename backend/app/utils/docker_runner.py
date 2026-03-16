@@ -10,11 +10,11 @@ class DockerRunner:
     """Execute tasks in Docker containers with resource limits"""
 
     def __init__(
-        self, image: str, max_memory_gb: int, max_runtime_hours: int, max_cpus: int
+        self, image: str, max_memory_gb: int, max_runtime_seconds: int, max_cpus: int
     ):
         self.image = image
         self.max_memory_gb = max_memory_gb
-        self.max_runtime_hours = max_runtime_hours
+        self.max_runtime_seconds = max_runtime_seconds
         self.max_cpus = max_cpus
         self._client: Optional[docker.DockerClient] = None
 
@@ -67,7 +67,6 @@ class DockerRunner:
             "memswap_limit": f"{self.max_memory_gb}g",  # Disable swap
             "cpu_quota": cpu_quota,
             "cpu_period": 100000,
-            "stop_timeout": self.max_runtime_hours * 3600,
         }
 
     async def run(
@@ -87,7 +86,7 @@ class DockerRunner:
             stderr_log: Path to write stderr
 
         Returns:
-            Container exit code
+            Container exit code (0 for success, -1 for timeout, other for error)
         """
         # Ensure workspace directory exists
         workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -98,7 +97,8 @@ class DockerRunner:
         resource_limits = self._build_resource_limits()
 
         # Prepare volume mounts
-        volumes = {str(workspace_dir.resolve()): {"bind": "/workspace", "mode": "rw"}}
+        volumes = {str(workspace_dir.resolve()): {
+            "bind": "/workspace", "mode": "rw"}}
 
         # Run container
         container = None
@@ -114,7 +114,7 @@ class DockerRunner:
                 **resource_limits,
             )
 
-            timeout_seconds = self.max_runtime_hours * 3600
+            timeout_seconds = self.max_runtime_seconds
             loop = asyncio.get_running_loop()
 
             def _stream_to_file(log_path: Path, log_kwargs: dict) -> None:
@@ -131,13 +131,9 @@ class DockerRunner:
                             f.write(chunk)
                         f.flush()
 
-            def _wait_container() -> int:
-                try:
-                    result = container.wait(timeout=timeout_seconds)
-                    return result.get("StatusCode", -1)
-                except Exception:
-                    container.stop(timeout=10)
-                    return -1
+            def _wait_container() -> dict:
+                """Wait for container to finish and return result dict."""
+                return container.wait()
 
             # Run wait and both log streams concurrently in thread executors.
             # Each runs in a separate thread since Docker SDK is synchronous.
@@ -145,16 +141,38 @@ class DockerRunner:
             # does not support **kwargs forwarding.
             wait_future = loop.run_in_executor(None, _wait_container)
             stdout_future = loop.run_in_executor(
-                None, _stream_to_file, stdout_log, {"stdout": True, "stderr": False}
+                None, _stream_to_file, stdout_log, {
+                    "stdout": True, "stderr": False}
             )
             stderr_future = loop.run_in_executor(
-                None, _stream_to_file, stderr_log, {"stdout": False, "stderr": True}
+                None, _stream_to_file, stderr_log, {
+                    "stdout": False, "stderr": True}
             )
 
-            results = await asyncio.gather(
-                wait_future, stdout_future, stderr_future, return_exceptions=True
-            )
-            return results[0] if not isinstance(results[0], Exception) else -1
+            # Use asyncio.wait_for to enforce execution time limit
+            # This properly cancels the wait and stops the container on timeout
+            try:
+                wait_result = await asyncio.wait_for(
+                    wait_future, timeout=timeout_seconds
+                )
+                exit_code = wait_result.get("StatusCode", -1)
+            except asyncio.TimeoutError:
+                # Execution time limit reached - stop the container
+                try:
+                    container.stop(timeout=10)
+                except Exception:
+                    container.kill()  # Force kill if it doesn't stop gracefully
+                exit_code = -1  # Signal timeout to caller
+
+            # Wait for log streaming to complete (they should finish shortly after container stops)
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(stdout_future, stderr_future), timeout=10
+                )
+            except asyncio.TimeoutError:
+                pass  # Log streaming may hang, but we have the exit code
+
+            return exit_code
 
         except Exception as e:
             stderr_log.write_text(f"Unexpected error: {e}")

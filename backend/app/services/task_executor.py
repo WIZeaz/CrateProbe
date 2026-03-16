@@ -27,7 +27,7 @@ class TaskExecutor:
             self.docker_runner = DockerRunner(
                 image=config.docker_image,
                 max_memory_gb=config.max_memory_gb,
-                max_runtime_hours=config.max_runtime_hours,
+                max_runtime_seconds=config.max_runtime_seconds,
                 max_cpus=getattr(config, "max_cpus", 4),
             )
             self.limiter = None
@@ -36,7 +36,7 @@ class TaskExecutor:
             self.limiter = ResourceLimiter(
                 use_systemd=config.use_systemd,
                 max_memory_gb=config.max_memory_gb,
-                max_runtime_hours=config.max_runtime_hours,
+                max_runtime_seconds=config.max_runtime_seconds,
             )
 
     async def prepare_workspace(
