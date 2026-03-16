@@ -119,3 +119,81 @@ body {
     transform: rotate(360deg);
   }
 }
+
+/* ANSI Color Support for Log Viewer */
+.ansi-color {
+  /* Ensure background matches terminal */
+  background-color: #111827;
+}
+
+/* ANSI 16-color palette optimized for dark terminal background */
+.ansi-color .ansi-black {
+  color: #000000;
+}
+.ansi-color .ansi-red {
+  color: #ff5555;
+}
+.ansi-color .ansi-green {
+  color: #50fa7b;
+}
+.ansi-color .ansi-yellow {
+  color: #f1fa8c;
+}
+.ansi-color .ansi-blue {
+  color: #8be9fd;
+}
+.ansi-color .ansi-magenta {
+  color: #ff79c6;
+}
+.ansi-color .ansi-cyan {
+  color: #8be9fd;
+}
+.ansi-color .ansi-white {
+  color: #f8f8f2;
+}
+
+/* Bright variants */
+.ansi-color .ansi-bright-black {
+  color: #6272a4;
+}
+.ansi-color .ansi-bright-red {
+  color: #ff6e6e;
+}
+.ansi-color .ansi-bright-green {
+  color: #69ff94;
+}
+.ansi-color .ansi-bright-yellow {
+  color: #ffffa5;
+}
+.ansi-color .ansi-bright-blue {
+  color: #d6acff;
+}
+.ansi-color .ansi-bright-magenta {
+  color: #ff92df;
+}
+.ansi-color .ansi-bright-cyan {
+  color: #a4ffff;
+}
+.ansi-color .ansi-bright-white {
+  color: #ffffff;
+}
+
+/* Bold */
+.ansi-color .ansi-bold {
+  font-weight: bold;
+}
+
+/* Italic */
+.ansi-color .ansi-italic {
+  font-style: italic;
+}
+
+/* Underline */
+.ansi-color .ansi-underline {
+  text-decoration: underline;
+}
+
+/* Dim */
+.ansi-color .ansi-dim {
+  opacity: 0.5;
+}
