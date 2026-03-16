@@ -43,3 +43,4 @@ htmlcov/
 /.claude
 CLAUDE.md
 .venv/
+.superpowers/
