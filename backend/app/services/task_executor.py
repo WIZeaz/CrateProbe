@@ -47,8 +47,7 @@ class TaskExecutor:
 
         task_logger = logging.getLogger(f"task.{task_id}")
 
-        workspace_dir = self.config.workspace_path / \
-            "repos" / f"{crate_name}-{version}"
+        workspace_dir = self.config.workspace_path / "repos" / f"{crate_name}-{version}"
 
         # If workspace directory already exists (e.g., from retry), clean it first
         if workspace_dir.exists():
@@ -58,8 +57,7 @@ class TaskExecutor:
 
         # Download crate file
         crate_file = (
-            self.config.workspace_path / "repos" /
-            f"{crate_name}-{version}.crate"
+            self.config.workspace_path / "repos" / f"{crate_name}-{version}.crate"
         )
 
         # Remove old crate file if it exists
@@ -71,8 +69,7 @@ class TaskExecutor:
 
         # Extract crate - .crate files contain a top-level directory we need to strip
         temp_extract_dir = (
-            self.config.workspace_path / "repos" /
-            f"_temp_{crate_name}-{version}"
+            self.config.workspace_path / "repos" / f"_temp_{crate_name}-{version}"
         )
         temp_extract_dir.mkdir(parents=True, exist_ok=True)
 
@@ -116,8 +113,7 @@ class TaskExecutor:
             return
 
         # Set up per-task runner logger — first action, before status update or any branch
-        runner_log_path = self.config.workspace_path / \
-            "logs" / f"{task_id}-runner.log"
+        runner_log_path = self.config.workspace_path / "logs" / f"{task_id}-runner.log"
         runner_log_path.parent.mkdir(parents=True, exist_ok=True)
         task_logger = logging.getLogger(f"task.{task_id}")
         task_logger.setLevel(logging.DEBUG)
@@ -141,8 +137,7 @@ class TaskExecutor:
             )
 
             # Prepare workspace
-            task_logger.info(
-                f"Downloading crate {task.crate_name} {task.version}...")
+            task_logger.info(f"Downloading crate {task.crate_name} {task.version}...")
             workspace_dir = await self.prepare_workspace(
                 task_id, task.crate_name, task.version
             )
@@ -179,48 +174,26 @@ class TaskExecutor:
                     "Starting Docker container (PID not available in Docker mode)..."
                 )
 
-                exit_code = await self.docker_runner.run(
+                result = await self.docker_runner.run(
                     command=cmd,
                     workspace_dir=workspace_dir,
                     stdout_log=Path(task.stdout_log),
                     stderr_log=Path(task.stderr_log),
                 )
-                task_logger.info(f"Process exited with code: {exit_code}")
+                task_logger.info(f"Process exited with code: {result.exit_code}")
 
                 # Final count of generated items
-                case_count, poc_count = self.count_generated_items(
-                    workspace_dir)
+                case_count, poc_count = self.count_generated_items(workspace_dir)
                 self.db.update_task_counts(task_id, case_count, poc_count)
 
                 # Update final status
-                if exit_code == 0:
-                    self.db.update_task_status(
-                        task_id,
-                        TaskStatus.COMPLETED,
-                        finished_at=datetime.now(),
-                        exit_code=exit_code,
-                    )
-                elif exit_code == 137:
-                    self.db.update_task_status(
-                        task_id,
-                        TaskStatus.OOM,
-                        finished_at=datetime.now(),
-                        exit_code=exit_code,
-                    )
-                elif exit_code == -1:
-                    self.db.update_task_status(
-                        task_id,
-                        TaskStatus.TIMEOUT,
-                        finished_at=datetime.now(),
-                        exit_code=exit_code,
-                    )
-                else:
-                    self.db.update_task_status(
-                        task_id,
-                        TaskStatus.FAILED,
-                        finished_at=datetime.now(),
-                        exit_code=exit_code,
-                    )
+                self.db.update_task_status(
+                    task_id,
+                    result.state,
+                    finished_at=datetime.now(),
+                    exit_code=result.exit_code,
+                    message=result.message,
+                )
             else:
                 # Set environment variables to force color output
                 import os
@@ -238,6 +211,7 @@ class TaskExecutor:
                 TaskStatus.FAILED,
                 finished_at=datetime.now(),
                 error_message=str(e),
+                message=f"Execution error: {e}",
             )
         finally:
             task_logger.info(f"Task #{task_id} runner log closed.")
@@ -297,6 +271,7 @@ class TaskExecutor:
                 TaskStatus.COMPLETED,
                 finished_at=datetime.now(),
                 exit_code=process.returncode,
+                message="Completed successfully",
             )
         elif process.returncode in (-9, 137):
             # SIGKILL (from OOM killer or systemd MemoryMax)
@@ -305,6 +280,7 @@ class TaskExecutor:
                 TaskStatus.OOM,
                 finished_at=datetime.now(),
                 exit_code=process.returncode,
+                message="Process killed by OOM killer (out of memory)",
             )
         elif process.returncode in (-24, -14):
             # SIGXCPU (CPU time limit) or SIGALRM (wall-clock timeout)
@@ -313,6 +289,7 @@ class TaskExecutor:
                 TaskStatus.TIMEOUT,
                 finished_at=datetime.now(),
                 exit_code=process.returncode,
+                message=f"Execution timed out after {self.config.max_runtime_seconds} seconds",
             )
         else:
             self.db.update_task_status(
@@ -320,6 +297,7 @@ class TaskExecutor:
                 TaskStatus.FAILED,
                 finished_at=datetime.now(),
                 exit_code=process.returncode,
+                message=f"Process exited with code {process.returncode}",
             )
 
     async def _wait_with_stats_updates(
@@ -336,8 +314,7 @@ class TaskExecutor:
                 break
             except asyncio.TimeoutError:
                 # Process still running, update stats
-                case_count, poc_count = self.count_generated_items(
-                    workspace_dir)
+                case_count, poc_count = self.count_generated_items(workspace_dir)
                 self.db.update_task_counts(task_id, case_count, poc_count)
                 # Continue waiting
 

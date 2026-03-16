@@ -28,6 +28,7 @@ class TaskRecord:
     pid: Optional[int] = None
     exit_code: Optional[int] = None
     error_message: Optional[str] = None
+    message: Optional[str] = None
     memory_used_mb: Optional[float] = None
 
 
@@ -71,9 +72,16 @@ class Database:
                 pid INTEGER,
                 exit_code INTEGER,
                 error_message TEXT,
+                message TEXT,
                 memory_used_mb REAL
             )
         """)
+        # Backward-compatible migration for existing databases.
+        columns = {
+            row["name"] for row in cursor.execute("PRAGMA table_info(tasks)").fetchall()
+        }
+        if "message" not in columns:
+            cursor.execute("ALTER TABLE tasks ADD COLUMN message TEXT")
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_created_at ON tasks(created_at DESC)
         """)
@@ -161,6 +169,7 @@ class Database:
         finished_at: Optional[datetime] = None,
         exit_code: Optional[int] = None,
         error_message: Optional[str] = None,
+        message: Optional[str] = None,
     ):
         """Update task status and timestamps
 
@@ -192,6 +201,10 @@ class Database:
         if error_message is not None:
             updates.append("error_message = ?")
             params.append(error_message)
+
+        if message is not None:
+            updates.append("message = ?")
+            params.append(message)
 
         params.append(task_id)
 
@@ -263,6 +276,7 @@ class Database:
                 finished_at = NULL,
                 exit_code = NULL,
                 error_message = NULL,
+                message = NULL,
                 case_count = 0,
                 poc_count = 0,
                 pid = NULL
@@ -319,6 +333,7 @@ class Database:
             pid=row["pid"],
             exit_code=row["exit_code"],
             error_message=row["error_message"],
+            message=row["message"],
             memory_used_mb=row["memory_used_mb"],
         )
 

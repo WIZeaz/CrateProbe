@@ -4,9 +4,11 @@ from pathlib import Path
 from typing import List, Optional
 import docker
 from docker.errors import ImageNotFound, APIError
+from app.models import TaskStatus
+from app.utils.runner_base import Runner, ExecutionResult
 
 
-class DockerRunner:
+class DockerRunner(Runner):
     """Execute tasks in Docker containers with resource limits"""
 
     def __init__(
@@ -75,7 +77,7 @@ class DockerRunner:
         workspace_dir: Path,
         stdout_log: Path,
         stderr_log: Path,
-    ) -> int:
+    ) -> ExecutionResult:
         """
         Run a command in a Docker container with resource limits.
 
@@ -88,7 +90,7 @@ class DockerRunner:
             stderr_log: Path to write stderr
 
         Returns:
-            Container exit code (0 for success, -1 for timeout, other for error)
+            Structured execution result with status, exit code, and message
         """
         # Ensure workspace directory exists
         workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -99,8 +101,7 @@ class DockerRunner:
         resource_limits = self._build_resource_limits()
 
         # Prepare volume mounts
-        volumes = {str(workspace_dir.resolve()): {
-            "bind": "/workspace", "mode": "rw"}}
+        volumes = {str(workspace_dir.resolve()): {"bind": "/workspace", "mode": "rw"}}
 
         # Run container
         container = None
@@ -115,8 +116,8 @@ class DockerRunner:
                 stderr=True,
                 tty=True,
                 environment={
-                    'CARGO_TERM_COLOR': 'always',
-                    'TERM': 'xterm-256color',
+                    "CARGO_TERM_COLOR": "always",
+                    "TERM": "xterm-256color",
                 },
                 **resource_limits,
             )
@@ -148,12 +149,10 @@ class DockerRunner:
             # does not support **kwargs forwarding.
             wait_future = loop.run_in_executor(None, _wait_container)
             stdout_future = loop.run_in_executor(
-                None, _stream_to_file, stdout_log, {
-                    "stdout": True, "stderr": False}
+                None, _stream_to_file, stdout_log, {"stdout": True, "stderr": False}
             )
             stderr_future = loop.run_in_executor(
-                None, _stream_to_file, stderr_log, {
-                    "stdout": False, "stderr": True}
+                None, _stream_to_file, stderr_log, {"stdout": False, "stderr": True}
             )
 
             # Use asyncio.wait_for to enforce execution time limit
@@ -169,7 +168,11 @@ class DockerRunner:
                     container.stop(timeout=10)
                 except Exception:
                     container.kill()  # Force kill if it doesn't stop gracefully
-                exit_code = -1  # Signal timeout to caller
+                return ExecutionResult(
+                    state=TaskStatus.TIMEOUT,
+                    exit_code=-1,
+                    message=f"Execution timed out after {timeout_seconds} seconds",
+                )
 
             # Wait for log streaming to complete (they should finish shortly after container stops)
             try:
@@ -179,11 +182,31 @@ class DockerRunner:
             except asyncio.TimeoutError:
                 pass  # Log streaming may hang, but we have the exit code
 
-            return exit_code
+            if exit_code == 0:
+                return ExecutionResult(
+                    state=TaskStatus.COMPLETED,
+                    exit_code=exit_code,
+                    message="",
+                )
+            if exit_code == 137:
+                return ExecutionResult(
+                    state=TaskStatus.OOM,
+                    exit_code=exit_code,
+                    message="Process killed by OOM killer (out of memory)",
+                )
+            return ExecutionResult(
+                state=TaskStatus.FAILED,
+                exit_code=exit_code,
+                message=f"Process exited with code {exit_code}",
+            )
 
         except Exception as e:
             stderr_log.write_text(f"Unexpected error: {e}")
-            return -1
+            return ExecutionResult(
+                state=TaskStatus.FAILED,
+                exit_code=-1,
+                message=f"Unexpected error: {e}",
+            )
         finally:
             if container is not None:
                 try:

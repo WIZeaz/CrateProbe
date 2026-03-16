@@ -5,6 +5,7 @@ from app.services.task_executor import TaskExecutor
 from app.database import Database, TaskRecord
 from app.models import TaskStatus
 from app.config import Config
+from app.utils.runner_base import ExecutionResult
 
 
 @pytest.fixture
@@ -183,7 +184,13 @@ async def test_task_executor_uses_docker_when_configured(mock_config, mock_datab
     with patch("app.services.task_executor.DockerRunner") as mock_runner_class:
         mock_runner = Mock()
         mock_runner.is_available.return_value = True
-        mock_runner.run = AsyncMock(return_value=0)
+        mock_runner.run = AsyncMock(
+            return_value=ExecutionResult(
+                state=TaskStatus.COMPLETED,
+                exit_code=0,
+                message="Completed successfully",
+            )
+        )
         mock_runner_class.return_value = mock_runner
 
         executor = TaskExecutor(mock_config, mock_database)
