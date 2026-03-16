@@ -1,6 +1,6 @@
 import sys
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -23,6 +23,7 @@ class Config:
     execution_mode: str = "systemd"
     docker_image: str = "rust-cargo-rapx:latest"
     docker_pull_policy: str = "if-not-present"
+    docker_mounts: list[str] = field(default_factory=list)
     db_path: str = "tasks.db"
     log_level: str = "INFO"
     log_console: bool = True
@@ -42,6 +43,12 @@ class Config:
 
         execution = data.get("execution", {})
         docker_config = execution.get("docker", {})
+        docker_mounts = docker_config.get("mounts", [])
+
+        if docker_mounts is None:
+            docker_mounts = []
+
+        validated_mounts = cls._validate_docker_mounts(docker_mounts)
 
         return cls(
             server_port=data.get("server", {}).get("port", 8000),
@@ -55,12 +62,41 @@ class Config:
             execution_mode=execution.get("execution_mode", "systemd"),
             docker_image=docker_config.get("image", "rust-cargo-rapx:latest"),
             docker_pull_policy=docker_config.get("pull_policy", "if-not-present"),
+            docker_mounts=validated_mounts,
             db_path=data.get("database", {}).get("path", "tasks.db"),
             log_level=data.get("logging", {}).get("level", "INFO"),
             log_console=data.get("logging", {}).get("console", True),
             log_file=data.get("logging", {}).get("file", True),
             log_file_path=data.get("logging", {}).get("file_path", "server.log"),
         )
+
+    @staticmethod
+    def _validate_docker_mounts(mounts: object) -> list[str]:
+        if not isinstance(mounts, list):
+            raise ValueError("Invalid docker mounts: expected a list")
+
+        validated_mounts: list[str] = []
+        for mount in mounts:
+            if not isinstance(mount, str):
+                raise ValueError("Invalid docker mount format")
+
+            parts = mount.split(":")
+            if len(parts) not in (2, 3):
+                raise ValueError("Invalid docker mount format")
+
+            host_path, container_path = parts[0], parts[1]
+            if not host_path or not container_path:
+                raise ValueError("Invalid docker mount format")
+
+            if not Path(host_path).is_absolute():
+                raise ValueError("Docker mount host path must be absolute")
+
+            if not Path(container_path).is_absolute():
+                raise ValueError("Docker mount container path must be absolute")
+
+            validated_mounts.append(mount)
+
+        return validated_mounts
 
     def ensure_workspace_structure(self):
         """Create workspace directory structure if it doesn't exist"""

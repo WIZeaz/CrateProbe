@@ -39,6 +39,7 @@ file_path = "test.log"
     assert config.max_memory_gb == 10
     assert config.max_runtime_seconds == 43200
     assert config.use_systemd is False
+    assert config.docker_mounts == []
 
 
 def test_config_uses_defaults_when_file_missing():
@@ -52,6 +53,7 @@ def test_config_uses_defaults_when_file_missing():
     assert config.max_memory_gb == 20
     assert config.max_runtime_seconds == 86400
     assert config.use_systemd is True
+    assert config.docker_mounts == []
 
 
 def test_config_creates_workspace_directory(tmp_path):
@@ -95,3 +97,77 @@ pull_policy = "always"
         assert config.docker_pull_policy == "always"
     finally:
         os.unlink(config_path)
+
+
+def test_config_loads_docker_mounts(tmp_path):
+    """Test that docker mounts are loaded correctly"""
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+[execution]
+execution_mode = "docker"
+
+[execution.docker]
+mounts = ["/host/data:/container/data", "/var/log:/logs:ro"]
+"""
+    )
+
+    config = Config.from_file(str(config_file))
+
+    assert config.docker_mounts == [
+        "/host/data:/container/data",
+        "/var/log:/logs:ro",
+    ]
+
+
+def test_config_rejects_invalid_docker_mount_format(tmp_path):
+    """Test that invalid mount format is rejected"""
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+[execution]
+execution_mode = "docker"
+
+[execution.docker]
+mounts = ["/host-only"]
+"""
+    )
+
+    with pytest.raises(ValueError, match="Invalid docker mount format"):
+        Config.from_file(str(config_file))
+
+
+def test_config_rejects_relative_docker_mount_host_path(tmp_path):
+    """Test that relative host path in mount is rejected"""
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+[execution]
+execution_mode = "docker"
+
+[execution.docker]
+mounts = ["relative/path:/container/data"]
+"""
+    )
+
+    with pytest.raises(ValueError, match="Docker mount host path must be absolute"):
+        Config.from_file(str(config_file))
+
+
+def test_config_rejects_relative_docker_mount_container_path(tmp_path):
+    """Test that relative container path in mount is rejected"""
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+[execution]
+execution_mode = "docker"
+
+[execution.docker]
+mounts = ["/host/data:relative/container"]
+"""
+    )
+
+    with pytest.raises(
+        ValueError, match="Docker mount container path must be absolute"
+    ):
+        Config.from_file(str(config_file))

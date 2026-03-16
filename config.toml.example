@@ -54,6 +54,17 @@ image = "rust-cargo-rapx:latest"
 # Image pull policy
 pull_policy = "if-not-present"
 
+# 额外挂载目录（可选）
+# Additional bind mounts (optional)
+# 格式: "宿主机绝对路径:容器绝对路径[:模式]"
+# Format: "host_abs_path:container_abs_path[:mode]"
+# 示例:
+# mounts = [
+#   "/data/cache:/workspace/cache",
+#   "/var/log/rapx:/workspace/host-logs:ro"
+# ]
+mounts = []
+
 [database]
 # SQLite数据库路径（相对于workspace或绝对路径）
 # SQLite database path (relative to workspace or absolute path)
