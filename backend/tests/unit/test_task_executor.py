@@ -1,4 +1,5 @@
 import pytest
+import asyncio
 from unittest.mock import Mock, patch, AsyncMock, MagicMock
 from pathlib import Path
 from app.services.task_executor import TaskExecutor
@@ -204,6 +205,57 @@ async def test_task_executor_uses_docker_when_configured(mock_config, mock_datab
             max_cpus=4,
             mounts=["/host/data:/container/data:ro", "/cache:/cache:rw"],
         )
+
+
+@pytest.mark.asyncio
+async def test_execute_task_updates_counts_periodically_in_docker_mode(
+    mock_config, mock_database, tmp_path
+):
+    """Docker mode should update case/poc counts while task is still running."""
+    mock_config.workspace_path = tmp_path / "workspace"
+    mock_config.workspace_path.mkdir(parents=True, exist_ok=True)
+
+    task_workspace = mock_config.workspace_path / "repos" / "serde-1.0.0"
+    task_workspace.mkdir(parents=True, exist_ok=True)
+
+    task = Mock()
+    task.id = 1
+    task.crate_name = "serde"
+    task.version = "1.0.0"
+    task.stdout_log = str(
+        mock_config.workspace_path / "logs" / "serde-1.0.0-stdout.log"
+    )
+    task.stderr_log = str(
+        mock_config.workspace_path / "logs" / "serde-1.0.0-stderr.log"
+    )
+    mock_database.get_task.return_value = task
+
+    async def slow_docker_run(**kwargs):
+        await asyncio.sleep(0.03)
+        return ExecutionResult(
+            state=TaskStatus.COMPLETED,
+            exit_code=0,
+            message="Completed successfully",
+        )
+
+    with patch("app.services.task_executor.DockerRunner") as mock_runner_class:
+        mock_runner = Mock()
+        mock_runner.is_available.return_value = True
+        mock_runner.ensure_image.return_value = True
+        mock_runner.run = AsyncMock(side_effect=slow_docker_run)
+        mock_runner_class.return_value = mock_runner
+
+        executor = TaskExecutor(mock_config, mock_database)
+        setattr(executor, "stats_update_interval_seconds", 0.01)
+
+        with patch.object(
+            executor, "prepare_workspace", new_callable=AsyncMock
+        ) as mock_prepare:
+            mock_prepare.return_value = task_workspace
+            with patch.object(executor, "count_generated_items", return_value=(2, 1)):
+                await executor.execute_task(task.id)
+
+    assert mock_database.update_task_counts.call_count >= 2
 
 
 import logging

@@ -22,6 +22,7 @@ class TaskExecutor:
 
         # Initialize appropriate runner based on execution mode
         self.execution_mode = getattr(config, "execution_mode", "systemd")
+        self.stats_update_interval_seconds = 10
 
         if self.execution_mode == "docker":
             self.docker_runner = DockerRunner(
@@ -175,9 +176,10 @@ class TaskExecutor:
                     "Starting Docker container (PID not available in Docker mode)..."
                 )
 
-                result = await self.docker_runner.run(
-                    command=cmd,
+                result = await self._run_docker_with_stats_updates(
+                    task_id=task_id,
                     workspace_dir=workspace_dir,
+                    command=cmd,
                     stdout_log=Path(task.stdout_log),
                     stderr_log=Path(task.stderr_log),
                 )
@@ -218,6 +220,34 @@ class TaskExecutor:
             task_logger.info(f"Task #{task_id} runner log closed.")
             task_logger.removeHandler(handler)
             handler.close()
+
+    async def _run_docker_with_stats_updates(
+        self,
+        task_id: int,
+        workspace_dir: Path,
+        command,
+        stdout_log: Path,
+        stderr_log: Path,
+    ):
+        """Run Docker task and periodically update generated item counts."""
+        docker_run_task = asyncio.create_task(
+            self.docker_runner.run(
+                command=command,
+                workspace_dir=workspace_dir,
+                stdout_log=stdout_log,
+                stderr_log=stderr_log,
+            )
+        )
+
+        while True:
+            try:
+                return await asyncio.wait_for(
+                    asyncio.shield(docker_run_task),
+                    timeout=self.stats_update_interval_seconds,
+                )
+            except asyncio.TimeoutError:
+                case_count, poc_count = self.count_generated_items(workspace_dir)
+                self.db.update_task_counts(task_id, case_count, poc_count)
 
     async def _execute_with_limiter(self, task_id: int, workspace_dir: Path, task):
         """Execute task using systemd/resource limiter (original implementation)"""
