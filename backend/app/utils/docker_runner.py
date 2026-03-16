@@ -80,6 +80,8 @@ class DockerRunner:
         """
         Run a command in a Docker container with resource limits.
 
+        Allocates a pseudo-TTY (tty=True) to ensure applications output ANSI color codes.
+
         Args:
             command: Command and arguments to execute
             workspace_dir: Host path to mount as /workspace in container
@@ -111,6 +113,11 @@ class DockerRunner:
                 detach=True,
                 stdout=True,
                 stderr=True,
+                tty=True,
+                environment={
+                    'CARGO_TERM_COLOR': 'always',
+                    'TERM': 'xterm-256color',
+                },
                 **resource_limits,
             )
 
