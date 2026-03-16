@@ -138,6 +138,11 @@ class Config:
                 f"Invalid docker mount mode: {mount_prefix} has conflicting options in {mount!r}"
             )
 
+        if "z" in options and "Z" in options:
+            raise ValueError(
+                f"Invalid docker mount mode: {mount_prefix} has conflicting options in {mount!r}"
+            )
+
     def ensure_workspace_structure(self):
         """Create workspace directory structure if it doesn't exist"""
         self.workspace_path.mkdir(parents=True, exist_ok=True)

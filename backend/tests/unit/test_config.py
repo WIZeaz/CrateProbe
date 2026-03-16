@@ -257,3 +257,20 @@ mounts = ["/host/data:/container/data:ro,rw"]
 
     with pytest.raises(ValueError, match="conflicting options"):
         Config.from_file(str(config_file))
+
+
+def test_config_rejects_conflicting_selinux_mount_modes(tmp_path):
+    """Test that conflicting z,Z SELinux mode combination is rejected."""
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+[execution]
+execution_mode = "docker"
+
+[execution.docker]
+mounts = ["/host/data:/container/data:z,Z"]
+"""
+    )
+
+    with pytest.raises(ValueError, match="conflicting options"):
+        Config.from_file(str(config_file))
