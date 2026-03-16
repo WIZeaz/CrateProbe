@@ -46,6 +46,7 @@ class TaskDetailResponse(BaseModel):
     case_count: int
     poc_count: int
     error_message: Optional[str]
+    message: Optional[str]
 
 
 LOG_PATH_RESOLVERS = {
@@ -432,6 +433,7 @@ def _task_to_dict(task: TaskRecord) -> dict:
         "case_count": task.case_count or 0,
         "poc_count": task.poc_count or 0,
         "error_message": task.error_message,
+        "message": task.message,
     }
 
 
@@ -449,6 +451,7 @@ def _task_to_response(task: TaskRecord) -> TaskDetailResponse:
         case_count=task.case_count or 0,
         poc_count=task.poc_count or 0,
         error_message=task.error_message,
+        message=task.message,
     )
 
 

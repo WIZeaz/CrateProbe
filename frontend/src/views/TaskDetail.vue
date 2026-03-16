@@ -239,6 +239,10 @@ onUnmounted(() => {
             <p class="text-sm font-medium text-gray-600">Finished</p>
             <p class="mt-1 text-sm text-gray-900">{{ formatDate(task.finished_at) }}</p>
           </div>
+          <div v-if="task.message" class="md:col-span-2">
+            <p class="text-sm font-medium text-gray-600">Execution Message</p>
+            <p class="mt-1 text-sm text-gray-900 break-words">{{ task.message }}</p>
+          </div>
           <div v-if="task.error_message">
             <p class="text-sm font-medium text-gray-600">Error</p>
             <p class="mt-1 text-sm text-red-600">{{ task.error_message }}</p>
