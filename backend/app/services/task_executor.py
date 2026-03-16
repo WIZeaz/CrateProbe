@@ -216,6 +216,12 @@ class TaskExecutor:
                         exit_code=exit_code,
                     )
             else:
+                # Set environment variables to force color output
+                import os
+
+                os.environ["CARGO_TERM_COLOR"] = "always"
+                os.environ["TERM"] = "xterm-256color"
+
                 # Use traditional execution with systemd/resource
                 await self._execute_with_limiter(task_id, workspace_dir, task)
 
