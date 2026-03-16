@@ -29,6 +29,7 @@ class TaskExecutor:
                 max_memory_gb=config.max_memory_gb,
                 max_runtime_seconds=config.max_runtime_seconds,
                 max_cpus=getattr(config, "max_cpus", 4),
+                mounts=getattr(config, "docker_mounts", []),
             )
             self.limiter = None
         else:
