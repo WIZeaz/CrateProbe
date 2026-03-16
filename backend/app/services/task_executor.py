@@ -47,7 +47,8 @@ class TaskExecutor:
 
         task_logger = logging.getLogger(f"task.{task_id}")
 
-        workspace_dir = self.config.workspace_path / "repos" / f"{crate_name}-{version}"
+        workspace_dir = self.config.workspace_path / \
+            "repos" / f"{crate_name}-{version}"
 
         # If workspace directory already exists (e.g., from retry), clean it first
         if workspace_dir.exists():
@@ -57,7 +58,8 @@ class TaskExecutor:
 
         # Download crate file
         crate_file = (
-            self.config.workspace_path / "repos" / f"{crate_name}-{version}.crate"
+            self.config.workspace_path / "repos" /
+            f"{crate_name}-{version}.crate"
         )
 
         # Remove old crate file if it exists
@@ -69,7 +71,8 @@ class TaskExecutor:
 
         # Extract crate - .crate files contain a top-level directory we need to strip
         temp_extract_dir = (
-            self.config.workspace_path / "repos" / f"_temp_{crate_name}-{version}"
+            self.config.workspace_path / "repos" /
+            f"_temp_{crate_name}-{version}"
         )
         temp_extract_dir.mkdir(parents=True, exist_ok=True)
 
@@ -113,7 +116,8 @@ class TaskExecutor:
             return
 
         # Set up per-task runner logger — first action, before status update or any branch
-        runner_log_path = self.config.workspace_path / "logs" / f"{task_id}-runner.log"
+        runner_log_path = self.config.workspace_path / \
+            "logs" / f"{task_id}-runner.log"
         runner_log_path.parent.mkdir(parents=True, exist_ok=True)
         task_logger = logging.getLogger(f"task.{task_id}")
         task_logger.setLevel(logging.DEBUG)
@@ -137,7 +141,8 @@ class TaskExecutor:
             )
 
             # Prepare workspace
-            task_logger.info(f"Downloading crate {task.crate_name} {task.version}...")
+            task_logger.info(
+                f"Downloading crate {task.crate_name} {task.version}...")
             workspace_dir = await self.prepare_workspace(
                 task_id, task.crate_name, task.version
             )
@@ -166,7 +171,7 @@ class TaskExecutor:
                 cmd = [
                     "cargo",
                     "rapx",
-                    f"-test-crate={task.crate_name}",
+                    f"--test-crate={task.crate_name}",
                     "test",
                 ]
                 task_logger.info(f"Running command: {' '.join(cmd)}")
@@ -183,7 +188,8 @@ class TaskExecutor:
                 task_logger.info(f"Process exited with code: {exit_code}")
 
                 # Final count of generated items
-                case_count, poc_count = self.count_generated_items(workspace_dir)
+                case_count, poc_count = self.count_generated_items(
+                    workspace_dir)
                 self.db.update_task_counts(task_id, case_count, poc_count)
 
                 # Update final status
@@ -246,7 +252,7 @@ class TaskExecutor:
 
         # Build command
         cmd = self.limiter.build_command(
-            ["cargo", "rapx", "-testgen", f"-test-crate={task.crate_name}"],
+            ["cargo", "rapx", f"--test-crate={task.crate_name}", "test"],
             cwd=str(workspace_dir),
         )
         task_logger.info(f"Running command: {' '.join(cmd)}")
@@ -330,7 +336,8 @@ class TaskExecutor:
                 break
             except asyncio.TimeoutError:
                 # Process still running, update stats
-                case_count, poc_count = self.count_generated_items(workspace_dir)
+                case_count, poc_count = self.count_generated_items(
+                    workspace_dir)
                 self.db.update_task_counts(task_id, case_count, poc_count)
                 # Continue waiting
 
