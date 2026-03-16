@@ -50,7 +50,7 @@ async def test_run_builds_correct_command(docker_runner, tmp_path):
         )
 
         # Verify container was created with correct parameters
-        call_kwargs = mock_client.containers.run.call_args[1]
+        call_kwargs = mock_client.containers.run.call_args_list[0][1]
         assert call_kwargs["image"] == "rust:test"
         assert call_kwargs["mem_limit"] == "8g"
         assert call_kwargs["cpu_quota"] == 200000  # 2 CPUs
@@ -91,7 +91,7 @@ async def test_run_includes_workspace_and_configured_mounts(tmp_path):
             stderr_log=stderr_log,
         )
 
-        call_kwargs = mock_client.containers.run.call_args[1]
+        call_kwargs = mock_client.containers.run.call_args_list[0][1]
         assert call_kwargs["volumes"] == [
             f"{workspace.resolve()}:/workspace:rw",
             "/host-cache:/cache:ro",
@@ -233,3 +233,32 @@ async def test_docker_timeout_stops_container(docker_runner, tmp_path):
         mock_container.stop.assert_called_once()
         mock_container.remove.assert_called_once()
         wait_event.set()  # Unblock the wait thread to allow test to finish
+
+
+@pytest.mark.asyncio
+async def test_run_reconciles_workspace_ownership_after_execution(
+    docker_runner, tmp_path
+):
+    """Runner should normalize workspace ownership after container execution."""
+    with patch("docker.from_env") as mock_docker:
+        mock_client = Mock()
+        mock_container = Mock()
+        mock_container.wait.return_value = {"StatusCode": 0}
+        mock_container.logs.return_value = iter([])
+        mock_client.containers.run.return_value = mock_container
+        mock_docker.return_value = mock_client
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        stdout_log = tmp_path / "stdout.log"
+        stderr_log = tmp_path / "stderr.log"
+
+        with patch.object(docker_runner, "_ensure_workspace_ownership") as mock_fix:
+            await docker_runner.run(
+                command=["cargo", "rapx"],
+                workspace_dir=workspace,
+                stdout_log=stdout_log,
+                stderr_log=stderr_log,
+            )
+
+        mock_fix.assert_called_once_with(workspace)

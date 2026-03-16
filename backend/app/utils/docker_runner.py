@@ -1,4 +1,5 @@
 import asyncio
+import os
 import shutil
 from pathlib import Path
 from typing import List, Optional
@@ -76,6 +77,20 @@ class DockerRunner(Runner):
             "cpu_quota": cpu_quota,
             "cpu_period": 100000,
         }
+
+    def _ensure_workspace_ownership(self, workspace_dir: Path) -> None:
+        """Normalize bind-mounted workspace ownership back to host user."""
+        uid_gid = f"{os.getuid()}:{os.getgid()}"
+        self.client.containers.run(
+            image=self.image,
+            command=["chown", "-R", uid_gid, "/workspace"],
+            volumes=[f"{workspace_dir.resolve()}:/workspace:rw"],
+            working_dir="/workspace",
+            user="0:0",
+            remove=True,
+            stdout=False,
+            stderr=False,
+        )
 
     async def run(
         self,
@@ -219,6 +234,10 @@ class DockerRunner(Runner):
                     container.remove(force=True)
                 except Exception:
                     pass
+            try:
+                self._ensure_workspace_ownership(workspace_dir)
+            except Exception:
+                pass
 
     def is_available(self) -> bool:
         """Check if Docker is available on this system"""
