@@ -1,6 +1,10 @@
 <script setup>
 import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { AnsiUp } from 'ansi_up'
 import api from '../services/api'
+
+// Create ansi_up instance
+const ansiUp = new AnsiUp()
 
 const props = defineProps({
   taskId: [String, Number],
@@ -17,6 +21,20 @@ const logs = ref({
   stderr: '',
   miri_report: ''
 })
+const logHtml = ref({
+  runner: '',
+  stdout: '',
+  stderr: '',
+  miri_report: ''
+})
+
+// Function to convert ANSI to HTML
+function ansiToHtml(text) {
+  if (!text || text === 'No content available') {
+    return '<span class="text-gray-400">No content available</span>'
+  }
+  return ansiUp.ansi_to_html(text)
+}
 const loading = ref({
   runner: false,
   stdout: false,
@@ -60,9 +78,13 @@ async function loadLog(logType, isRefresh = false) {
     }
 
     if (data.lines && Array.isArray(data.lines)) {
-      logs.value[logType] = data.lines.join('\n') || 'No content available'
+      const content = data.lines.join('\n') || 'No content available'
+      logs.value[logType] = content
+      logHtml.value[logType] = ansiToHtml(content)
     } else {
-      logs.value[logType] = data.content || 'No content available'
+      const content = data.content || 'No content available'
+      logs.value[logType] = content
+      logHtml.value[logType] = ansiToHtml(content)
     }
 
     if ((!isRefresh && props.autoScroll) || (isRefresh && wasAtBottom)) {
@@ -194,7 +216,7 @@ onUnmounted(() => {
           <div v-if="loading[activeLog]" class="flex justify-center py-8">
             <div class="spinner"></div>
           </div>
-          <pre v-else class="text-sm">{{ logs[activeLog] || 'No content available' }}</pre>
+          <pre v-else class="text-sm ansi-color" v-html="logHtml[activeLog]"></pre>
         </div>
       </div>
     </div>
