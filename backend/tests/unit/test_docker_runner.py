@@ -23,6 +23,7 @@ def test_docker_runner_initialization(docker_runner):
     assert docker_runner.max_memory_gb == 8
     assert docker_runner.max_runtime_seconds == 7200
     assert docker_runner.max_cpus == 2
+    assert docker_runner.mounts == []
 
 
 @pytest.mark.asyncio
@@ -54,9 +55,48 @@ async def test_run_builds_correct_command(docker_runner, tmp_path):
         assert call_kwargs["mem_limit"] == "8g"
         assert call_kwargs["cpu_quota"] == 200000  # 2 CPUs
         assert call_kwargs["command"] == ["cargo", "rapx"]
+        assert call_kwargs["volumes"] == [f"{workspace.resolve()}:/workspace:rw"]
         assert isinstance(result, ExecutionResult)
         assert result.state == TaskStatus.COMPLETED
         assert result.exit_code == 0
+
+
+@pytest.mark.asyncio
+async def test_run_includes_workspace_and_configured_mounts(tmp_path):
+    runner = DockerRunner(
+        image="rust:test",
+        max_memory_gb=8,
+        max_runtime_seconds=7200,
+        max_cpus=2,
+        mounts=["/host-cache:/cache:ro"],
+    )
+
+    with patch("docker.from_env") as mock_docker:
+        mock_client = Mock()
+        mock_container = Mock()
+        mock_container.wait.return_value = {"StatusCode": 0}
+        mock_container.logs.return_value = iter([])
+        mock_client.containers.run.return_value = mock_container
+        mock_docker.return_value = mock_client
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        stdout_log = tmp_path / "stdout.log"
+        stderr_log = tmp_path / "stderr.log"
+
+        result = await runner.run(
+            command=["cargo", "rapx"],
+            workspace_dir=workspace,
+            stdout_log=stdout_log,
+            stderr_log=stderr_log,
+        )
+
+        call_kwargs = mock_client.containers.run.call_args[1]
+        assert call_kwargs["volumes"] == [
+            f"{workspace.resolve()}:/workspace:rw",
+            "/host-cache:/cache:ro",
+        ]
+        assert result.state == TaskStatus.COMPLETED
 
 
 def test_ensure_image_with_if_not_present_policy(docker_runner):

@@ -12,12 +12,18 @@ class DockerRunner(Runner):
     """Execute tasks in Docker containers with resource limits"""
 
     def __init__(
-        self, image: str, max_memory_gb: int, max_runtime_seconds: int, max_cpus: int
+        self,
+        image: str,
+        max_memory_gb: int,
+        max_runtime_seconds: int,
+        max_cpus: int,
+        mounts: Optional[List[str]] = None,
     ):
         self.image = image
         self.max_memory_gb = max_memory_gb
         self.max_runtime_seconds = max_runtime_seconds
         self.max_cpus = max_cpus
+        self.mounts = mounts or []
         self._client: Optional[docker.DockerClient] = None
 
     @property
@@ -101,7 +107,7 @@ class DockerRunner(Runner):
         resource_limits = self._build_resource_limits()
 
         # Prepare volume mounts
-        volumes = {str(workspace_dir.resolve()): {"bind": "/workspace", "mode": "rw"}}
+        volumes = [f"{workspace_dir.resolve()}:/workspace:rw"] + self.mounts
 
         # Run container
         container = None
