@@ -28,12 +28,11 @@ def test_docker_runner_initialization(docker_runner):
 
 @pytest.mark.asyncio
 async def test_run_builds_correct_command(docker_runner, tmp_path):
-    """Test that Docker command is built with correct resource limits"""
+    """Test that Docker command is built with correct resource limits and wrapped for redirection"""
     with patch("docker.from_env") as mock_docker:
         mock_client = Mock()
         mock_container = Mock()
         mock_container.wait.return_value = {"StatusCode": 0}
-        mock_container.logs.return_value = iter([b"test output"])
         mock_client.containers.run.return_value = mock_container
         mock_docker.return_value = mock_client
 
@@ -54,8 +53,18 @@ async def test_run_builds_correct_command(docker_runner, tmp_path):
         assert call_kwargs["image"] == "rust:test"
         assert call_kwargs["mem_limit"] == "8g"
         assert call_kwargs["cpu_quota"] == 200000  # 2 CPUs
-        assert call_kwargs["command"] == ["cargo", "rapx"]
+        # Command should be wrapped with shell redirection
+        assert call_kwargs["command"] == [
+            "sh",
+            "-c",
+            'exec cargo rapx > "/workspace/stdout.log" 2> "/workspace/stderr.log"',
+        ]
         assert call_kwargs["volumes"] == [f"{workspace.resolve()}:/workspace:rw"]
+        # stdout/stderr should be disabled since we're writing to files
+        # tty should be enable cause we want colored output in logs
+        assert call_kwargs["stdout"] is False
+        assert call_kwargs["stderr"] is False
+        assert call_kwargs["tty"] is True
         assert isinstance(result, ExecutionResult)
         assert result.state == TaskStatus.COMPLETED
         assert result.exit_code == 0
@@ -75,7 +84,6 @@ async def test_run_includes_workspace_and_configured_mounts(tmp_path):
         mock_client = Mock()
         mock_container = Mock()
         mock_container.wait.return_value = {"StatusCode": 0}
-        mock_container.logs.return_value = iter([])
         mock_client.containers.run.return_value = mock_container
         mock_docker.return_value = mock_client
 
@@ -124,27 +132,17 @@ def test_ensure_image_pulls_when_missing(docker_runner):
 
 
 @pytest.mark.asyncio
-async def test_logs_file_content_correct_after_streaming(docker_runner, tmp_path):
-    """Log files contain the correct content after streaming completes."""
+async def test_run_redirects_to_workspace_log_files(docker_runner, tmp_path):
+    """Command should be wrapped to redirect stdout/stderr to workspace log files."""
     stdout_log = tmp_path / "stdout.log"
     stderr_log = tmp_path / "stderr.log"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    stdout_chunks = [b"line1\n", b"line2\n"]
-    stderr_chunks = [b"err1\n"]
-
     with patch("docker.from_env") as mock_docker:
         mock_client = Mock()
         mock_container = Mock()
         mock_container.wait.return_value = {"StatusCode": 0}
-
-        def logs_side_effect(*args, **kwargs):
-            if kwargs.get("stderr") and not kwargs.get("stdout"):
-                return iter(stderr_chunks)
-            return iter(stdout_chunks)
-
-        mock_container.logs.side_effect = logs_side_effect
         mock_client.containers.run.return_value = mock_container
         mock_docker.return_value = mock_client
 
@@ -157,13 +155,18 @@ async def test_logs_file_content_correct_after_streaming(docker_runner, tmp_path
 
         assert result.exit_code == 0
         assert result.state == TaskStatus.COMPLETED
-        assert stdout_log.read_text() == "line1\nline2\n"
-        assert stderr_log.read_text() == "err1\n"
+
+        # Verify the command redirects to the workspace log files
+        call_kwargs = mock_client.containers.run.call_args_list[0][1]
+        wrapped_command = call_kwargs["command"]
+        assert wrapped_command[0] == "sh"
+        assert '> "/workspace/stdout.log"' in wrapped_command[2]
+        assert '2> "/workspace/stderr.log"' in wrapped_command[2]
 
 
 @pytest.mark.asyncio
-async def test_logs_call_uses_stream_and_follow(docker_runner, tmp_path):
-    """Verify logs() is called with stream=True and follow=True."""
+async def test_run_does_not_use_docker_logs_api(docker_runner, tmp_path):
+    """Verify logs() API is not called since we write directly to files."""
     stdout_log = tmp_path / "stdout.log"
     stderr_log = tmp_path / "stderr.log"
     workspace = tmp_path / "workspace"
@@ -173,7 +176,6 @@ async def test_logs_call_uses_stream_and_follow(docker_runner, tmp_path):
         mock_client = Mock()
         mock_container = Mock()
         mock_container.wait.return_value = {"StatusCode": 0}
-        mock_container.logs.return_value = iter([])
         mock_client.containers.run.return_value = mock_container
         mock_docker.return_value = mock_client
 
@@ -184,11 +186,8 @@ async def test_logs_call_uses_stream_and_follow(docker_runner, tmp_path):
             stderr_log=stderr_log,
         )
 
-        calls = mock_container.logs.call_args_list
-        assert len(calls) == 2
-        for call in calls:
-            assert call.kwargs.get("stream") is True
-            assert call.kwargs.get("follow") is True
+        # logs() should NOT be called since we redirect to files
+        mock_container.logs.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -214,7 +213,6 @@ async def test_docker_timeout_stops_container(docker_runner, tmp_path):
             return {"StatusCode": 0}
 
         mock_container.wait.side_effect = blocking_wait
-        mock_container.logs.return_value = iter([])
         mock_client.containers.run.return_value = mock_container
         mock_docker.return_value = mock_client
 
@@ -244,7 +242,6 @@ async def test_run_reconciles_workspace_ownership_after_execution(
         mock_client = Mock()
         mock_container = Mock()
         mock_container.wait.return_value = {"StatusCode": 0}
-        mock_container.logs.return_value = iter([])
         mock_client.containers.run.return_value = mock_container
         mock_docker.return_value = mock_client
 

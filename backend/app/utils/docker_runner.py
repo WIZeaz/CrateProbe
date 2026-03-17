@@ -102,13 +102,15 @@ class DockerRunner(Runner):
         """
         Run a command in a Docker container with resource limits.
 
-        Allocates a pseudo-TTY (tty=True) to ensure applications output ANSI color codes.
+        stdout/stderr are redirected to files in the workspace mount,
+        allowing the host to read logs directly from the mounted volume
+        for real-time log updates.
 
         Args:
             command: Command and arguments to execute
             workspace_dir: Host path to mount as /workspace in container
-            stdout_log: Path to write stdout
-            stderr_log: Path to write stderr
+            stdout_log: Path to write stdout (relative to workspace)
+            stderr_log: Path to write stderr (relative to workspace)
 
         Returns:
             Structured execution result with status, exit code, and message
@@ -124,18 +126,30 @@ class DockerRunner(Runner):
         # Prepare volume mounts
         volumes = [f"{workspace_dir.resolve()}:/workspace:rw"] + self.mounts
 
+        # Compute log paths inside container (relative to /workspace)
+        stdout_container_path = "/workspace/stdout.log"
+        stderr_container_path = "/workspace/stderr.log"
+
+        # Wrap command to redirect stdout/stderr to files
+        # Use 'exec' to replace shell process, ensuring proper signal handling
+        wrapped_command = [
+            "sh",
+            "-c",
+            f'exec {" ".join(command)} > "{stdout_container_path}" 2> "{stderr_container_path}"',
+        ]
+
         # Run container
         container = None
         try:
             container = self.client.containers.run(
                 image=self.image,
-                command=command,
+                command=wrapped_command,
                 working_dir="/workspace",
                 volumes=volumes,
                 detach=True,
-                stdout=True,
-                stderr=True,
-                tty=True,
+                stdout=False,  # No need to capture stdout via Docker API
+                stderr=False,  # No need to capture stderr via Docker API
+                tty=True,  # No TTY needed since we're redirecting to files
                 environment={
                     "CARGO_TERM_COLOR": "always",
                     "TERM": "xterm-256color",
@@ -146,38 +160,13 @@ class DockerRunner(Runner):
             timeout_seconds = self.max_runtime_seconds
             loop = asyncio.get_running_loop()
 
-            def _stream_to_file(log_path: Path, log_kwargs: dict) -> None:
-                """Stream Docker logs to a file, writing each chunk as it arrives.
-
-                log_kwargs is passed as a plain positional arg because
-                run_in_executor() does not support keyword argument forwarding.
-                """
-                with log_path.open("w", encoding="utf-8", errors="replace") as f:
-                    for chunk in container.logs(stream=True, follow=True, **log_kwargs):
-                        if isinstance(chunk, bytes):
-                            f.write(chunk.decode("utf-8", errors="replace"))
-                        else:
-                            f.write(chunk)
-                        f.flush()
-
             def _wait_container() -> dict:
                 """Wait for container to finish and return result dict."""
                 return container.wait()
 
-            # Run wait and both log streams concurrently in thread executors.
-            # Each runs in a separate thread since Docker SDK is synchronous.
-            # IMPORTANT: pass log_kwargs as a positional arg — run_in_executor
-            # does not support **kwargs forwarding.
             wait_future = loop.run_in_executor(None, _wait_container)
-            stdout_future = loop.run_in_executor(
-                None, _stream_to_file, stdout_log, {"stdout": True, "stderr": False}
-            )
-            stderr_future = loop.run_in_executor(
-                None, _stream_to_file, stderr_log, {"stdout": False, "stderr": True}
-            )
 
             # Use asyncio.wait_for to enforce execution time limit
-            # This properly cancels the wait and stops the container on timeout
             try:
                 wait_result = await asyncio.wait_for(
                     wait_future, timeout=timeout_seconds
@@ -194,14 +183,6 @@ class DockerRunner(Runner):
                     exit_code=-1,
                     message=f"Execution timed out after {timeout_seconds} seconds",
                 )
-
-            # Wait for log streaming to complete (they should finish shortly after container stops)
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(stdout_future, stderr_future), timeout=10
-                )
-            except asyncio.TimeoutError:
-                pass  # Log streaming may hang, but we have the exit code
 
             if exit_code == 0:
                 return ExecutionResult(
@@ -222,6 +203,7 @@ class DockerRunner(Runner):
             )
 
         except Exception as e:
+            # Write error to stderr log file for visibility
             stderr_log.write_text(f"Unexpected error: {e}")
             return ExecutionResult(
                 state=TaskStatus.FAILED,
