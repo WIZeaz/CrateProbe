@@ -76,6 +76,8 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     async def lifespan(app: FastAPI):
         # Startup
         config.ensure_workspace_structure()
+        # Recover orphaned tasks from previous server instance
+        scheduler.recover_orphaned_tasks()
         # Start scheduler in background
         import asyncio
 

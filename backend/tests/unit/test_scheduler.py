@@ -1,5 +1,6 @@
 import pytest
 import asyncio
+from datetime import datetime
 from unittest.mock import Mock, patch, AsyncMock
 from app.services.scheduler import TaskScheduler
 from app.database import Database
@@ -86,3 +87,33 @@ async def test_cancel_task(scheduler, db):
         mock_kill.assert_called_once()
         task = db.get_task(task_id)
         assert task.status == TaskStatus.CANCELLED
+
+
+def test_recover_orphaned_running_tasks(scheduler, db):
+    """Test recovery of orphaned RUNNING tasks on server restart"""
+    # Create tasks in RUNNING state (simulating server crash/shutdown)
+    task_id1 = db.create_task("crate1", "1.0.0", "/path1", "/log1", "/log2")
+    task_id2 = db.create_task("crate2", "1.0.0", "/path2", "/log3", "/log4")
+    db.update_task_status(task_id1, TaskStatus.RUNNING, started_at=datetime.now())
+    db.update_task_status(task_id2, TaskStatus.RUNNING, started_at=datetime.now())
+
+    # Verify tasks are running
+    assert scheduler.get_running_count() == 2
+
+    # Call recovery method
+    scheduler.recover_orphaned_tasks()
+
+    # Verify tasks are now marked as failed with appropriate message
+    task1 = db.get_task(task_id1)
+    task2 = db.get_task(task_id2)
+
+    assert task1.status == TaskStatus.FAILED
+    assert task1.error_message == "Task interrupted by server restart"
+    assert task1.finished_at is not None
+
+    assert task2.status == TaskStatus.FAILED
+    assert task2.error_message == "Task interrupted by server restart"
+    assert task2.finished_at is not None
+
+    # Verify running count is now 0
+    assert scheduler.get_running_count() == 0
