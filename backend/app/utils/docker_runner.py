@@ -9,6 +9,66 @@ from app.models import TaskStatus
 from app.utils.runner_base import Runner, ExecutionResult
 
 
+def _sync_log_incremental(source: Path, target: Path) -> None:
+    """Sync log file incrementally, only copying new content.
+
+    Args:
+        source: Source log file path
+        target: Target log file path
+    """
+    try:
+        if not source.exists():
+            return
+
+        if not target.exists():
+            # First time: copy entire file
+            shutil.copy2(str(source), str(target))
+            return
+
+        source_size = source.stat().st_size
+        target_size = target.stat().st_size
+
+        if source_size > target_size:
+            # Append only new content
+            with open(source, "rb") as src, open(target, "ab") as dst:
+                src.seek(target_size)
+                dst.write(src.read())
+        elif source_size < target_size:
+            # Source was truncated (e.g., task restart), copy entire file
+            shutil.copy2(str(source), str(target))
+    except Exception:
+        # Ignore errors during sync (file might be locked temporarily)
+        pass
+
+
+async def _sync_logs_periodically(
+    source_stdout: Path,
+    source_stderr: Path,
+    target_stdout: Path,
+    target_stderr: Path,
+    interval: float = 2.0,
+    stop_event: Optional[asyncio.Event] = None,
+):
+    """Periodically sync log files from source to target.
+
+    Args:
+        source_stdout: Path to stdout.log in workspace
+        source_stderr: Path to stderr.log in workspace
+        target_stdout: Path to target stdout log (logs dir)
+        target_stderr: Path to target stderr log (logs dir)
+        interval: Sync interval in seconds
+        stop_event: Event to signal stop
+    """
+    event = stop_event or asyncio.Event()
+    while not event.is_set():
+        _sync_log_incremental(source_stdout, target_stdout)
+        _sync_log_incremental(source_stderr, target_stderr)
+        try:
+            await asyncio.wait_for(event.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
+
+
 class DockerRunner(Runner):
     """Execute tasks in Docker containers with resource limits"""
 
@@ -140,6 +200,19 @@ class DockerRunner(Runner):
 
         # Run container
         container = None
+        log_sync_task = None
+        stop_sync_event = asyncio.Event()
+
+        # Source log paths (inside mounted workspace)
+        source_stdout = workspace_dir / "stdout.log"
+        source_stderr = workspace_dir / "stderr.log"
+
+        # Clean up existing log files to ensure fresh start (e.g., on retry)
+        if stdout_log.exists():
+            stdout_log.unlink()
+        if stderr_log.exists():
+            stderr_log.unlink()
+
         try:
             container = self.client.containers.run(
                 image=self.image,
@@ -149,12 +222,24 @@ class DockerRunner(Runner):
                 detach=True,
                 stdout=False,  # No need to capture stdout via Docker API
                 stderr=False,  # No need to capture stderr via Docker API
-                tty=True,  # No TTY needed since we're redirecting to files
+                tty=True,  # Enable TTY for colored output in logs
                 environment={
                     "CARGO_TERM_COLOR": "always",
                     "TERM": "xterm-256color",
                 },
                 **resource_limits,
+            )
+
+            # Start log sync task for real-time log updates
+            log_sync_task = asyncio.create_task(
+                _sync_logs_periodically(
+                    source_stdout=source_stdout,
+                    source_stderr=source_stderr,
+                    target_stdout=stdout_log,
+                    target_stderr=stderr_log,
+                    interval=2.0,
+                    stop_event=stop_sync_event,
+                )
             )
 
             timeout_seconds = self.max_runtime_seconds
@@ -211,6 +296,22 @@ class DockerRunner(Runner):
                 message=f"Unexpected error: {e}",
             )
         finally:
+            # Stop log sync task
+            stop_sync_event.set()
+            if log_sync_task is not None:
+                try:
+                    await asyncio.wait_for(log_sync_task, timeout=5.0)
+                except asyncio.TimeoutError:
+                    log_sync_task.cancel()
+                    try:
+                        await log_sync_task
+                    except asyncio.CancelledError:
+                        pass
+
+            # Final sync to ensure all logs are copied
+            _sync_log_incremental(source_stdout, stdout_log)
+            _sync_log_incremental(source_stderr, stderr_log)
+
             if container is not None:
                 try:
                     container.remove(force=True)
