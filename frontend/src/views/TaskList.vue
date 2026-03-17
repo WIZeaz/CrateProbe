@@ -36,12 +36,20 @@ const filteredAndSortedTasks = computed(() => {
 
   // Sort
   result = [...result].sort((a, b) => {
-    let aVal = a[sortColumn.value]
-    let bVal = b[sortColumn.value]
+    let aVal, bVal
+
+    // Handle runtime column specially
+    if (sortColumn.value === 'runtime') {
+      aVal = getRuntimeSeconds(a.started_at, a.finished_at)
+      bVal = getRuntimeSeconds(b.started_at, b.finished_at)
+    } else {
+      aVal = a[sortColumn.value]
+      bVal = b[sortColumn.value]
+    }
 
     // Handle null values
-    if (aVal === null) return 1
-    if (bVal === null) return -1
+    if (aVal === null || aVal === undefined) return 1
+    if (bVal === null || bVal === undefined) return -1
 
     // Compare
     if (aVal < bVal) return sortDirection.value === 'asc' ? -1 : 1
@@ -65,9 +73,12 @@ const someSelected = computed(() => {
   return selectedIds.value.size > 0 && !allSelected.value
 })
 
-// Clear selection when filter changes
-watch(filterStatus, () => {
+// Update URL when filter changes
+watch(filterStatus, (newValue) => {
   selectedIds.value = new Set()
+  router.replace({
+    query: newValue === 'all' ? {} : { status: newValue }
+  })
 })
 
 function toggleSelectAll() {
@@ -119,12 +130,6 @@ function sortBy(column) {
   }
 }
 
-function formatDate(dateStr) {
-  if (!dateStr) return 'N/A'
-  const date = new Date(dateStr)
-  return date.toLocaleString()
-}
-
 function formatDuration(startStr, endStr) {
   if (!startStr) return 'N/A'
   const start = new Date(startStr)
@@ -136,6 +141,13 @@ function formatDuration(startStr, endStr) {
   const hours = Math.floor(diff / 3600)
   const minutes = Math.floor((diff % 3600) / 60)
   return `${hours}h ${minutes}m`
+}
+
+function getRuntimeSeconds(startStr, endStr) {
+  if (!startStr) return null
+  const start = new Date(startStr)
+  const end = endStr ? new Date(endStr) : new Date()
+  return Math.floor((end - start) / 1000)
 }
 
 async function handleBatchRetry() {
@@ -327,14 +339,11 @@ onUnmounted(() => {
               <span v-if="sortColumn === 'poc_count'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
             </th>
             <th
-              @click="sortBy('created_at')"
+              @click="sortBy('runtime')"
               class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-50"
             >
-              Created
-              <span v-if="sortColumn === 'created_at'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
-            </th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
               Runtime
+              <span v-if="sortColumn === 'runtime'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
             </th>
           </tr>
         </thead>
@@ -374,9 +383,6 @@ onUnmounted(() => {
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer" @click="viewTask(task.id)">
               {{ task.poc_count }}
-            </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer" @click="viewTask(task.id)">
-              {{ formatDate(task.created_at) }}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer" @click="viewTask(task.id)">
               {{ formatDuration(task.started_at, task.finished_at) }}

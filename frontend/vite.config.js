@@ -32,6 +32,10 @@ export default defineConfig({
   plugins: [vue()],
   server: {
     port: frontendConfig.dev_port || 5173,
+    watch: {
+      usePolling: true,
+      interval: 100
+    },
     proxy: {
       '/api': {
         target: frontendConfig.api_proxy_target || 'http://localhost:8080',

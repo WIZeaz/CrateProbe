@@ -1,5 +1,5 @@
 <script setup>
-defineProps({
+const props = defineProps({
   title: {
     type: String,
     required: true
@@ -32,7 +32,7 @@ const colorClasses = {
 }
 
 function handleClick() {
-  if (clickable) {
+  if (props.clickable) {
     emit('click')
   }
 }
