@@ -56,6 +56,7 @@ LOG_PATH_RESOLVERS = {
     "miri_report": lambda task, _cfg: Path(task.workspace_path)
     / "testgen"
     / "miri_report.txt",
+    "stats-yaml": lambda task, _cfg: Path(task.workspace_path) / "testgen" / "stats.yaml",
 }
 
 
