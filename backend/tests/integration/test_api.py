@@ -55,6 +55,8 @@ def test_get_all_tasks(client):
     tasks = response.json()
     assert len(tasks) == 1
     assert tasks[0]["crate_name"] == "serde"
+    assert "compile_failed" in tasks[0]
+    assert tasks[0]["compile_failed"] is None
 
 
 def test_get_task_by_id(client):
@@ -70,6 +72,8 @@ def test_get_task_by_id(client):
     data = response.json()
     assert data["id"] == task_id
     assert data["crate_name"] == "serde"
+    assert "compile_failed" in data
+    assert data["compile_failed"] is None
 
 
 def test_delete_task_not_running(client):

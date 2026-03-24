@@ -258,6 +258,8 @@ class TaskExecutor:
             except asyncio.TimeoutError:
                 case_count, poc_count = self.count_generated_items(workspace_dir)
                 self.db.update_task_counts(task_id, case_count, poc_count)
+                compile_failed = self.get_compile_failed_count(workspace_dir)
+                self.db.update_task_compile_failed(task_id, compile_failed)
 
     async def _execute_with_limiter(self, task_id: int, workspace_dir: Path, task):
         """Execute task using systemd/resource limiter (original implementation)"""
@@ -304,6 +306,8 @@ class TaskExecutor:
         # Final count of generated items
         case_count, poc_count = self.count_generated_items(workspace_dir)
         self.db.update_task_counts(task_id, case_count, poc_count)
+        compile_failed = self.get_compile_failed_count(workspace_dir)
+        self.db.update_task_compile_failed(task_id, compile_failed)
 
         # Update final status based on exit code
         if process.returncode == 0:
@@ -357,7 +361,41 @@ class TaskExecutor:
                 # Process still running, update stats
                 case_count, poc_count = self.count_generated_items(workspace_dir)
                 self.db.update_task_counts(task_id, case_count, poc_count)
+                compile_failed = self.get_compile_failed_count(workspace_dir)
+                self.db.update_task_compile_failed(task_id, compile_failed)
                 # Continue waiting
+
+    def get_compile_failed_count(self, workspace_dir: Path) -> int | None:
+        """Read CompileFailed count from testgen/stats.yaml if available."""
+        stats_yaml_path = workspace_dir / "testgen" / "stats.yaml"
+        if not stats_yaml_path.exists():
+            return None
+
+        try:
+            lines = stats_yaml_path.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines()
+        except Exception:
+            return None
+
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if not line.startswith("CompileFailed:"):
+                continue
+
+            value = line.split(":", 1)[1].strip()
+            if value.startswith('"') and value.endswith('"') and len(value) >= 2:
+                value = value[1:-1].strip()
+            if value.startswith("'") and value.endswith("'") and len(value) >= 2:
+                value = value[1:-1].strip()
+
+            if value.isdigit():
+                return int(value)
+            return None
+
+        return None
 
     def count_generated_items(self, workspace_dir: Path) -> Tuple[int, int]:
         """Count generated test cases and POCs"""

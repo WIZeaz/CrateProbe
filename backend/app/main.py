@@ -47,6 +47,7 @@ class TaskDetailResponse(BaseModel):
     poc_count: int
     error_message: Optional[str]
     message: Optional[str]
+    compile_failed: Optional[int]
 
 
 LOG_PATH_RESOLVERS = {
@@ -56,7 +57,9 @@ LOG_PATH_RESOLVERS = {
     "miri_report": lambda task, _cfg: Path(task.workspace_path)
     / "testgen"
     / "miri_report.txt",
-    "stats-yaml": lambda task, _cfg: Path(task.workspace_path) / "testgen" / "stats.yaml",
+    "stats-yaml": lambda task, _cfg: Path(task.workspace_path)
+    / "testgen"
+    / "stats.yaml",
 }
 
 
@@ -441,6 +444,7 @@ def _task_to_dict(task: TaskRecord) -> dict:
         "poc_count": task.poc_count or 0,
         "error_message": task.error_message,
         "message": task.message,
+        "compile_failed": task.compile_failed,
     }
 
 
@@ -459,6 +463,7 @@ def _task_to_response(task: TaskRecord) -> TaskDetailResponse:
         poc_count=task.poc_count or 0,
         error_message=task.error_message,
         message=task.message,
+        compile_failed=task.compile_failed,
     )
 
 

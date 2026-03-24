@@ -160,6 +160,28 @@ async def test_count_generated_items(executor, tmp_path):
     assert poc_count == 1
 
 
+def test_get_compile_failed_count_from_stats_yaml(executor, tmp_path):
+    """Read CompileFailed from stats.yaml"""
+    stats_yaml = tmp_path / "testgen" / "stats.yaml"
+    stats_yaml.parent.mkdir(parents=True, exist_ok=True)
+    stats_yaml.write_text("CompileFailed: 12\ncase_count: 3\n")
+
+    compile_failed = executor.get_compile_failed_count(tmp_path)
+
+    assert compile_failed == 12
+
+
+def test_get_compile_failed_count_returns_none_when_missing(executor, tmp_path):
+    """Return None when CompileFailed key is absent"""
+    stats_yaml = tmp_path / "testgen" / "stats.yaml"
+    stats_yaml.parent.mkdir(parents=True, exist_ok=True)
+    stats_yaml.write_text("case_count: 3\npoc_count: 1\n")
+
+    compile_failed = executor.get_compile_failed_count(tmp_path)
+
+    assert compile_failed is None
+
+
 @pytest.fixture
 def mock_config():
     config = Mock(spec=Config)
@@ -256,6 +278,7 @@ async def test_execute_task_updates_counts_periodically_in_docker_mode(
                 await executor.execute_task(task.id)
 
     assert mock_database.update_task_counts.call_count >= 2
+    assert mock_database.update_task_compile_failed.call_count >= 2
 
 
 import logging

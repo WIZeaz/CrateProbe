@@ -90,6 +90,16 @@ def test_update_task_counts(db):
     assert task.poc_count == 3
 
 
+def test_update_task_compile_failed(db):
+    """Test updating compile_failed count"""
+    task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
+
+    db.update_task_compile_failed(task_id, compile_failed=7)
+    task = db.get_task(task_id)
+
+    assert task.compile_failed == 7
+
+
 def test_get_tasks_by_status(db):
     """Test filtering tasks by status"""
     id1 = db.create_task("serde", "1.0.0", "/path1", "/log1", "/log2")
@@ -128,6 +138,7 @@ def test_reset_task_for_retry(db):
     db.update_task_status(task_id, TaskStatus.RUNNING, started_at=datetime.now())
     db.update_task_pid(task_id, 12345)
     db.update_task_counts(task_id, case_count=10, poc_count=5)
+    db.update_task_compile_failed(task_id, compile_failed=2)
     db.update_task_status(
         task_id, TaskStatus.COMPLETED, finished_at=datetime.now(), exit_code=0
     )
@@ -138,6 +149,7 @@ def test_reset_task_for_retry(db):
     assert task.case_count == 10
     assert task.poc_count == 5
     assert task.exit_code == 0
+    assert task.compile_failed == 2
     assert task.pid == 12345
     assert task.started_at is not None
     assert task.finished_at is not None
@@ -151,6 +163,7 @@ def test_reset_task_for_retry(db):
     assert task.case_count == 0
     assert task.poc_count == 0
     assert task.exit_code is None
+    assert task.compile_failed is None
     assert task.pid is None
     assert task.started_at is None
     assert task.finished_at is None

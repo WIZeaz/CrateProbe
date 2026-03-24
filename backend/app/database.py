@@ -30,6 +30,7 @@ class TaskRecord:
     error_message: Optional[str] = None
     message: Optional[str] = None
     memory_used_mb: Optional[float] = None
+    compile_failed: Optional[int] = None
 
 
 class Database:
@@ -82,6 +83,8 @@ class Database:
         }
         if "message" not in columns:
             cursor.execute("ALTER TABLE tasks ADD COLUMN message TEXT")
+        if "compile_failed" not in columns:
+            cursor.execute("ALTER TABLE tasks ADD COLUMN compile_failed INTEGER")
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_created_at ON tasks(created_at DESC)
         """)
@@ -247,6 +250,20 @@ class Database:
         cursor.execute(query, params)
         self.conn.commit()
 
+    def update_task_compile_failed(self, task_id: int, compile_failed: Optional[int]):
+        """Update task compile_failed count.
+
+        Args:
+            task_id: Task ID to update
+            compile_failed: CompileFailed count, or None to clear
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "UPDATE tasks SET compile_failed = ? WHERE id = ?",
+            (compile_failed, task_id),
+        )
+        self.conn.commit()
+
     def update_task_pid(self, task_id: int, pid: int):
         """Update task process ID
 
@@ -279,6 +296,7 @@ class Database:
                 message = NULL,
                 case_count = 0,
                 poc_count = 0,
+                compile_failed = NULL,
                 pid = NULL
             WHERE id = ?
         """,
@@ -335,6 +353,7 @@ class Database:
             error_message=row["error_message"],
             message=row["message"],
             memory_used_mb=row["memory_used_mb"],
+            compile_failed=row["compile_failed"],
         )
 
     def _parse_datetime(self, dt_str: str) -> datetime:

@@ -14,10 +14,6 @@ const sortColumn = ref('created_at')
 const sortDirection = ref('desc')
 const selectedIds = ref(new Set())
 const batchLoading = ref(false)
-const taskStats = ref({})
-let statsRefreshInterval = null
-let statsFetchQueue = Promise.resolve()
-let latestStatsRequestId = 0
 
 const statusOptions = [
   { value: 'all', label: 'All' },
@@ -47,8 +43,8 @@ const filteredAndSortedTasks = computed(() => {
       aVal = getRuntimeSeconds(a.started_at, a.finished_at)
       bVal = getRuntimeSeconds(b.started_at, b.finished_at)
     } else if (sortColumn.value === 'compile_failed') {
-      aVal = normalizeCompileFailed(taskStats.value[a.id]?.CompileFailed)
-      bVal = normalizeCompileFailed(taskStats.value[b.id]?.CompileFailed)
+      aVal = normalizeCompileFailed(a.compile_failed)
+      bVal = normalizeCompileFailed(b.compile_failed)
 
       const aUnknown = aVal === null
       const bUnknown = bVal === null
@@ -96,7 +92,6 @@ watch(filterStatus, (newValue) => {
   router.replace({
     query: newValue === 'all' ? {} : { status: newValue }
   })
-  fetchTaskStats()
 })
 
 function toggleSelectAll() {
@@ -120,7 +115,6 @@ function toggleSelect(taskId) {
 async function fetchTasks() {
   try {
     tasks.value = await api.getAllTasks()
-    await fetchTaskStats()
     loading.value = false
     // Remove selected ids that no longer exist
     const existingIds = new Set(tasks.value.map(t => t.id))
@@ -130,47 +124,6 @@ async function fetchTasks() {
     error.value = err.message
     loading.value = false
   }
-}
-
-async function fetchTaskStats() {
-  const requestId = ++latestStatsRequestId
-
-  statsFetchQueue = statsFetchQueue.then(async () => {
-    if (requestId !== latestStatsRequestId) {
-      return
-    }
-
-    const taskIds = filteredAndSortedTasks.value.map(task => task.id)
-    if (taskIds.length === 0) {
-      if (requestId === latestStatsRequestId) {
-        taskStats.value = {}
-      }
-      return
-    }
-
-    const statsResults = await Promise.all(
-      taskIds.map(async taskId => {
-        try {
-          const stats = await api.getTaskStats(taskId)
-          return { taskId, stats }
-        } catch {
-          return { taskId, stats: {} }
-        }
-      })
-    )
-
-    if (requestId !== latestStatsRequestId) {
-      return
-    }
-
-    const nextStats = {}
-    statsResults.forEach(({ taskId, stats }) => {
-      nextStats[taskId] = stats
-    })
-    taskStats.value = nextStats
-  }).catch(() => {})
-
-  return statsFetchQueue
 }
 
 function handleTaskUpdate() {
@@ -273,21 +226,12 @@ onMounted(() => {
   websocket.on('task_update', handleTaskUpdate)
   websocket.on('task_created', handleTaskUpdate)
   websocket.on('task_completed', handleTaskUpdate)
-
-  statsRefreshInterval = setInterval(() => {
-    if (!loading.value) {
-      fetchTaskStats()
-    }
-  }, 10000)
 })
 
 onUnmounted(() => {
   websocket.off('task_update', handleTaskUpdate)
   websocket.off('task_created', handleTaskUpdate)
   websocket.off('task_completed', handleTaskUpdate)
-  if (statsRefreshInterval) {
-    clearInterval(statsRefreshInterval)
-  }
 })
 </script>
 
@@ -473,7 +417,7 @@ onUnmounted(() => {
               {{ task.poc_count }}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer" @click="viewTask(task.id)">
-              {{ taskStats[task.id]?.CompileFailed ?? '-' }}
+              {{ task.compile_failed ?? '-' }}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer" @click="viewTask(task.id)">
               {{ formatDuration(task.started_at, task.finished_at) }}
