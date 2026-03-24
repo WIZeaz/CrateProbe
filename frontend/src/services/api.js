@@ -80,6 +80,32 @@ export default {
     return response.data
   },
 
+  async getTaskStats(taskId) {
+    try {
+      const response = await api.get(`/tasks/${taskId}/logs/stats-yaml`)
+      const lines = response.data.lines || []
+      const stats = {}
+      const integerPattern = /^-?\d+$/
+
+      lines.forEach(line => {
+        const match = line.match(/^([A-Za-z0-9_]+):\s*(.*)$/)
+        if (!match) {
+          return
+        }
+
+        const [, key, value] = match
+        stats[key] = integerPattern.test(value) ? Number(value) : value
+      })
+
+      return stats
+    } catch (error) {
+      if (error.response?.status === 404) {
+        return {}
+      }
+      throw error
+    }
+  },
+
   async downloadLog(taskId, logType) {
     const response = await api.get(`/tasks/${taskId}/logs/${logType}/raw`, {
       responseType: 'blob'
