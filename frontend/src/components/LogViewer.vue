@@ -20,14 +20,14 @@ const logs = ref({
   stdout: '',
   stderr: '',
   miri_report: '',
-  'stats-yaml': ''
+  stats: ''
 })
 const logHtml = ref({
   runner: '',
   stdout: '',
   stderr: '',
   miri_report: '',
-  'stats-yaml': ''
+  stats: ''
 })
 
 // Function to convert ANSI to HTML
@@ -42,14 +42,14 @@ const loading = ref({
   stdout: false,
   stderr: false,
   miri_report: false,
-  'stats-yaml': false
+  stats: false
 })
 const fetched = ref({
   runner: false,
   stdout: false,
   stderr: false,
   miri_report: false,
-  'stats-yaml': false
+  stats: false
 })
 const logContainer = ref(null)
 let refreshInterval = null
@@ -59,8 +59,12 @@ const logFiles = [
   { id: 'stdout', label: 'stdout', icon: '📄' },
   { id: 'stderr', label: 'stderr', icon: '📄' },
   { id: 'miri_report', label: 'miri_report', icon: '📄' },
-  { id: 'stats-yaml', label: 'stats', icon: '📊' },
+  { id: 'stats', label: 'stats', icon: '📊' },
 ]
+
+function getApiLogType(logType) {
+  return logType === 'stats' ? 'stats-yaml' : logType
+}
 
 async function loadLog(logType, isRefresh = false) {
   if (!isRefresh && loading.value[logType]) return
@@ -70,7 +74,7 @@ async function loadLog(logType, isRefresh = false) {
   }
 
   try {
-    const data = await api.getLog(props.taskId, logType, 1000)
+    const data = await api.getLog(props.taskId, getApiLogType(logType), 1000)
 
     let wasAtBottom = false
     if (isRefresh && logContainer.value) {
@@ -124,11 +128,11 @@ function stopAutoRefresh() {
 
 async function downloadLog() {
   try {
-    const blob = await api.downloadLog(props.taskId, activeLog.value)
+    const blob = await api.downloadLog(props.taskId, getApiLogType(activeLog.value))
     const url = window.URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    const ext = activeLog.value === 'miri_report' ? 'txt' : activeLog.value === 'stats-yaml' ? 'yaml' : 'log'
+    const ext = activeLog.value === 'miri_report' ? 'txt' : activeLog.value === 'stats' ? 'yaml' : 'log'
     a.download = `task-${props.taskId}-${activeLog.value}.${ext}`
     document.body.appendChild(a)
     a.click()

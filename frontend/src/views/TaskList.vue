@@ -14,6 +14,10 @@ const sortColumn = ref('created_at')
 const sortDirection = ref('desc')
 const selectedIds = ref(new Set())
 const batchLoading = ref(false)
+const taskStats = ref({})
+let statsRefreshInterval = null
+let statsFetchQueue = Promise.resolve()
+let latestStatsRequestId = 0
 
 const statusOptions = [
   { value: 'all', label: 'All' },
@@ -38,10 +42,23 @@ const filteredAndSortedTasks = computed(() => {
   result = [...result].sort((a, b) => {
     let aVal, bVal
 
-    // Handle runtime column specially
+    // Handle runtime and compile_failed columns specially
     if (sortColumn.value === 'runtime') {
       aVal = getRuntimeSeconds(a.started_at, a.finished_at)
       bVal = getRuntimeSeconds(b.started_at, b.finished_at)
+    } else if (sortColumn.value === 'compile_failed') {
+      aVal = normalizeCompileFailed(taskStats.value[a.id]?.CompileFailed)
+      bVal = normalizeCompileFailed(taskStats.value[b.id]?.CompileFailed)
+
+      const aUnknown = aVal === null
+      const bUnknown = bVal === null
+      if (aUnknown && bUnknown) return 0
+      if (aUnknown) return 1
+      if (bUnknown) return -1
+
+      if (aVal < bVal) return sortDirection.value === 'asc' ? -1 : 1
+      if (aVal > bVal) return sortDirection.value === 'asc' ? 1 : -1
+      return 0
     } else {
       aVal = a[sortColumn.value]
       bVal = b[sortColumn.value]
@@ -79,6 +96,7 @@ watch(filterStatus, (newValue) => {
   router.replace({
     query: newValue === 'all' ? {} : { status: newValue }
   })
+  fetchTaskStats()
 })
 
 function toggleSelectAll() {
@@ -102,6 +120,7 @@ function toggleSelect(taskId) {
 async function fetchTasks() {
   try {
     tasks.value = await api.getAllTasks()
+    await fetchTaskStats()
     loading.value = false
     // Remove selected ids that no longer exist
     const existingIds = new Set(tasks.value.map(t => t.id))
@@ -111,6 +130,47 @@ async function fetchTasks() {
     error.value = err.message
     loading.value = false
   }
+}
+
+async function fetchTaskStats() {
+  const requestId = ++latestStatsRequestId
+
+  statsFetchQueue = statsFetchQueue.then(async () => {
+    if (requestId !== latestStatsRequestId) {
+      return
+    }
+
+    const taskIds = filteredAndSortedTasks.value.map(task => task.id)
+    if (taskIds.length === 0) {
+      if (requestId === latestStatsRequestId) {
+        taskStats.value = {}
+      }
+      return
+    }
+
+    const statsResults = await Promise.all(
+      taskIds.map(async taskId => {
+        try {
+          const stats = await api.getTaskStats(taskId)
+          return { taskId, stats }
+        } catch {
+          return { taskId, stats: {} }
+        }
+      })
+    )
+
+    if (requestId !== latestStatsRequestId) {
+      return
+    }
+
+    const nextStats = {}
+    statsResults.forEach(({ taskId, stats }) => {
+      nextStats[taskId] = stats
+    })
+    taskStats.value = nextStats
+  }).catch(() => {})
+
+  return statsFetchQueue
 }
 
 function handleTaskUpdate() {
@@ -148,6 +208,18 @@ function getRuntimeSeconds(startStr, endStr) {
   const start = new Date(startStr)
   const end = endStr ? new Date(endStr) : new Date()
   return Math.floor((end - start) / 1000)
+}
+
+function normalizeCompileFailed(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value
+  }
+
+  if (typeof value === 'string' && /^-?\d+$/.test(value.trim())) {
+    return Number(value)
+  }
+
+  return null
 }
 
 async function handleBatchRetry() {
@@ -201,12 +273,21 @@ onMounted(() => {
   websocket.on('task_update', handleTaskUpdate)
   websocket.on('task_created', handleTaskUpdate)
   websocket.on('task_completed', handleTaskUpdate)
+
+  statsRefreshInterval = setInterval(() => {
+    if (!loading.value) {
+      fetchTaskStats()
+    }
+  }, 10000)
 })
 
 onUnmounted(() => {
   websocket.off('task_update', handleTaskUpdate)
   websocket.off('task_created', handleTaskUpdate)
   websocket.off('task_completed', handleTaskUpdate)
+  if (statsRefreshInterval) {
+    clearInterval(statsRefreshInterval)
+  }
 })
 </script>
 
@@ -339,6 +420,13 @@ onUnmounted(() => {
               <span v-if="sortColumn === 'poc_count'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
             </th>
             <th
+              @click="sortBy('compile_failed')"
+              class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-50"
+            >
+              Compile Failed
+              <span v-if="sortColumn === 'compile_failed'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
+            </th>
+            <th
               @click="sortBy('runtime')"
               class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-50"
             >
@@ -383,6 +471,9 @@ onUnmounted(() => {
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer" @click="viewTask(task.id)">
               {{ task.poc_count }}
+            </td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer" @click="viewTask(task.id)">
+              {{ taskStats[task.id]?.CompileFailed ?? '-' }}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer" @click="viewTask(task.id)">
               {{ formatDuration(task.started_at, task.finished_at) }}

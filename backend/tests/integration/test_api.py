@@ -361,6 +361,27 @@ def test_generic_log_endpoint_runner(client, config):
     assert any("Task started" in line for line in data["lines"])
 
 
+def test_generic_log_endpoint_stats_yaml(client, config):
+    """GET /api/tasks/{id}/logs/stats-yaml returns last N lines"""
+    create_resp = client.post(
+        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
+    )
+    task_id = create_resp.json()["task_id"]
+
+    stats_yaml = (
+        config.workspace_path / "repos" / "serde-1.0.0" / "testgen" / "stats.yaml"
+    )
+    stats_yaml.parent.mkdir(parents=True, exist_ok=True)
+    stats_yaml.write_text("case_count: 1\npoc_count: 0\nstatus: running")
+
+    response = client.get(f"/api/tasks/{task_id}/logs/stats-yaml?lines=2")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "lines" in data
+    assert data["lines"] == ["poc_count: 0", "status: running"]
+
+
 def test_generic_log_endpoint_unknown_name(client):
     """GET /api/tasks/{id}/logs/{unknown} returns 404 Unknown log type"""
     create_resp = client.post(
@@ -405,6 +426,26 @@ def test_generic_log_raw_endpoint(client, config):
     assert log_content in response.text
 
 
+def test_generic_log_raw_endpoint_stats_yaml(client, config):
+    """GET /api/tasks/{id}/logs/stats-yaml/raw returns full plain text content"""
+    create_resp = client.post(
+        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
+    )
+    task_id = create_resp.json()["task_id"]
+
+    stats_yaml = (
+        config.workspace_path / "repos" / "serde-1.0.0" / "testgen" / "stats.yaml"
+    )
+    stats_yaml.parent.mkdir(parents=True, exist_ok=True)
+    stats_content = "case_count: 3\npoc_count: 1\nstatus: completed"
+    stats_yaml.write_text(stats_content)
+
+    response = client.get(f"/api/tasks/{task_id}/logs/stats-yaml/raw")
+
+    assert response.status_code == 200
+    assert response.text == stats_content
+
+
 def test_generic_log_endpoint_file_missing(client):
     """GET /api/tasks/{id}/logs/{name} returns 404 when file doesn't exist"""
     create_resp = client.post(
@@ -418,8 +459,21 @@ def test_generic_log_endpoint_file_missing(client):
     assert "not found" in response.json()["detail"].lower()
 
 
+def test_generic_log_endpoint_stats_yaml_file_missing_uses_unified_error(client):
+    """stats-yaml file-not-found returns unified 'Log file not found' message"""
+    create_resp = client.post(
+        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
+    )
+    task_id = create_resp.json()["task_id"]
+
+    response = client.get(f"/api/tasks/{task_id}/logs/stats-yaml")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Log file not found"
+
+
 def test_log_path_resolvers_all_types(config):
-    """LOG_PATH_RESOLVERS produces correct paths for all 4 known log types"""
+    """LOG_PATH_RESOLVERS produces correct paths for all 5 known log types"""
     from app.main import LOG_PATH_RESOLVERS
 
     task = type(
@@ -450,6 +504,9 @@ def test_log_path_resolvers_all_types(config):
 
     miri_path = LOG_PATH_RESOLVERS["miri_report"](task, config)
     assert miri_path == Path(task.workspace_path) / "testgen" / "miri_report.txt"
+
+    stats_yaml_path = LOG_PATH_RESOLVERS["stats-yaml"](task, config)
+    assert stats_yaml_path == Path(task.workspace_path) / "testgen" / "stats.yaml"
 
 
 def test_miri_report_file_missing_uses_unified_error(client):
