@@ -34,7 +34,7 @@ async def test_scheduler_starts_pending_tasks(scheduler, db):
     db.create_task("tokio", "1.0.0", "/path2", "/log3", "/log4")
 
     with patch.object(
-        scheduler.executor, "execute_task", new_callable=AsyncMock
+        scheduler, "_execute_and_cleanup", new_callable=AsyncMock
     ) as mock_exec:
         # Run one scheduling cycle
         await scheduler.schedule_tasks()

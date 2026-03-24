@@ -207,6 +207,16 @@ class TaskExecutor:
                 # Use traditional execution with systemd/resource
                 await self._execute_with_limiter(task_id, workspace_dir, task)
 
+        except asyncio.CancelledError:
+            task_logger.info(f"Task #{task_id} cancelled (server shutting down)")
+            self.db.update_task_status(
+                task_id,
+                TaskStatus.FAILED,
+                finished_at=datetime.now(),
+                error_message="Task interrupted by server shutdown",
+                message="Task interrupted by server shutdown",
+            )
+            raise  # Re-raise to propagate cancellation
         except Exception as e:
             task_logger.error(f"Task failed with exception: {e}")
             self.db.update_task_status(

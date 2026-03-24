@@ -20,6 +20,8 @@ class TaskScheduler:
         self.db = database
         self.executor = TaskExecutor(config, database)
         self.running_tasks: Set[int] = set()
+        self._running_task_futures: Set[asyncio.Task] = set()
+        self._shutdown_event = asyncio.Event()
 
     def get_running_count(self) -> int:
         """Get count of currently running tasks"""
@@ -39,7 +41,31 @@ class TaskScheduler:
 
         # Start tasks up to available capacity
         for task in pending[:available_slots]:
-            asyncio.create_task(self.executor.execute_task(task.id))
+            task_future = asyncio.create_task(self._execute_and_cleanup(task.id))
+            self._running_task_futures.add(task_future)
+            task_future.add_done_callback(self._running_task_futures.discard)
+
+    async def _execute_and_cleanup(self, task_id: int):
+        """Execute task and clean up tracking when done"""
+        try:
+            await self.executor.execute_task(task_id)
+        except asyncio.CancelledError:
+            logger.info(f"Task {task_id} execution was cancelled during shutdown")
+            raise
+
+    def _cleanup_remaining_tasks(self):
+        """Mark any running tasks as failed during shutdown"""
+        running_tasks = self.db.get_tasks_by_status(TaskStatus.RUNNING)
+        for task in running_tasks:
+            self.db.update_task_status(
+                task.id,
+                TaskStatus.FAILED,
+                finished_at=datetime.now(),
+                error_message="Task interrupted by server shutdown",
+            )
+            logger.info(
+                f"Task {task.id} ({task.crate_name}) marked as FAILED due to shutdown"
+            )
 
     async def cancel_task(self, task_id: int):
         """Cancel a running task"""
@@ -60,9 +86,40 @@ class TaskScheduler:
 
     async def run(self):
         """Main scheduler loop"""
-        while True:
-            await self.schedule_tasks()
-            await asyncio.sleep(5)  # Check every 5 seconds
+        try:
+            while not self._shutdown_event.is_set():
+                await self.schedule_tasks()
+                try:
+                    await asyncio.wait_for(self._shutdown_event.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    pass  # Normal check interval
+        except asyncio.CancelledError:
+            logger.info(
+                "Scheduler received shutdown signal, initiating graceful shutdown..."
+            )
+            self._shutdown_event.set()
+            # Cancel all running task futures
+            if self._running_task_futures:
+                logger.info(
+                    f"Cancelling {len(self._running_task_futures)} running task(s)..."
+                )
+                for task_future in list(self._running_task_futures):
+                    task_future.cancel()
+                # Wait for tasks to complete cancellation (with timeout)
+                if self._running_task_futures:
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.gather(
+                                *self._running_task_futures, return_exceptions=True
+                            ),
+                            timeout=10.0,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning("Some tasks did not terminate within timeout")
+            # Mark remaining running tasks as failed
+            self._cleanup_remaining_tasks()
+            logger.info("Scheduler shutdown complete")
+            raise  # Re-raise CancelledError to properly propagate
 
     def recover_orphaned_tasks(self):
         """Recover orphaned RUNNING tasks on server restart.

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import shutil
 from pathlib import Path
@@ -253,10 +254,26 @@ class DockerRunner(Runner):
 
             # Use asyncio.wait_for to enforce execution time limit
             try:
-                wait_result = await asyncio.wait_for(
-                    wait_future, timeout=timeout_seconds
+                # Wrap wait_future to handle cancellation properly
+                wait_task = asyncio.create_task(
+                    asyncio.wait_for(wait_future, timeout=timeout_seconds)
                 )
+                wait_result = await wait_task
                 exit_code = wait_result.get("StatusCode", -1)
+            except asyncio.CancelledError:
+                # Server is shutting down - stop the container
+                logger = logging.getLogger(__name__)
+                logger.info(
+                    "Task cancelled due to server shutdown, stopping container..."
+                )
+                try:
+                    container.stop(timeout=5)
+                except Exception:
+                    try:
+                        container.kill()
+                    except Exception:
+                        pass
+                raise  # Re-raise to propagate cancellation
             except asyncio.TimeoutError:
                 # Execution time limit reached - stop the container
                 try:

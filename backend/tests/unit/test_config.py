@@ -102,15 +102,13 @@ pull_policy = "always"
 def test_config_loads_docker_mounts(tmp_path):
     """Test that docker mounts are loaded correctly"""
     config_file = tmp_path / "config.toml"
-    config_file.write_text(
-        """
+    config_file.write_text("""
 [execution]
 execution_mode = "docker"
 
 [execution.docker]
 mounts = ["/host/data:/container/data", "/var/log:/logs:ro"]
-"""
-    )
+""")
 
     config = Config.from_file(str(config_file))
 
@@ -123,15 +121,13 @@ mounts = ["/host/data:/container/data", "/var/log:/logs:ro"]
 def test_config_rejects_invalid_docker_mount_format(tmp_path):
     """Test that invalid mount format is rejected"""
     config_file = tmp_path / "config.toml"
-    config_file.write_text(
-        """
+    config_file.write_text("""
 [execution]
 execution_mode = "docker"
 
 [execution.docker]
 mounts = ["/host-only"]
-"""
-    )
+""")
 
     with pytest.raises(ValueError, match="Invalid docker mount format"):
         Config.from_file(str(config_file))
@@ -140,15 +136,13 @@ mounts = ["/host-only"]
 def test_config_rejects_non_list_docker_mounts(tmp_path):
     """Test that non-list docker mounts value is rejected."""
     config_file = tmp_path / "config.toml"
-    config_file.write_text(
-        """
+    config_file.write_text("""
 [execution]
 execution_mode = "docker"
 
 [execution.docker]
 mounts = "/host/data:/container/data"
-"""
-    )
+""")
 
     with pytest.raises(ValueError, match="Invalid docker mounts: expected a list"):
         Config.from_file(str(config_file))
@@ -157,15 +151,13 @@ mounts = "/host/data:/container/data"
 def test_config_rejects_relative_docker_mount_host_path(tmp_path):
     """Test that relative host path in mount is rejected"""
     config_file = tmp_path / "config.toml"
-    config_file.write_text(
-        """
+    config_file.write_text("""
 [execution]
 execution_mode = "docker"
 
 [execution.docker]
 mounts = ["relative/path:/container/data"]
-"""
-    )
+""")
 
     with pytest.raises(ValueError, match="Docker mount host path must be absolute"):
         Config.from_file(str(config_file))
@@ -174,15 +166,13 @@ mounts = ["relative/path:/container/data"]
 def test_config_rejects_relative_docker_mount_container_path(tmp_path):
     """Test that relative container path in mount is rejected"""
     config_file = tmp_path / "config.toml"
-    config_file.write_text(
-        """
+    config_file.write_text("""
 [execution]
 execution_mode = "docker"
 
 [execution.docker]
 mounts = ["/host/data:relative/container"]
-"""
-    )
+""")
 
     with pytest.raises(
         ValueError, match="Docker mount container path must be absolute"
@@ -193,15 +183,13 @@ mounts = ["/host/data:relative/container"]
 def test_config_rejects_empty_mode_in_docker_mount(tmp_path):
     """Test that empty mode in 3-part mount is rejected."""
     config_file = tmp_path / "config.toml"
-    config_file.write_text(
-        """
+    config_file.write_text("""
 [execution]
 execution_mode = "docker"
 
 [execution.docker]
 mounts = ["/host/data:/container/data:"]
-"""
-    )
+""")
 
     with pytest.raises(ValueError, match="Invalid docker mount mode"):
         Config.from_file(str(config_file))
@@ -210,15 +198,13 @@ mounts = ["/host/data:/container/data:"]
 def test_config_rejects_invalid_docker_mount_mode(tmp_path):
     """Test that unsupported docker mount mode is rejected."""
     config_file = tmp_path / "config.toml"
-    config_file.write_text(
-        """
+    config_file.write_text("""
 [execution]
 execution_mode = "docker"
 
 [execution.docker]
 mounts = ["/host/data:/container/data:banana"]
-"""
-    )
+""")
 
     with pytest.raises(ValueError, match="Invalid docker mount mode"):
         Config.from_file(str(config_file))
@@ -227,15 +213,13 @@ mounts = ["/host/data:/container/data:banana"]
 def test_config_accepts_docker_mount_mode_with_selinux_option(tmp_path):
     """Test that Docker-compatible SELinux mount mode is accepted."""
     config_file = tmp_path / "config.toml"
-    config_file.write_text(
-        """
+    config_file.write_text("""
 [execution]
 execution_mode = "docker"
 
 [execution.docker]
 mounts = ["/host/data:/container/data:ro,z"]
-"""
-    )
+""")
 
     config = Config.from_file(str(config_file))
 
@@ -245,15 +229,13 @@ mounts = ["/host/data:/container/data:ro,z"]
 def test_config_rejects_conflicting_read_only_and_read_write_mount_modes(tmp_path):
     """Test that conflicting ro,rw mode combination is rejected."""
     config_file = tmp_path / "config.toml"
-    config_file.write_text(
-        """
+    config_file.write_text("""
 [execution]
 execution_mode = "docker"
 
 [execution.docker]
 mounts = ["/host/data:/container/data:ro,rw"]
-"""
-    )
+""")
 
     with pytest.raises(ValueError, match="conflicting options"):
         Config.from_file(str(config_file))
@@ -262,15 +244,13 @@ mounts = ["/host/data:/container/data:ro,rw"]
 def test_config_rejects_conflicting_selinux_mount_modes(tmp_path):
     """Test that conflicting z,Z SELinux mode combination is rejected."""
     config_file = tmp_path / "config.toml"
-    config_file.write_text(
-        """
+    config_file.write_text("""
 [execution]
 execution_mode = "docker"
 
 [execution.docker]
 mounts = ["/host/data:/container/data:z,Z"]
-"""
-    )
+""")
 
     with pytest.raises(ValueError, match="conflicting options"):
         Config.from_file(str(config_file))

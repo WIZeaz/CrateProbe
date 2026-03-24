@@ -85,7 +85,11 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         yield
         # Shutdown
         scheduler_task.cancel()
-        await db.close()
+        try:
+            await scheduler_task
+        except asyncio.CancelledError:
+            pass
+        db.close()
 
     app = FastAPI(
         title="Experiment Platform",
