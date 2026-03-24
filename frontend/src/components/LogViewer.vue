@@ -19,13 +19,15 @@ const logs = ref({
   runner: '',
   stdout: '',
   stderr: '',
-  miri_report: ''
+  miri_report: '',
+  stats: ''
 })
 const logHtml = ref({
   runner: '',
   stdout: '',
   stderr: '',
-  miri_report: ''
+  miri_report: '',
+  stats: ''
 })
 
 // Function to convert ANSI to HTML
@@ -39,13 +41,15 @@ const loading = ref({
   runner: false,
   stdout: false,
   stderr: false,
-  miri_report: false
+  miri_report: false,
+  stats: false
 })
 const fetched = ref({
   runner: false,
   stdout: false,
   stderr: false,
-  miri_report: false
+  miri_report: false,
+  stats: false
 })
 const logContainer = ref(null)
 let refreshInterval = null
@@ -55,6 +59,7 @@ const logFiles = [
   { id: 'stdout', label: 'stdout', icon: '📄' },
   { id: 'stderr', label: 'stderr', icon: '📄' },
   { id: 'miri_report', label: 'miri_report', icon: '📄' },
+  { id: 'stats', label: 'stats', icon: '📊' },
 ]
 
 async function loadLog(logType, isRefresh = false) {
@@ -123,7 +128,7 @@ async function downloadLog() {
     const url = window.URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    const ext = activeLog.value === 'miri_report' ? 'txt' : 'log'
+    const ext = activeLog.value === 'miri_report' ? 'txt' : activeLog.value === 'stats' ? 'yaml' : 'log'
     a.download = `task-${props.taskId}-${activeLog.value}.${ext}`
     document.body.appendChild(a)
     a.click()
