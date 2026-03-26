@@ -53,7 +53,14 @@ class TaskExecutor:
 
         # If workspace directory already exists (e.g., from retry), clean it first
         if workspace_dir.exists():
-            shutil.rmtree(workspace_dir)
+            try:
+                shutil.rmtree(workspace_dir)
+            except PermissionError:
+                if self.execution_mode == "docker" and self.docker_runner is not None:
+                    self.docker_runner.ensure_workspace_ownership(workspace_dir)
+                    shutil.rmtree(workspace_dir)
+                else:
+                    raise
 
         workspace_dir.mkdir(parents=True, exist_ok=True)
 

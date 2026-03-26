@@ -153,6 +153,10 @@ class DockerRunner(Runner):
             stderr=False,
         )
 
+    def ensure_workspace_ownership(self, workspace_dir: Path) -> None:
+        """Normalize bind-mounted workspace ownership back to host user."""
+        self._ensure_workspace_ownership(workspace_dir)
+
     async def run(
         self,
         command: List[str],

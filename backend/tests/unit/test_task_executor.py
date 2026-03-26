@@ -140,6 +140,48 @@ async def test_prepare_workspace_cleans_existing_directory(executor, config):
 
 
 @pytest.mark.asyncio
+async def test_prepare_workspace_recovers_permission_error_in_docker_mode(
+    executor, config
+):
+    """Retry cleanup should recover from permission errors in docker mode."""
+    task_id = 1
+    crate_name = "serde"
+    version = "1.0.0"
+
+    workspace_dir = config.workspace_path / "repos" / f"{crate_name}-{version}"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    executor.execution_mode = "docker"
+    executor.docker_runner = Mock()
+
+    with patch("app.services.task_executor.shutil.rmtree") as mock_rmtree:
+        workspace_rmtree_calls = 0
+
+        def rmtree_side_effect(path, *args, **kwargs):
+            nonlocal workspace_rmtree_calls
+            if Path(path) == workspace_dir:
+                workspace_rmtree_calls += 1
+                if workspace_rmtree_calls == 1:
+                    raise PermissionError("stats.yaml")
+
+        mock_rmtree.side_effect = rmtree_side_effect
+
+        with patch.object(
+            executor.crates_api, "download_crate", new_callable=AsyncMock
+        ):
+            with patch("tarfile.open") as mock_tarfile:
+                mock_tar = MagicMock()
+                mock_tarfile.return_value.__enter__.return_value = mock_tar
+
+                await executor.prepare_workspace(task_id, crate_name, version)
+
+    executor.docker_runner.ensure_workspace_ownership.assert_called_once_with(
+        workspace_dir
+    )
+    assert workspace_rmtree_calls == 2
+
+
+@pytest.mark.asyncio
 async def test_count_generated_items(executor, tmp_path):
     """Test counting testgen output directories"""
     testgen_dir = tmp_path / "testgen"
