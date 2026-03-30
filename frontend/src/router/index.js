@@ -11,6 +11,11 @@ const routes = [
     component: () => import('../views/Dashboard.vue')
   },
   {
+    path: '/queue',
+    name: 'TaskQueue',
+    component: () => import('../views/TaskQueue.vue')
+  },
+  {
     path: '/tasks',
     name: 'TaskList',
     component: () => import('../views/TaskList.vue')
