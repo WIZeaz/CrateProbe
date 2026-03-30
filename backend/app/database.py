@@ -31,6 +31,7 @@ class TaskRecord:
     message: Optional[str] = None
     memory_used_mb: Optional[float] = None
     compile_failed: Optional[int] = None
+    priority: Optional[int] = None
 
 
 class Database:
@@ -85,6 +86,12 @@ class Database:
             cursor.execute("ALTER TABLE tasks ADD COLUMN message TEXT")
         if "compile_failed" not in columns:
             cursor.execute("ALTER TABLE tasks ADD COLUMN compile_failed INTEGER")
+        if "priority" not in columns:
+            cursor.execute("ALTER TABLE tasks ADD COLUMN priority INTEGER DEFAULT 0")
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_pending_priority
+                ON tasks(status, priority DESC, created_at ASC)
+            """)
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_created_at ON tasks(created_at DESC)
         """)
@@ -264,6 +271,15 @@ class Database:
         )
         self.conn.commit()
 
+    def update_task_priority(self, task_id: int, priority: int):
+        """Update task priority."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "UPDATE tasks SET priority = ? WHERE id = ?",
+            (priority, task_id)
+        )
+        self.conn.commit()
+
     def update_task_pid(self, task_id: int, pid: int):
         """Update task process ID
 
@@ -322,6 +338,16 @@ class Database:
 
         return [self._row_to_task_record(row) for row in rows]
 
+    def get_pending_tasks_ordered(self) -> List[TaskRecord]:
+        """Get pending tasks ordered by priority (high first), then creation time."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM tasks WHERE status = ? ORDER BY priority DESC, created_at ASC",
+            (TaskStatus.PENDING.value,)
+        )
+        rows = cursor.fetchall()
+        return [self._row_to_task_record(row) for row in rows]
+
     def _row_to_task_record(self, row: sqlite3.Row) -> TaskRecord:
         """Convert a database row to a TaskRecord
 
@@ -354,6 +380,7 @@ class Database:
             message=row["message"],
             memory_used_mb=row["memory_used_mb"],
             compile_failed=row["compile_failed"],
+            priority=row["priority"],
         )
 
     def _parse_datetime(self, dt_str: str) -> datetime:
