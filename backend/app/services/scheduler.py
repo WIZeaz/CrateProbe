@@ -37,7 +37,7 @@ class TaskScheduler:
             return
 
         # Get pending tasks
-        pending = self.db.get_tasks_by_status(TaskStatus.PENDING)
+        pending = self.db.get_pending_tasks_ordered()
 
         # Start tasks up to available capacity
         for task in pending[:available_slots]:
