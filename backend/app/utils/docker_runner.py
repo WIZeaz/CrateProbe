@@ -149,8 +149,8 @@ class DockerRunner(Runner):
             working_dir="/workspace",
             user="0:0",
             remove=True,
-            stdout=False,
-            stderr=False,
+            stdout=True,
+            stderr=True,
         )
 
     def ensure_workspace_ownership(self, workspace_dir: Path) -> None:

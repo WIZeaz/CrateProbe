@@ -53,6 +53,7 @@ class TaskExecutor:
 
         # If workspace directory already exists (e.g., from retry), clean it first
         if workspace_dir.exists():
+            task_logger.info("removing existing directory...")
             try:
                 shutil.rmtree(workspace_dir)
             except PermissionError:
@@ -73,6 +74,7 @@ class TaskExecutor:
         if crate_file.exists():
             crate_file.unlink()
 
+        task_logger.info(f"Downloading crate {crate_name} {version}...")
         await self.crates_api.download_crate(crate_name, version, str(crate_file))
         task_logger.info(f"[{task_id}] Crate downloaded successfully")
 
@@ -146,7 +148,6 @@ class TaskExecutor:
             )
 
             # Prepare workspace
-            task_logger.info(f"Downloading crate {task.crate_name} {task.version}...")
             workspace_dir = await self.prepare_workspace(
                 task_id, task.crate_name, task.version
             )
