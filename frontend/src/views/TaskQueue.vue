@@ -1,8 +1,10 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import api from '../services/api'
 import websocket from '../services/websocket'
 
+const router = useRouter()
 const runningTasks = ref([])
 const pendingTasks = ref([])
 const selectedRunningIds = ref(new Set())
@@ -135,6 +137,10 @@ function getQueuePosition(task, index) {
   return `${index + 1}${getOrdinalSuffix(index + 1)}`
 }
 
+function viewTask(taskId) {
+  router.push(`/tasks/${taskId}`)
+}
+
 onMounted(() => {
   fetchQueue()
   websocket.on('task_update', fetchQueue)
@@ -215,8 +221,8 @@ onUnmounted(() => {
               ▶ Running Tasks ({{ runningTasks.length }})
             </td>
           </tr>
-          <tr v-for="task in runningTasks" :key="task.id" class="hover:bg-gray-50 transition-colors">
-            <td class="px-4 py-3 whitespace-nowrap">
+          <tr v-for="task in runningTasks" :key="task.id" class="hover:bg-gray-50 transition-colors cursor-pointer" @click="viewTask(task.id)">
+            <td class="px-4 py-3 whitespace-nowrap" @click.stop>
               <input
                 type="checkbox"
                 :checked="selectedRunningIds.has(task.id)"
@@ -239,8 +245,8 @@ onUnmounted(() => {
               ⏳ Pending Queue ({{ pendingTasks.length }})
             </td>
           </tr>
-          <tr v-for="(task, idx) in pendingTasks" :key="task.id" class="hover:bg-gray-50 transition-colors" :class="{ 'bg-yellow-50': task.priority > 0 }">
-            <td class="px-4 py-3 whitespace-nowrap">
+          <tr v-for="(task, idx) in pendingTasks" :key="task.id" class="hover:bg-gray-50 transition-colors cursor-pointer" :class="{ 'bg-yellow-50': task.priority > 0 }" @click="viewTask(task.id)">
+            <td class="px-4 py-3 whitespace-nowrap" @click.stop>
               <input
                 type="checkbox"
                 :checked="selectedPendingIds.has(task.id)"
