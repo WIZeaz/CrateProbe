@@ -133,7 +133,7 @@ function getOrdinalSuffix(n) {
 }
 
 function getQueuePosition(task, index) {
-  if (task.priority > 0) return '⭐ 置顶'
+  if (task.priority > 0) return '⭐ Pinned'
   return `${index + 1}${getOrdinalSuffix(index + 1)}`
 }
 
@@ -165,7 +165,7 @@ onUnmounted(() => {
           @click="handlePinSelected"
           class="px-4 py-2 text-sm font-medium text-white bg-orange-500 rounded-lg hover:bg-orange-600 transition-colors"
         >
-          置顶 Selected ({{ pendingSelectedCount }})
+          Pin Selected ({{ pendingSelectedCount }})
         </button>
         <button
           v-if="runningSelectedCount > 0"
