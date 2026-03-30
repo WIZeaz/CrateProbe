@@ -56,6 +56,21 @@ export default {
     return response.data
   },
 
+  async batchSetPriority(taskIds, priority) {
+    const response = await api.post('/tasks/batch-priority', { task_ids: taskIds, priority })
+    return response.data
+  },
+
+  async batchCancel(taskIds) {
+    const response = await api.post('/tasks/batch-cancel', { task_ids: taskIds })
+    return response.data
+  },
+
+  async getQueue() {
+    const response = await api.get('/queue')
+    return response.data
+  },
+
   async getTaskRealtimeStats(taskId) {
     const response = await api.get(`/tasks/${taskId}/stats`)
     return response.data
