@@ -48,6 +48,12 @@ class TaskDetailResponse(BaseModel):
     error_message: Optional[str]
     message: Optional[str]
     compile_failed: Optional[int]
+    priority: Optional[int]
+
+
+class BatchPriorityRequest(BaseModel):
+    task_ids: List[int]
+    priority: int
 
 
 LOG_PATH_RESOLVERS = {
@@ -288,6 +294,46 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
         return results
 
+    @app.post("/api/tasks/batch-priority")
+    async def batch_set_priority(request: BatchPriorityRequest):
+        """Batch set priority on pending tasks. Skips non-pending tasks."""
+        results = {"updated": [], "skipped": [], "not_found": []}
+        for task_id in request.task_ids:
+            task = db.get_task(task_id)
+            if not task:
+                results["not_found"].append(task_id)
+            elif task.status != TaskStatus.PENDING:
+                results["skipped"].append(task_id)
+            else:
+                db.update_task_priority(task_id, request.priority)
+                results["updated"].append(task_id)
+        return results
+
+    @app.post("/api/tasks/batch-cancel")
+    async def batch_cancel_tasks(request: BatchTaskRequest):
+        """Batch cancel running tasks."""
+        results = {"cancelled": [], "skipped": [], "not_found": []}
+        for task_id in request.task_ids:
+            task = db.get_task(task_id)
+            if not task:
+                results["not_found"].append(task_id)
+            elif task.status != TaskStatus.RUNNING:
+                results["skipped"].append(task_id)
+            else:
+                await scheduler.cancel_task(task_id)
+                results["cancelled"].append(task_id)
+        return results
+
+    @app.get("/api/queue")
+    async def get_queue():
+        """Get queue state."""
+        running = db.get_tasks_by_status(TaskStatus.RUNNING)
+        pending = db.get_pending_tasks_ordered()
+        return {
+            "running": [_task_to_dict(t) for t in running],
+            "pending": [_task_to_dict(t) for t in pending]
+        }
+
     @app.get("/api/dashboard/stats")
     async def get_dashboard_stats():
         """Get task statistics for dashboard"""
@@ -445,6 +491,7 @@ def _task_to_dict(task: TaskRecord) -> dict:
         "error_message": task.error_message,
         "message": task.message,
         "compile_failed": task.compile_failed,
+        "priority": task.priority,
     }
 
 
@@ -464,6 +511,7 @@ def _task_to_response(task: TaskRecord) -> TaskDetailResponse:
         error_message=task.error_message,
         message=task.message,
         compile_failed=task.compile_failed,
+        priority=task.priority,
     )
 
 
