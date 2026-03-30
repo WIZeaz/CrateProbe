@@ -36,6 +36,9 @@ class TaskScheduler:
         if available_slots <= 0:
             return
 
+        # Check for and fix any stuck running tasks before scheduling new ones
+        self._check_and_fix_stuck_tasks()
+
         # Get pending tasks
         pending = self.db.get_pending_tasks_ordered()
 
@@ -163,3 +166,59 @@ class TaskScheduler:
             return True
         except (OSError, ProcessLookupError):
             return False
+
+    def _check_and_fix_stuck_tasks(self):
+        """Check for tasks stuck in RUNNING state and fix them.
+
+        A task is considered stuck if:
+        1. It has a PID but the process no longer exists
+        2. It has exceeded max_runtime_seconds by a significant margin
+        """
+        import time
+
+        running_tasks = self.db.get_tasks_by_status(TaskStatus.RUNNING)
+        if not running_tasks:
+            return
+
+        max_runtime = getattr(self.config, "max_runtime_seconds", 86400)
+        # Allow 10% grace period + 60 seconds buffer
+        grace_period = max_runtime + 60
+        now = datetime.now()
+
+        for task in running_tasks:
+            # Check if process still exists
+            if task.pid and not self.is_task_actually_running(task.id):
+                logger.warning(
+                    f"Task {task.id} ({task.crate_name}) has PID {task.pid} "
+                    f"but process is not running. Marking as FAILED."
+                )
+                self.db.update_task_status(
+                    task.id,
+                    TaskStatus.FAILED,
+                    finished_at=now,
+                    error_message="Process terminated unexpectedly (process not found)",
+                )
+                continue
+
+            # Check if task has exceeded max runtime
+            if task.started_at:
+                elapsed = (now - task.started_at).total_seconds()
+                if elapsed > grace_period:
+                    logger.warning(
+                        f"Task {task.id} ({task.crate_name}) has been running for "
+                        f"{elapsed:.0f}s, exceeding limit of {grace_period}s. "
+                        f"Marking as TIMEOUT."
+                    )
+                    # Try to kill the process if it exists
+                    if task.pid:
+                        try:
+                            os.kill(task.pid, signal.SIGKILL)
+                        except (OSError, ProcessLookupError):
+                            pass
+                    self.db.update_task_status(
+                        task.id,
+                        TaskStatus.TIMEOUT,
+                        finished_at=now,
+                        exit_code=-1,
+                        message=f"Task exceeded maximum runtime of {max_runtime}s",
+                    )

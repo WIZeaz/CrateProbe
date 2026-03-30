@@ -285,92 +285,127 @@ class TaskExecutor:
         stdout_log = open(task.stdout_log, "w")
         stderr_log = open(task.stderr_log, "w")
 
-        # Start process
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=stdout_log,
-            stderr=stderr_log,
-            cwd=workspace_dir,
-            preexec_fn=(
-                self.limiter.apply_resource_limits
-                if self.limiter.get_limit_method().value == "resource"
-                else None
-            ),
-        )
-        task_logger.info(f"Process started with PID: {process.pid}")
-
-        # Store PID
-        self.db.update_task_pid(task_id, process.pid)
-
-        # Wait for completion with periodic stats updates
-        await self._wait_with_stats_updates(process, task_id, workspace_dir)
-
-        stdout_log.close()
-        stderr_log.close()
-
-        task_logger.info(f"Process exited with code: {process.returncode}")
-
-        # Final count of generated items
-        case_count, poc_count = self.count_generated_items(workspace_dir)
-        self.db.update_task_counts(task_id, case_count, poc_count)
-        compile_failed = self.get_compile_failed_count(workspace_dir)
-        self.db.update_task_compile_failed(task_id, compile_failed)
-
-        # Update final status based on exit code
-        if process.returncode == 0:
-            self.db.update_task_status(
-                task_id,
-                TaskStatus.COMPLETED,
-                finished_at=datetime.now(),
-                exit_code=process.returncode,
-                message="Completed successfully",
+        try:
+            # Start process
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=stdout_log,
+                stderr=stderr_log,
+                cwd=workspace_dir,
+                preexec_fn=(
+                    self.limiter.apply_resource_limits
+                    if self.limiter.get_limit_method().value == "resource"
+                    else None
+                ),
             )
-        elif process.returncode in (-9, 137):
-            # SIGKILL (from OOM killer or systemd MemoryMax)
-            self.db.update_task_status(
-                task_id,
-                TaskStatus.OOM,
-                finished_at=datetime.now(),
-                exit_code=process.returncode,
-                message="Process killed by OOM killer (out of memory)",
-            )
-        elif process.returncode in (-24, -14):
-            # SIGXCPU (CPU time limit) or SIGALRM (wall-clock timeout)
-            self.db.update_task_status(
-                task_id,
-                TaskStatus.TIMEOUT,
-                finished_at=datetime.now(),
-                exit_code=process.returncode,
-                message=f"Execution timed out after {self.config.max_runtime_seconds} seconds",
-            )
-        else:
-            self.db.update_task_status(
-                task_id,
-                TaskStatus.FAILED,
-                finished_at=datetime.now(),
-                exit_code=process.returncode,
-                message=f"Process exited with code {process.returncode}",
-            )
+            task_logger.info(f"Process started with PID: {process.pid}")
+
+            # Store PID
+            self.db.update_task_pid(task_id, process.pid)
+
+            # Wait for completion with periodic stats updates
+            await self._wait_with_stats_updates(process, task_id, workspace_dir)
+
+            task_logger.info(f"Process exited with code: {process.returncode}")
+
+            # Final count of generated items
+            case_count, poc_count = self.count_generated_items(workspace_dir)
+            self.db.update_task_counts(task_id, case_count, poc_count)
+            compile_failed = self.get_compile_failed_count(workspace_dir)
+            self.db.update_task_compile_failed(task_id, compile_failed)
+
+            # Update final status based on exit code
+            if process.returncode == 0:
+                self.db.update_task_status(
+                    task_id,
+                    TaskStatus.COMPLETED,
+                    finished_at=datetime.now(),
+                    exit_code=process.returncode,
+                    message="Completed successfully",
+                )
+            elif process.returncode in (-9, 137):
+                # SIGKILL (from OOM killer or systemd MemoryMax)
+                self.db.update_task_status(
+                    task_id,
+                    TaskStatus.OOM,
+                    finished_at=datetime.now(),
+                    exit_code=process.returncode,
+                    message="Process killed by OOM killer (out of memory)",
+                )
+            elif process.returncode in (-24, -14):
+                # SIGXCPU (CPU time limit) or SIGALRM (wall-clock timeout)
+                self.db.update_task_status(
+                    task_id,
+                    TaskStatus.TIMEOUT,
+                    finished_at=datetime.now(),
+                    exit_code=process.returncode,
+                    message=f"Execution timed out after {self.config.max_runtime_seconds} seconds",
+                )
+            else:
+                self.db.update_task_status(
+                    task_id,
+                    TaskStatus.FAILED,
+                    finished_at=datetime.now(),
+                    exit_code=process.returncode,
+                    message=f"Process exited with code {process.returncode}",
+                )
+        finally:
+            stdout_log.close()
+            stderr_log.close()
 
     async def _wait_with_stats_updates(
         self, process, task_id: int, workspace_dir: Path
     ):
-        """Wait for process completion while periodically updating stats in database"""
+        """Wait for process completion while periodically updating stats in database.
+
+        Includes a total runtime limit to prevent tasks from getting stuck
+        in RUNNING state indefinitely.
+        """
+        import logging
+        import time
+
+        task_logger = logging.getLogger(f"task.{task_id}")
         update_interval = 10  # Update every 10 seconds
+        max_runtime = getattr(self.config, "max_runtime_seconds", 86400)  # Default 24h
+        start_time = time.monotonic()
 
         while True:
+            elapsed = time.monotonic() - start_time
+
+            # Check if we've exceeded the maximum runtime
+            if elapsed > max_runtime:
+                task_logger.warning(
+                    f"Task exceeded max runtime of {max_runtime}s, terminating"
+                )
+                try:
+                    process.kill()
+                    await asyncio.wait_for(process.wait(), timeout=10)
+                except Exception:
+                    pass
+                # Status will be updated as TIMEOUT by the caller
+                return
+
             try:
                 # Wait for process with timeout
-                await asyncio.wait_for(process.wait(), timeout=update_interval)
+                remaining = min(update_interval, max_runtime - elapsed + 1)
+                if remaining <= 0:
+                    remaining = 1
+                await asyncio.wait_for(process.wait(), timeout=remaining)
                 # Process completed
-                break
+                return
             except asyncio.TimeoutError:
                 # Process still running, update stats
-                case_count, poc_count = self.count_generated_items(workspace_dir)
-                self.db.update_task_counts(task_id, case_count, poc_count)
-                compile_failed = self.get_compile_failed_count(workspace_dir)
-                self.db.update_task_compile_failed(task_id, compile_failed)
+                try:
+                    case_count, poc_count = self.count_generated_items(workspace_dir)
+                    self.db.update_task_counts(task_id, case_count, poc_count)
+                    compile_failed = self.get_compile_failed_count(workspace_dir)
+                    self.db.update_task_compile_failed(task_id, compile_failed)
+                except Exception as e:
+                    task_logger.warning(f"Failed to update stats: {e}")
                 # Continue waiting
+            except Exception as e:
+                task_logger.error(f"Unexpected error waiting for process: {e}")
+                raise
 
     def get_compile_failed_count(self, workspace_dir: Path) -> int | None:
         """Read CompileFailed count from testgen/stats.yaml if available."""
