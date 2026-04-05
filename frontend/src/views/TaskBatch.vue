@@ -18,17 +18,24 @@ function parseInput(text) {
   const errors = []
 
   lines.forEach((line, index) => {
-    const parts = line.split(',').map(p => p.trim())
+    // Try comma-separated format first: crate_name, version
+    let parts = line.split(',').map(p => p.trim())
+
+    // If no comma found, try space-separated format: crate_name version
+    if (parts.length === 1) {
+      // Split by whitespace (handles multiple spaces)
+      parts = line.split(/\s+/).filter(p => p.length > 0)
+    }
 
     if (parts.length === 1) {
       // Format: crate_name
       parsed.push({ crate_name: parts[0], version: null })
     } else if (parts.length === 2) {
-      // Format: crate_name, version
+      // Format: crate_name, version or crate_name version
       parsed.push({ crate_name: parts[0], version: parts[1] })
     } else {
       // Invalid format
-      errors.push({ line: index + 1, text: line, reason: 'Invalid format (expected: crate_name or crate_name, version)' })
+      errors.push({ line: index + 1, text: line, reason: 'Invalid format (expected: crate_name or crate_name, version or crate_name version)' })
     }
   })
 
@@ -96,6 +103,7 @@ async function createBatchTasks() {
         <li>Enter one crate per line</li>
         <li>Format 1: <code class="bg-blue-100 px-1 rounded">crate_name</code> (uses latest version)</li>
         <li>Format 2: <code class="bg-blue-100 px-1 rounded">crate_name, version</code> (specific version)</li>
+        <li>Format 3: <code class="bg-blue-100 px-1 rounded">crate_name version</code> (specific version, space-separated)</li>
         <li>Empty lines are ignored</li>
       </ul>
       <div class="text-xs text-blue-700 bg-blue-100 rounded p-2 font-mono">
@@ -103,7 +111,8 @@ async function createBatchTasks() {
         serde<br>
         tokio, 1.0.0<br>
         regex<br>
-        actix-web, 4.4.0
+        actix-web 4.4.0<br>
+        rayon, 1.5.0
       </div>
     </div>
 
@@ -122,7 +131,7 @@ async function createBatchTasks() {
           id="crate_list"
           v-model="textarea"
           rows="12"
-          placeholder="serde&#10;tokio, 1.0.0&#10;regex&#10;actix-web, 4.4.0"
+          placeholder="serde&#10;tokio, 1.0.0&#10;regex&#10;actix-web 4.4.0"
           class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm"
           :disabled="loading"
         ></textarea>
