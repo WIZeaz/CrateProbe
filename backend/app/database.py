@@ -159,6 +159,30 @@ class Database:
 
         return self._row_to_task_record(row)
 
+    def get_task_by_crate_and_version(
+        self, crate_name: str, version: str
+    ) -> Optional[TaskRecord]:
+        """Get a task by crate name and version
+
+        Args:
+            crate_name: Name of the crate
+            version: Version of the crate
+
+        Returns:
+            TaskRecord if found, None otherwise
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM tasks WHERE crate_name = ? AND version = ?",
+            (crate_name, version),
+        )
+        row = cursor.fetchone()
+
+        if row is None:
+            return None
+
+        return self._row_to_task_record(row)
+
     def get_all_tasks(self) -> List[TaskRecord]:
         """Get all tasks ordered by creation time (latest first)
 
@@ -275,8 +299,7 @@ class Database:
         """Update task priority."""
         cursor = self.conn.cursor()
         cursor.execute(
-            "UPDATE tasks SET priority = ? WHERE id = ?",
-            (priority, task_id)
+            "UPDATE tasks SET priority = ? WHERE id = ?", (priority, task_id)
         )
         self.conn.commit()
 
@@ -343,7 +366,7 @@ class Database:
         cursor = self.conn.cursor()
         cursor.execute(
             "SELECT * FROM tasks WHERE status = ? ORDER BY priority DESC, created_at ASC",
-            (TaskStatus.PENDING.value,)
+            (TaskStatus.PENDING.value,),
         )
         rows = cursor.fetchall()
         return [self._row_to_task_record(row) for row in rows]

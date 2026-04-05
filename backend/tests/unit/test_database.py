@@ -173,3 +173,55 @@ def test_reset_task_for_retry(db):
     assert task.crate_name == "serde"
     assert task.version == "1.0.0"
     assert task.workspace_path == "/path"
+
+
+def test_get_task_by_crate_and_version_returns_task(db, tmp_path):
+    """Test retrieving task by crate name and version"""
+    db.init_db()
+
+    # Create a task
+    task_id = db.create_task(
+        crate_name="test-crate",
+        version="1.0.0",
+        workspace_path=str(tmp_path / "workspace"),
+        stdout_log=str(tmp_path / "stdout.log"),
+        stderr_log=str(tmp_path / "stderr.log"),
+    )
+
+    # Retrieve by crate and version
+    task = db.get_task_by_crate_and_version("test-crate", "1.0.0")
+
+    assert task is not None
+    assert task.id == task_id
+    assert task.crate_name == "test-crate"
+    assert task.version == "1.0.0"
+
+
+def test_get_task_by_crate_and_version_returns_none_when_not_found(db, tmp_path):
+    """Test retrieving non-existent task returns None"""
+    db.init_db()
+
+    # Try to retrieve non-existent task
+    task = db.get_task_by_crate_and_version("non-existent", "1.0.0")
+
+    assert task is None
+
+
+def test_get_task_by_crate_and_version_requires_exact_match(db, tmp_path):
+    """Test that crate name and version must match exactly"""
+    db.init_db()
+
+    # Create a task
+    db.create_task(
+        crate_name="test-crate",
+        version="1.0.0",
+        workspace_path=str(tmp_path / "workspace"),
+        stdout_log=str(tmp_path / "stdout.log"),
+        stderr_log=str(tmp_path / "stderr.log"),
+    )
+
+    # Different crate name
+    assert db.get_task_by_crate_and_version("other-crate", "1.0.0") is None
+
+    # Different version
+    assert db.get_task_by_crate_and_version("test-crate", "2.0.0") is None
