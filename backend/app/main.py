@@ -132,6 +132,18 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                         status_code=400, detail=f"Version {version} not found"
                     )
 
+            # Check if task already exists for this crate and version
+            existing_task = db.get_task_by_crate_and_version(
+                request.crate_name, version
+            )
+            if existing_task:
+                return TaskResponse(
+                    task_id=existing_task.id,
+                    crate_name=existing_task.crate_name,
+                    version=existing_task.version,
+                    status=existing_task.status.value,
+                )
+
             # Create workspace paths
             workspace_path = (
                 config.workspace_path / "repos" / f"{request.crate_name}-{version}"
@@ -331,7 +343,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         pending = db.get_pending_tasks_ordered()
         return {
             "running": [_task_to_dict(t) for t in running],
-            "pending": [_task_to_dict(t) for t in pending]
+            "pending": [_task_to_dict(t) for t in pending],
         }
 
     @app.get("/api/dashboard/stats")
