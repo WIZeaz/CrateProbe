@@ -12,7 +12,7 @@ from fastapi import (
 )
 from fastapi.responses import RedirectResponse, PlainTextResponse
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Literal
 from pathlib import Path
 import asyncio
 from app.config import Config
@@ -90,6 +90,21 @@ class ClaimTaskResponse(BaseModel):
     runner_id: Optional[str]
     lease_token: str
     lease_expires_at: Optional[str]
+
+
+class RunnerTaskEventRequest(BaseModel):
+    lease_token: str
+    event_seq: int
+    event_type: Literal["started", "progress", "completed", "failed"]
+
+
+class RunnerTaskLogChunkRequest(BaseModel):
+    lease_token: str
+    chunk_seq: int
+    content: str
+
+
+RUNNER_CHUNK_LOG_TYPES = {"stdout", "stderr", "runner"}
 
 
 LOG_PATH_RESOLVERS = {
@@ -181,6 +196,22 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
         if not verify_token(token, salt, runner.token_hash):
             raise HTTPException(status_code=403, detail="Forbidden")
+
+    def require_task_lease(
+        task_id: int, runner_id: str, lease_token: str
+    ) -> TaskRecord:
+        task = db.get_task(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        if (
+            task.runner_id != runner_id
+            or task.lease_token is None
+            or lease_token != task.lease_token
+        ):
+            raise HTTPException(status_code=409, detail="Lease token mismatch")
+
+        return task
 
     @app.get("/", include_in_schema=False)
     async def root():
@@ -365,6 +396,41 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                 task.lease_expires_at.isoformat() if task.lease_expires_at else None
             ),
         )
+
+    @app.post("/api/runners/{runner_id}/tasks/{task_id}/events")
+    async def ingest_runner_task_event(
+        runner_id: str,
+        task_id: int,
+        request: RunnerTaskEventRequest,
+        _auth: None = Depends(require_runner_auth),
+    ):
+        require_task_lease(task_id, runner_id, request.lease_token)
+        applied = db.apply_task_event(task_id, request.event_seq, request.event_type)
+        if applied is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return {"applied": applied}
+
+    @app.post("/api/runners/{runner_id}/tasks/{task_id}/logs/{log_type}/chunks")
+    async def ingest_runner_task_log_chunk(
+        runner_id: str,
+        task_id: int,
+        log_type: str,
+        request: RunnerTaskLogChunkRequest,
+        _auth: None = Depends(require_runner_auth),
+    ):
+        if log_type not in RUNNER_CHUNK_LOG_TYPES:
+            raise HTTPException(status_code=404, detail="Unknown log type")
+
+        task = require_task_lease(task_id, runner_id, request.lease_token)
+
+        should_append = db.record_task_log_chunk(task_id, log_type, request.chunk_seq)
+        if should_append:
+            log_path = LOG_PATH_RESOLVERS[log_type](task, config)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(request.content)
+
+        return {"appended": should_append}
 
     @app.get("/api/tasks/{task_id}", response_model=TaskDetailResponse)
     async def get_task(task_id: int):

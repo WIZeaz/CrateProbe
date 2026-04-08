@@ -109,6 +109,16 @@ class Database:
                 last_seen_at TIMESTAMP
             )
         """)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_log_chunk_sequences (
+                task_id INTEGER NOT NULL,
+                log_type TEXT NOT NULL,
+                last_chunk_seq INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (task_id, log_type)
+            )
+            """
+        )
         # Backward-compatible migration for existing databases.
         columns = {
             row["name"] for row in cursor.execute("PRAGMA table_info(tasks)").fetchall()
@@ -146,6 +156,112 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_status ON tasks(status)
         """)
         self.conn.commit()
+
+    def apply_task_event(
+        self, task_id: int, event_seq: int, event_type: str
+    ) -> Optional[bool]:
+        """Apply an ordered runner event.
+
+        Returns:
+            None: task does not exist
+            False: duplicate/stale event sequence (idempotent no-op)
+            True: event applied
+        """
+        cursor = self.conn.cursor()
+        now = datetime.now()
+
+        try:
+            cursor.execute("BEGIN IMMEDIATE")
+            row = cursor.execute(
+                "SELECT last_event_seq FROM tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+
+            if row is None:
+                self.conn.commit()
+                return None
+
+            last_event_seq = row["last_event_seq"] or 0
+            if event_seq <= last_event_seq:
+                self.conn.commit()
+                return False
+
+            updates = ["last_event_seq = ?"]
+            params = [event_seq]
+
+            if event_type in ("started", "progress"):
+                updates.append("status = ?")
+                params.append(TaskStatus.RUNNING.value)
+                updates.append("started_at = COALESCE(started_at, ?)")
+                params.append(now)
+            elif event_type == "completed":
+                updates.append("status = ?")
+                params.append(TaskStatus.COMPLETED.value)
+                updates.append("finished_at = ?")
+                params.append(now)
+            elif event_type == "failed":
+                updates.append("status = ?")
+                params.append(TaskStatus.FAILED.value)
+                updates.append("finished_at = ?")
+                params.append(now)
+
+            params.append(task_id)
+            cursor.execute(
+                f"UPDATE tasks SET {', '.join(updates)} WHERE id = ?",
+                params,
+            )
+            self.conn.commit()
+            return True
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def record_task_log_chunk(
+        self,
+        task_id: int,
+        log_type: str,
+        chunk_seq: int,
+    ) -> bool:
+        """Record chunk sequence and return whether append should occur."""
+        cursor = self.conn.cursor()
+
+        try:
+            cursor.execute("BEGIN IMMEDIATE")
+            row = cursor.execute(
+                """
+                SELECT last_chunk_seq
+                FROM task_log_chunk_sequences
+                WHERE task_id = ? AND log_type = ?
+                """,
+                (task_id, log_type),
+            ).fetchone()
+
+            if row is not None and chunk_seq <= row["last_chunk_seq"]:
+                self.conn.commit()
+                return False
+
+            if row is None:
+                cursor.execute(
+                    """
+                    INSERT INTO task_log_chunk_sequences (task_id, log_type, last_chunk_seq)
+                    VALUES (?, ?, ?)
+                    """,
+                    (task_id, log_type, chunk_seq),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE task_log_chunk_sequences
+                    SET last_chunk_seq = ?
+                    WHERE task_id = ? AND log_type = ?
+                    """,
+                    (chunk_seq, task_id, log_type),
+                )
+
+            self.conn.commit()
+            return True
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def create_task(
         self,
