@@ -1,8 +1,9 @@
 """Database layer for experiment tracking"""
 
 import sqlite3
+import secrets
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List
 
@@ -539,6 +540,63 @@ class Database:
         )
         self.conn.commit()
         return cursor.rowcount > 0
+
+    def claim_pending_task(
+        self, runner_id: str, lease_ttl_seconds: int
+    ) -> Optional[TaskRecord]:
+        """Atomically claim one pending task for a runner."""
+        now = datetime.now()
+        lease_token = secrets.token_urlsafe(24)
+        lease_expires_at = now + timedelta(seconds=lease_ttl_seconds)
+        cursor = self.conn.cursor()
+
+        try:
+            cursor.execute("BEGIN IMMEDIATE")
+            row = cursor.execute(
+                """
+                SELECT id
+                FROM tasks
+                WHERE status = ?
+                ORDER BY priority DESC, created_at ASC
+                LIMIT 1
+                """,
+                (TaskStatus.PENDING.value,),
+            ).fetchone()
+
+            if row is None:
+                self.conn.commit()
+                return None
+
+            cursor.execute(
+                """
+                UPDATE tasks
+                SET status = ?,
+                    runner_id = ?,
+                    lease_token = ?,
+                    lease_expires_at = ?,
+                    started_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                (
+                    TaskStatus.RUNNING.value,
+                    runner_id,
+                    lease_token,
+                    lease_expires_at,
+                    now,
+                    row["id"],
+                    TaskStatus.PENDING.value,
+                ),
+            )
+
+            if cursor.rowcount == 0:
+                self.conn.commit()
+                return None
+
+            self.conn.commit()
+            return self.get_task(row["id"])
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def _parse_datetime(self, dt_str: str) -> datetime:
         """Parse datetime from database

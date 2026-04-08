@@ -21,7 +21,7 @@ from app.models import TaskStatus
 from app.services.crates_api import CratesAPI, CrateNotFoundError
 from app.services.scheduler import TaskScheduler
 from app.services.system_monitor import SystemMonitor
-from app.security import generate_runner_token, generate_salt, hash_token
+from app.security import generate_runner_token, generate_salt, hash_token, verify_token
 from app.utils.file_utils import read_last_n_lines
 from app.utils.file_utils import FileNotFoundError as CustomFileNotFoundError
 from app.api.websocket import get_manager
@@ -80,6 +80,16 @@ class RunnerResponse(BaseModel):
 class RunnerCreateResponse(RunnerResponse):
     token: str
     token_hint: str
+
+
+class ClaimTaskResponse(BaseModel):
+    id: int
+    crate_name: str
+    version: str
+    status: str
+    runner_id: Optional[str]
+    lease_token: str
+    lease_expires_at: Optional[str]
 
 
 LOG_PATH_RESOLVERS = {
@@ -142,6 +152,35 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
     def token_hint(token: str) -> str:
         return f"****{token[-4:]}"
+
+    def _extract_bearer_token(authorization: Optional[str]) -> Optional[str]:
+        if not authorization:
+            return None
+        parts = authorization.strip().split(" ", 1)
+        if len(parts) != 2 or parts[0].lower() != "bearer":
+            return None
+        token = parts[1].strip()
+        return token or None
+
+    def require_runner_auth(
+        runner_id: str,
+        authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    ) -> None:
+        runner = db.get_runner_by_runner_id(runner_id)
+        if runner is None or not runner.enabled:
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+        token = _extract_bearer_token(authorization)
+        if token is None:
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+        try:
+            salt = base64.urlsafe_b64decode(runner.token_salt.encode("ascii"))
+        except Exception:
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+        if not verify_token(token, salt, runner.token_hash):
+            raise HTTPException(status_code=403, detail="Forbidden")
 
     @app.get("/", include_in_schema=False)
     async def root():
@@ -291,6 +330,39 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                 updated_runner.last_seen_at.isoformat()
                 if updated_runner.last_seen_at
                 else None
+            ),
+        )
+
+    @app.post("/api/runners/{runner_id}/heartbeat")
+    async def runner_heartbeat(
+        runner_id: str,
+        _auth: None = Depends(require_runner_auth),
+    ):
+        db.touch_runner_heartbeat(runner_id)
+        return {"success": True}
+
+    @app.post(
+        "/api/runners/{runner_id}/claim",
+        response_model=ClaimTaskResponse,
+        responses={204: {"description": "No pending tasks"}},
+    )
+    async def claim_task(
+        runner_id: str,
+        _auth: None = Depends(require_runner_auth),
+    ):
+        task = db.claim_pending_task(runner_id, config.lease_ttl_seconds)
+        if task is None:
+            return PlainTextResponse(status_code=204, content="")
+
+        return ClaimTaskResponse(
+            id=task.id,
+            crate_name=task.crate_name,
+            version=task.version,
+            status=task.status.value,
+            runner_id=task.runner_id,
+            lease_token=task.lease_token or "",
+            lease_expires_at=(
+                task.lease_expires_at.isoformat() if task.lease_expires_at else None
             ),
         )
 
