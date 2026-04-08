@@ -89,6 +89,24 @@ file = true
 # Log file path
 file_path = "server.log"
 
+[distributed]
+# 是否启用分布式 Runner 模式
+# Enable distributed runner mode
+enabled = false
+
+# 任务租约过期时间（秒）
+# Task lease TTL in seconds
+lease_ttl_seconds = 30
+
+# Runner 离线判定阈值（秒）
+# Runner offline threshold in seconds
+runner_offline_seconds = 30
+
+[security]
+# 管理员 API 令牌（为空表示未设置）
+# Admin API token (empty means not set)
+admin_token = ""
+
 # ============================================
 # 前端配置 (Frontend Configuration)
 # ============================================
