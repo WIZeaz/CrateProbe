@@ -227,13 +227,20 @@ class TaskExecutor:
             raise  # Re-raise to propagate cancellation
         except Exception as e:
             task_logger.error(f"Task failed with exception: {e}")
-            self.db.update_task_status(
-                task_id,
-                TaskStatus.FAILED,
-                finished_at=datetime.now(),
-                error_message=str(e),
-                message=f"Execution error: {e}",
-            )
+            try:
+                self.db.update_task_status(
+                    task_id,
+                    TaskStatus.FAILED,
+                    finished_at=datetime.now(),
+                    error_message=str(e),
+                    message=f"Execution error: {e}",
+                )
+            except Exception as db_error:
+                # Log database update failure but don't let it mask the original error
+                task_logger.critical(
+                    f"CRITICAL: Failed to update task status in database: {db_error}. "
+                    f"Task may be stuck in RUNNING state. Original error: {e}"
+                )
         finally:
             task_logger.info(f"Task #{task_id} runner log closed.")
             task_logger.removeHandler(handler)
@@ -425,7 +432,9 @@ class TaskExecutor:
             line = raw_line.strip()
             if not line or line.startswith("#"):
                 continue
-            if not line.startswith("CompileFailed:"):
+            if not line.startswith("CompileFailed:") and not line.startswith(
+                "compile_failed:"
+            ):
                 continue
 
             value = line.split(":", 1)[1].strip()

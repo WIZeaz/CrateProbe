@@ -1,3 +1,4 @@
+import uvicorn
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -146,7 +147,8 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
             # Create workspace paths
             workspace_path = (
-                config.workspace_path / "repos" / f"{request.crate_name}-{version}"
+                config.workspace_path / "repos" /
+                f"{request.crate_name}-{version}"
             )
             stdout_log = (
                 config.workspace_path
@@ -242,7 +244,8 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
         # Cannot retry a task that's currently running
         if task.status == TaskStatus.RUNNING:
-            raise HTTPException(status_code=400, detail="Cannot retry a running task")
+            raise HTTPException(
+                status_code=400, detail="Cannot retry a running task")
 
         # Reset task to pending state
         db.reset_task_for_retry(task_id)
@@ -527,18 +530,15 @@ def _task_to_response(task: TaskRecord) -> TaskDetailResponse:
     )
 
 
+# Load config from project root
+config_path = Path(__file__).parent.parent.parent / "config.toml"
+config = Config.from_file(str(config_path))
+app = create_app(config, str(config.get_db_full_path()))
+
 # Main entry point
 if __name__ == "__main__":
-    import uvicorn
-    from pathlib import Path
-
-    # Load config from project root
-    config_path = Path(__file__).parent.parent.parent / "config.toml"
-    config = Config.from_file(str(config_path))
-    app = create_app(config, str(config.get_db_full_path()))
-
     uvicorn.run(
-        app,
+        "app.main:app",
         host=config.server_host,
         port=config.server_port,
         log_level=config.log_level.lower(),
