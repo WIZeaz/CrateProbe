@@ -1,6 +1,6 @@
 import pytest
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import Mock, patch, AsyncMock
 from app.services.scheduler import TaskScheduler
 from app.database import Database
@@ -117,3 +117,70 @@ def test_recover_orphaned_running_tasks(scheduler, db):
 
     # Verify running count is now 0
     assert scheduler.get_running_count() == 0
+
+
+@pytest.mark.asyncio
+async def test_expired_lease_requeues_running_task_in_distributed_mode(scheduler, db):
+    """Expired distributed lease should requeue task to pending."""
+    scheduler.config.distributed_enabled = True
+
+    task_id = db.create_task("crate1", "1.0.0", "/path1", "/log1", "/log2")
+    db.update_task_status(task_id, TaskStatus.RUNNING, started_at=datetime.now())
+    db.conn.execute(
+        """
+        UPDATE tasks
+        SET runner_id = ?, lease_token = ?, lease_expires_at = ?, attempt = ?
+        WHERE id = ?
+        """,
+        (
+            "runner-1",
+            "lease-token-1",
+            datetime.now() - timedelta(seconds=10),
+            2,
+            task_id,
+        ),
+    )
+    db.conn.commit()
+
+    with patch.object(
+        scheduler, "_execute_and_cleanup", new_callable=AsyncMock
+    ) as mock_exec:
+        await scheduler.schedule_tasks()
+        assert mock_exec.call_count == 1
+
+    task = db.get_task(task_id)
+    assert task.status == TaskStatus.PENDING
+    assert task.runner_id is None
+    assert task.lease_token is None
+    assert task.lease_expires_at is None
+    assert task.attempt == 3
+
+
+@pytest.mark.asyncio
+async def test_distributed_reconciliation_skipped_when_disabled(scheduler, db):
+    """Local mode should not requeue tasks based on lease fields."""
+    task_id = db.create_task("crate1", "1.0.0", "/path1", "/log1", "/log2")
+    db.update_task_status(task_id, TaskStatus.RUNNING)
+    expired = datetime.now() - timedelta(seconds=10)
+    db.conn.execute(
+        """
+        UPDATE tasks
+        SET runner_id = ?, lease_token = ?, lease_expires_at = ?, attempt = ?
+        WHERE id = ?
+        """,
+        ("runner-1", "lease-token-1", expired, 2, task_id),
+    )
+    db.conn.commit()
+
+    with patch.object(
+        scheduler, "_execute_and_cleanup", new_callable=AsyncMock
+    ) as mock_exec:
+        await scheduler.schedule_tasks()
+        assert mock_exec.call_count == 0
+
+    task = db.get_task(task_id)
+    assert task.status == TaskStatus.RUNNING
+    assert task.runner_id == "runner-1"
+    assert task.lease_token == "lease-token-1"
+    assert task.lease_expires_at == expired
+    assert task.attempt == 2
