@@ -212,13 +212,14 @@ onUnmounted(() => {
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Crate</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Version</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Runner ID</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Queue Position</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Runtime</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-gray-200">
           <tr v-if="runningTasks.length > 0" class="bg-green-50">
-            <td colspan="7" class="px-4 py-2 text-sm font-semibold text-green-800">
+            <td colspan="8" class="px-4 py-2 text-sm font-semibold text-green-800">
               ▶ Running Tasks ({{ runningTasks.length }})
             </td>
           </tr>
@@ -237,12 +238,13 @@ onUnmounted(() => {
             <td class="px-4 py-3 whitespace-nowrap">
               <span class="status-badge status-running">{{ task.status }}</span>
             </td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">{{ task.runner_id || '-' }}</td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">-</td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">{{ formatDuration(task.started_at, task.finished_at) }}</td>
           </tr>
 
           <tr v-if="pendingTasks.length > 0" class="bg-orange-50">
-            <td colspan="7" class="px-4 py-2 text-sm font-semibold text-orange-800">
+            <td colspan="8" class="px-4 py-2 text-sm font-semibold text-orange-800">
               ⏳ Pending Queue ({{ pendingTasks.length }})
             </td>
           </tr>
@@ -261,6 +263,7 @@ onUnmounted(() => {
             <td class="px-4 py-3 whitespace-nowrap">
               <span class="status-badge status-pending">{{ task.status }}</span>
             </td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">{{ task.runner_id || '-' }}</td>
             <td class="px-4 py-3 whitespace-nowrap text-sm font-medium" :class="task.priority > 0 ? 'text-orange-600' : 'text-gray-500'">
               {{ getQueuePosition(task, idx) }}
             </td>

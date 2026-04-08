@@ -110,6 +110,11 @@ function formatDate(dateStr) {
   return date.toLocaleString()
 }
 
+function formatAttempt(attempt) {
+  if (attempt === null || attempt === undefined) return 'N/A'
+  return attempt
+}
+
 function formatDuration(startStr, endStr) {
   if (!startStr) return 'N/A'
   const start = new Date(startStr)
@@ -239,6 +244,18 @@ onUnmounted(() => {
           <div>
             <p class="text-sm font-medium text-gray-600">Finished</p>
             <p class="mt-1 text-sm text-gray-900">{{ formatDate(task.finished_at) }}</p>
+          </div>
+          <div>
+            <p class="text-sm font-medium text-gray-600">Runner ID</p>
+            <p class="mt-1 text-sm text-gray-900">{{ task.runner_id || '-' }}</p>
+          </div>
+          <div>
+            <p class="text-sm font-medium text-gray-600">Attempt</p>
+            <p class="mt-1 text-sm text-gray-900">{{ formatAttempt(task.attempt) }}</p>
+          </div>
+          <div>
+            <p class="text-sm font-medium text-gray-600">Lease Expires At</p>
+            <p class="mt-1 text-sm text-gray-900">{{ task.lease_expires_at ? formatDate(task.lease_expires_at) : 'N/A' }}</p>
           </div>
           <div v-if="task.message" class="md:col-span-2">
             <p class="text-sm font-medium text-gray-600">Execution Message</p>
