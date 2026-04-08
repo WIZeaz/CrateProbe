@@ -422,6 +422,8 @@ class Database:
         for fmt in [
             "%Y-%m-%d %H:%M:%S.%f",
             "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%dT%H:%M:%S.%f",
+            "%Y-%m-%dT%H:%M:%S",
         ]:
             try:
                 return datetime.strptime(dt_str, fmt)
