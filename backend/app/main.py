@@ -1,6 +1,15 @@
 import logging
+import base64
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import RedirectResponse, PlainTextResponse
 from pydantic import BaseModel
 from typing import Optional, List
@@ -12,6 +21,7 @@ from app.models import TaskStatus
 from app.services.crates_api import CratesAPI, CrateNotFoundError
 from app.services.scheduler import TaskScheduler
 from app.services.system_monitor import SystemMonitor
+from app.security import generate_runner_token, generate_salt, hash_token
 from app.utils.file_utils import read_last_n_lines
 from app.utils.file_utils import FileNotFoundError as CustomFileNotFoundError
 from app.api.websocket import get_manager
@@ -54,6 +64,22 @@ class TaskDetailResponse(BaseModel):
 class BatchPriorityRequest(BaseModel):
     task_ids: List[int]
     priority: int
+
+
+class CreateRunnerRequest(BaseModel):
+    runner_id: str
+
+
+class RunnerResponse(BaseModel):
+    runner_id: str
+    enabled: bool
+    created_at: str
+    last_seen_at: Optional[str]
+
+
+class RunnerCreateResponse(RunnerResponse):
+    token: str
+    token_hint: str
 
 
 LOG_PATH_RESOLVERS = {
@@ -107,6 +133,15 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         version="1.0.0",
         lifespan=lifespan,
     )
+
+    def require_admin_token(
+        x_admin_token: Optional[str] = Header(default=None, alias="X-Admin-Token"),
+    ) -> None:
+        if not config.admin_token or x_admin_token != config.admin_token:
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+    def token_hint(token: str) -> str:
+        return f"****{token[-4:]}"
 
     @app.get("/", include_in_schema=False)
     async def root():
@@ -185,6 +220,79 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         """Get all tasks"""
         tasks = db.get_all_tasks()
         return [_task_to_response(task) for task in tasks]
+
+    @app.post(
+        "/api/admin/runners",
+        response_model=RunnerCreateResponse,
+        status_code=201,
+        dependencies=[Depends(require_admin_token)],
+    )
+    async def create_runner(request: CreateRunnerRequest):
+        existing = db.get_runner_by_runner_id(request.runner_id)
+        if existing is not None:
+            raise HTTPException(status_code=409, detail="Runner already exists")
+
+        token = generate_runner_token()
+        salt = generate_salt()
+        token_hash = hash_token(token, salt)
+        token_salt = base64.urlsafe_b64encode(salt).decode("ascii")
+        runner = db.create_runner(request.runner_id, token_hash, token_salt)
+
+        return RunnerCreateResponse(
+            runner_id=runner.runner_id,
+            enabled=runner.enabled,
+            created_at=runner.created_at.isoformat(),
+            last_seen_at=(
+                runner.last_seen_at.isoformat() if runner.last_seen_at else None
+            ),
+            token=token,
+            token_hint=token_hint(token),
+        )
+
+    @app.get(
+        "/api/admin/runners",
+        response_model=List[RunnerResponse],
+        dependencies=[Depends(require_admin_token)],
+    )
+    async def list_runners():
+        runners = db.list_runners()
+        return [
+            RunnerResponse(
+                runner_id=runner.runner_id,
+                enabled=runner.enabled,
+                created_at=runner.created_at.isoformat(),
+                last_seen_at=(
+                    runner.last_seen_at.isoformat() if runner.last_seen_at else None
+                ),
+            )
+            for runner in runners
+        ]
+
+    @app.delete(
+        "/api/admin/runners/{runner_id}",
+        response_model=RunnerResponse,
+        dependencies=[Depends(require_admin_token)],
+    )
+    async def disable_runner(runner_id: str):
+        runner = db.get_runner_by_runner_id(runner_id)
+        if runner is None:
+            raise HTTPException(status_code=404, detail="Runner not found")
+
+        db.disable_runner(runner_id)
+        updated_runner = db.get_runner_by_runner_id(runner_id)
+        if updated_runner is None:
+            raise HTTPException(status_code=404, detail="Runner not found")
+
+        return RunnerResponse(
+            runner_id=updated_runner.runner_id,
+            enabled=updated_runner.enabled,
+            created_at=updated_runner.created_at.isoformat(),
+            last_seen_at=(
+                updated_runner.last_seen_at.isoformat()
+                if updated_runner.last_seen_at
+                else None
+            ),
+        )
 
     @app.get("/api/tasks/{task_id}", response_model=TaskDetailResponse)
     async def get_task(task_id: int):
