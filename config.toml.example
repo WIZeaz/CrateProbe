@@ -105,6 +105,8 @@ runner_offline_seconds = 30
 [security]
 # 管理员 API 令牌（为空表示未设置）
 # Admin API token (empty means not set)
+# 用于 /api/admin/runners* 管理端点（请求头：X-Admin-Token）
+# Used by /api/admin/runners* admin endpoints (header: X-Admin-Token)
 admin_token = ""
 
 # ============================================

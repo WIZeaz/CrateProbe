@@ -161,8 +161,35 @@ All endpoints defined in `backend/app/main.py`:
 | GET | `/api/tasks/{id}/logs/stdout/raw` | Full stdout download |
 | GET | `/api/tasks/{id}/logs/stderr/raw` | Full stderr download |
 | GET | `/api/tasks/{id}/logs/miri_report/raw` | Full miri report download |
+| GET | `/api/tasks/{id}/logs/runner` | Last N lines of runner log |
+| GET | `/api/tasks/{id}/logs/runner/raw` | Full runner log download |
 | GET | `/api/dashboard/stats` | Task count breakdown by status |
 | GET | `/api/dashboard/system` | CPU/memory/disk usage |
+
+### Distributed runner control-plane APIs
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/api/admin/runners` | `X-Admin-Token` | Create runner and return one-time plaintext token |
+| GET | `/api/admin/runners` | `X-Admin-Token` | List runners |
+| DELETE | `/api/admin/runners/{runner_id}` | `X-Admin-Token` | Soft-disable runner (`enabled=false`) |
+| POST | `/api/runners/{runner_id}/heartbeat` | `Authorization: Bearer <runner_token>` | Runner heartbeat |
+| POST | `/api/runners/{runner_id}/claim` | `Authorization: Bearer <runner_token>` | Claim one pending task (204 if none) |
+| POST | `/api/runners/{runner_id}/tasks/{task_id}/events` | Bearer + lease token | Ingest task lifecycle events |
+| POST | `/api/runners/{runner_id}/tasks/{task_id}/logs/{log_type}/chunks` | Bearer + lease token | Ingest log chunks (`stdout`/`stderr`/`runner`) |
+
+### Distributed runner provisioning flow
+
+1. Set `[security].admin_token` in `config.toml` (required for runner admin APIs).
+2. Create runner via `POST /api/admin/runners` with `X-Admin-Token`; save returned plaintext `token` (shown once).
+3. On runner machine set `RUNNER_SERVER_URL`, `RUNNER_ID`, and `RUNNER_TOKEN`.
+4. Start runner process with `uv run python -m app.runner` from `backend/`.
+
+### Runner deletion and lease-recovery semantics
+
+- `DELETE /api/admin/runners/{runner_id}` immediately disables auth for that runner; subsequent heartbeat/claim/event/log requests are rejected.
+- Tasks already claimed by that runner remain `running` until lease expiry.
+- Scheduler periodically requeues expired leased tasks back to `pending` and clears runner lease fields.
 
 ## 8. WebSocket Endpoints
 
@@ -269,6 +296,10 @@ Loaded by `Config.from_file()` on backend, and by Vite at build time for dev pro
 | frontend | dev_port | 5173 | Vite dev server port |
 | frontend | api_proxy_target | http://localhost:8080 | API proxy |
 | frontend | ws_proxy_target | ws://localhost:8080 | WebSocket proxy |
+| distributed | enabled | false | Enable distributed runner control plane |
+| distributed | lease_ttl_seconds | 30 | Task lease TTL used for claim/recovery |
+| distributed | runner_offline_seconds | 30 | Runner offline threshold |
+| security | admin_token | "" | Admin token for `/api/admin/runners*` |
 
 ## 11. Testing
 
@@ -290,6 +321,6 @@ Loaded by `Config.from_file()` on backend, and by Vite at build time for dev pro
 
 5. **No pagination**: Task list loads all tasks at once. Will need pagination for large deployments.
 
-6. **No authentication**: No user auth or API keys. Suitable for internal/development use only.
+6. **No end-user auth**: There is runner/admin token auth for control-plane APIs, but no end-user login/session model for UI/task APIs.
 
 7. **Single SQLite connection**: Database uses a single connection with `check_same_thread=False`. Works for low concurrency but may need connection pooling for scale.
