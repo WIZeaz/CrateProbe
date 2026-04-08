@@ -1,6 +1,8 @@
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, shallowRef } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { RecycleScroller } from 'vue-virtual-scroller'
+import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
 import api from '../services/api'
 import websocket from '../services/websocket'
 
@@ -70,7 +72,8 @@ const filteredAndSortedTasks = computed(() => {
     return 0
   })
 
-  return result
+  // Add index for stable keys in virtual scroller
+  return result.map((task, index) => ({ ...task, _index: index }))
 })
 
 // Selectable tasks (exclude running)
@@ -223,6 +226,7 @@ onMounted(() => {
   }
 
   fetchTasks()
+  websocket.connect('/ws/dashboard')
   websocket.on('task_update', handleTaskUpdate)
   websocket.on('task_created', handleTaskUpdate)
   websocket.on('task_completed', handleTaskUpdate)
@@ -309,122 +313,162 @@ onUnmounted(() => {
     </div>
 
     <div v-else class="bento-card overflow-x-auto">
-      <table class="min-w-full divide-y divide-gray-200">
-        <thead>
-          <tr>
-            <th class="px-4 py-3 text-left">
-              <input
-                type="checkbox"
-                :checked="allSelected"
-                :indeterminate="someSelected"
-                @change="toggleSelectAll"
-                class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-            </th>
-            <th
-              @click="sortBy('id')"
-              class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-50"
-            >
-              ID
-              <span v-if="sortColumn === 'id'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
-            </th>
-            <th
-              @click="sortBy('crate_name')"
-              class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-50"
-            >
-              Crate
-              <span v-if="sortColumn === 'crate_name'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
-            </th>
-            <th
-              @click="sortBy('version')"
-              class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-50"
-            >
-              Version
-              <span v-if="sortColumn === 'version'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
-            </th>
-            <th
-              @click="sortBy('status')"
-              class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-50"
-            >
-              Status
-              <span v-if="sortColumn === 'status'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
-            </th>
-            <th
-              @click="sortBy('case_count')"
-              class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-50"
-            >
-              Cases
-              <span v-if="sortColumn === 'case_count'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
-            </th>
-            <th
-              @click="sortBy('poc_count')"
-              class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-50"
-            >
-              POCs
-              <span v-if="sortColumn === 'poc_count'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
-            </th>
-            <th
-              @click="sortBy('compile_failed')"
-              class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-50"
-            >
-              Compile Failed
-              <span v-if="sortColumn === 'compile_failed'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
-            </th>
-            <th
-              @click="sortBy('runtime')"
-              class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-50"
-            >
-              Runtime
-              <span v-if="sortColumn === 'runtime'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-gray-200">
-          <tr
-            v-for="task in filteredAndSortedTasks"
-            :key="task.id"
-            :class="['hover:bg-gray-50 transition-colors', selectedIds.has(task.id) ? 'bg-blue-50' : '']"
+      <div class="table-header bg-gray-50 sticky top-0 z-10 border-b border-gray-200">
+        <div class="header-row flex items-center">
+          <div class="px-4 py-3 w-12">
+            <input
+              type="checkbox"
+              :checked="allSelected"
+              :indeterminate="someSelected"
+              @change="toggleSelectAll"
+              class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+          </div>
+          <div
+            @click="sortBy('id')"
+            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 w-16"
           >
-            <td class="px-4 py-3 whitespace-nowrap">
-              <input
-                v-if="task.status !== 'running'"
-                type="checkbox"
-                :checked="selectedIds.has(task.id)"
-                @change="toggleSelect(task.id)"
-                @click.stop
-                class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-              <span v-else class="inline-block h-4 w-4"></span>
-            </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer" @click="viewTask(task.id)">
-              #{{ task.id }}
-            </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900 cursor-pointer" @click="viewTask(task.id)">
-              {{ task.crate_name }}
-            </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer" @click="viewTask(task.id)">
-              {{ task.version }}
-            </td>
-            <td class="px-4 py-3 whitespace-nowrap cursor-pointer" @click="viewTask(task.id)">
-              <span :class="['status-badge', `status-${task.status}`]">
-                {{ task.status }}
-              </span>
-            </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer" @click="viewTask(task.id)">
-              {{ task.case_count }}
-            </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer" @click="viewTask(task.id)">
-              {{ task.poc_count }}
-            </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer" @click="viewTask(task.id)">
-              {{ task.compile_failed ?? '-' }}
-            </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer" @click="viewTask(task.id)">
-              {{ formatDuration(task.started_at, task.finished_at) }}
-            </td>
-          </tr>
-        </tbody>
-      </table>
+            ID
+            <span v-if="sortColumn === 'id'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
+          </div>
+          <div
+            @click="sortBy('crate_name')"
+            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 flex-1 min-w-0"
+          >
+            Crate
+            <span v-if="sortColumn === 'crate_name'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
+          </div>
+          <div
+            @click="sortBy('version')"
+            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 w-24"
+          >
+            Version
+            <span v-if="sortColumn === 'version'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
+          </div>
+          <div
+            @click="sortBy('status')"
+            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 w-24"
+          >
+            Status
+            <span v-if="sortColumn === 'status'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
+          </div>
+          <div
+            @click="sortBy('case_count')"
+            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 w-20"
+          >
+            Cases
+            <span v-if="sortColumn === 'case_count'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
+          </div>
+          <div
+            @click="sortBy('poc_count')"
+            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 w-20"
+          >
+            POCs
+            <span v-if="sortColumn === 'poc_count'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
+          </div>
+          <div
+            @click="sortBy('compile_failed')"
+            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 w-28"
+          >
+            Compile Failed
+            <span v-if="sortColumn === 'compile_failed'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
+          </div>
+          <div
+            @click="sortBy('runtime')"
+            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 w-28"
+          >
+            Runtime
+            <span v-if="sortColumn === 'runtime'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
+          </div>
+        </div>
+      </div>
+      <RecycleScroller
+        class="scroller"
+        :items="filteredAndSortedTasks"
+        :item-size="53"
+        key-field="id"
+        v-slot="{ item: task }"
+      >
+        <div
+          class="task-row flex items-center hover:bg-gray-50 transition-colors border-b border-gray-200"
+          :class="selectedIds.has(task.id) ? 'bg-blue-50' : ''"
+          :style="{ height: '53px' }"
+        >
+          <div class="px-4 py-3 whitespace-nowrap w-12">
+            <input
+              v-if="task.status !== 'running'"
+              type="checkbox"
+              :checked="selectedIds.has(task.id)"
+              @change="toggleSelect(task.id)"
+              @click.stop
+              class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span v-else class="inline-block h-4 w-4"></span>
+          </div>
+          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer w-16" @click="viewTask(task.id)">
+            #{{ task.id }}
+          </div>
+          <div class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900 cursor-pointer flex-1 min-w-0 truncate" @click="viewTask(task.id)">
+            {{ task.crate_name }}
+          </div>
+          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer w-24" @click="viewTask(task.id)">
+            {{ task.version }}
+          </div>
+          <div class="px-4 py-3 whitespace-nowrap cursor-pointer w-24" @click="viewTask(task.id)">
+            <span :class="['status-badge', `status-${task.status}`]">
+              {{ task.status }}
+            </span>
+          </div>
+          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer w-20" @click="viewTask(task.id)">
+            {{ task.case_count }}
+          </div>
+          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer w-20" @click="viewTask(task.id)">
+            {{ task.poc_count }}
+          </div>
+          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer w-28" @click="viewTask(task.id)">
+            {{ task.compile_failed ?? '-' }}
+          </div>
+          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer w-28" @click="viewTask(task.id)">
+            {{ formatDuration(task.started_at, task.finished_at) }}
+          </div>
+        </div>
+      </RecycleScroller>
     </div>
   </div>
 </template>
+
+<style scoped>
+.bento-card {
+  width: 100%;
+}
+
+.table-header {
+  width: 100%;
+}
+
+.header-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.scroller {
+  height: 600px;
+  width: 100%;
+}
+
+.task-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+:deep(.vue-recycle-scroller__item-wrapper) {
+  overflow-x: hidden;
+  width: 100%;
+}
+
+:deep(.vue-recycle-scroller) {
+  width: 100%;
+}
+</style>

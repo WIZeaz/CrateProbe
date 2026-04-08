@@ -11,7 +11,7 @@ app.use(router)
 // Make websocket available globally
 app.config.globalProperties.$ws = websocket
 
-// Connect to WebSocket
-websocket.connect()
+// Connect to WebSocket (dashboard endpoint by default)
+websocket.connect('/ws/dashboard')
 
 app.mount('#app')

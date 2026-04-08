@@ -88,6 +88,7 @@ function navigateToTasks(status = 'all') {
 
 onMounted(() => {
   fetchDashboard()
+  websocket.connect('/ws/dashboard')
   websocket.on('task_update', handleTaskUpdate)
   websocket.on('task_created', handleTaskUpdate)
   websocket.on('task_completed', handleTaskUpdate)

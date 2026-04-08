@@ -127,6 +127,7 @@ onMounted(() => {
   fetchTask()
   fetchRealtimeStats()
   startStatsRefresh()
+  websocket.connect(`/ws/tasks/${taskId.value}`)
   websocket.on('task_update', handleTaskUpdate)
   websocket.on('task_completed', handleTaskUpdate)
 })

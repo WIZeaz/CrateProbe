@@ -143,6 +143,7 @@ function viewTask(taskId) {
 
 onMounted(() => {
   fetchQueue()
+  websocket.connect('/ws/dashboard')
   websocket.on('task_update', fetchQueue)
   websocket.on('task_created', fetchQueue)
   websocket.on('task_completed', fetchQueue)
