@@ -225,3 +225,58 @@ def test_get_task_by_crate_and_version_requires_exact_match(db, tmp_path):
 
     # Different version
     assert db.get_task_by_crate_and_version("test-crate", "2.0.0") is None
+
+
+def test_init_db_creates_runners_table(db):
+    """Test runners table exists with required columns"""
+    cursor = db.conn.cursor()
+    columns = {
+        row["name"] for row in cursor.execute("PRAGMA table_info(runners)").fetchall()
+    }
+
+    assert "runner_id" in columns
+    assert "token_hash" in columns
+    assert "token_salt" in columns
+    assert "enabled" in columns
+    assert "last_seen_at" in columns
+
+
+def test_tasks_table_has_distributed_columns(db):
+    """Test tasks table has required distributed scheduling columns"""
+    cursor = db.conn.cursor()
+    columns = {
+        row["name"] for row in cursor.execute("PRAGMA table_info(tasks)").fetchall()
+    }
+
+    assert "runner_id" in columns
+    assert "lease_token" in columns
+    assert "lease_expires_at" in columns
+    assert "attempt" in columns
+    assert "last_event_seq" in columns
+    assert "cancel_requested" in columns
+
+
+def test_create_and_disable_runner(db):
+    """Test creating, reading, and disabling a runner"""
+    created = db.create_runner(
+        runner_id="runner-1",
+        token_hash="hash-123",
+        token_salt="salt-123",
+    )
+
+    assert created.runner_id == "runner-1"
+    assert created.token_hash == "hash-123"
+    assert created.token_salt == "salt-123"
+    assert created.enabled is True
+
+    fetched = db.get_runner_by_runner_id("runner-1")
+    assert fetched is not None
+    assert fetched.runner_id == "runner-1"
+    assert fetched.enabled is True
+
+    disabled = db.disable_runner("runner-1")
+    assert disabled is True
+
+    fetched_after_disable = db.get_runner_by_runner_id("runner-1")
+    assert fetched_after_disable is not None
+    assert fetched_after_disable.enabled is False
