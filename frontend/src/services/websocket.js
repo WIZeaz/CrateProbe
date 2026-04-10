@@ -5,9 +5,10 @@ class WebSocketService {
     this.reconnectTimer = null
     this.listeners = new Map()
     this.isConnecting = false
+    this.currentUrl = '/ws/dashboard'
   }
 
-  connect(url = '/ws') {
+  connect(url = '/ws/dashboard') {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       return
     }
@@ -17,6 +18,7 @@ class WebSocketService {
     }
 
     this.isConnecting = true
+    this.currentUrl = url
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const wsUrl = `${protocol}//${window.location.host}${url}`
@@ -71,7 +73,7 @@ class WebSocketService {
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
-      this.connect()
+      this.connect(this.currentUrl)
     }, this.reconnectInterval)
   }
 
