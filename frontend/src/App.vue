@@ -1,10 +1,13 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { useSettings } from './composables/useSettings'
 
 const router = useRouter()
 const route = useRoute()
 const mobileMenuOpen = ref(false)
+const { settings } = useSettings()
+const hasAdminToken = computed(() => Boolean(settings.security?.adminToken))
 </script>
 
 <template>
@@ -71,6 +74,22 @@ const mobileMenuOpen = ref(false)
                   : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'"
               >
                 Runners
+              </router-link>
+              <router-link
+                to="/settings"
+                class="inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
+                :class="route.path === '/settings'
+                  ? 'border-blue-500 text-gray-900'
+                  : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'"
+              >
+                Settings
+                <span
+                  v-if="!hasAdminToken"
+                  class="ml-1.5 inline-flex items-center justify-center w-4 h-4 text-[10px] font-bold text-white bg-amber-500 rounded-full"
+                  title="Admin token not set"
+                >
+                  !
+                </span>
               </router-link>
             </div>
           </div>

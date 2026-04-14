@@ -40,6 +40,11 @@ const routes = [
     path: '/runners',
     name: 'RunnerList',
     component: () => import('../views/RunnerList.vue')
+  },
+  {
+    path: '/settings',
+    name: 'Settings',
+    component: () => import('../views/Settings.vue')
   }
 ]
 

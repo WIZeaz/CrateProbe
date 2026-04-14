@@ -1,13 +1,15 @@
-const ADMIN_TOKEN_KEY = 'admin_token'
+import { readonlySettings, updateSetting, saveSettings } from './settings'
 
 export function setAdminToken(token) {
-  sessionStorage.setItem(ADMIN_TOKEN_KEY, token)
+  updateSetting('security.adminToken', token)
+  saveSettings()
 }
 
 export function getAdminToken() {
-  return sessionStorage.getItem(ADMIN_TOKEN_KEY)
+  return readonlySettings.security?.adminToken || ''
 }
 
 export function clearAdminToken() {
-  sessionStorage.removeItem(ADMIN_TOKEN_KEY)
+  updateSetting('security.adminToken', '')
+  saveSettings()
 }

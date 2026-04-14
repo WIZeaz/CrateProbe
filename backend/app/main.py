@@ -339,6 +339,13 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             for runner in runners
         ]
 
+    @app.head(
+        "/api/admin/runners",
+        dependencies=[Depends(require_admin_token)],
+    )
+    async def head_runners():
+        return {}
+
     @app.delete(
         "/api/admin/runners/{runner_id}",
         response_model=RunnerResponse,
