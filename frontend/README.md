@@ -1,6 +1,6 @@
-# Experiment Platform - Frontend
+# CrateProbe - Frontend
 
-A modern Vue 3 frontend application for the Experiment Platform, providing real-time monitoring of automated Rust crate testing with Cargo RAPX.
+A modern Vue 3 frontend application for CrateProbe, providing real-time monitoring of automated Rust crate testing with Cargo RAPX.
 
 ## Features
 
@@ -190,4 +190,4 @@ If the build fails:
 
 ## License
 
-Part of the Experiment Platform project.
+Part of the CrateProbe project.

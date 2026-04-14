@@ -154,7 +154,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         db.close()
 
     app = FastAPI(
-        title="Experiment Platform",
+        title="CrateProbe",
         description="Automated Rust crate testing platform",
         version="1.0.0",
         lifespan=lifespan,
@@ -252,8 +252,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
             # Create workspace paths
             workspace_path = (
-                config.workspace_path / "repos" /
-                f"{request.crate_name}-{version}"
+                config.workspace_path / "repos" / f"{request.crate_name}-{version}"
             )
             stdout_log = (
                 config.workspace_path
@@ -490,8 +489,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
         # Cannot retry a task that's currently running
         if task.status == TaskStatus.RUNNING:
-            raise HTTPException(
-                status_code=400, detail="Cannot retry a running task")
+            raise HTTPException(status_code=400, detail="Cannot retry a running task")
 
         # Reset task to pending state
         db.reset_task_for_retry(task_id)

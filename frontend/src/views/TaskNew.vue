@@ -108,7 +108,7 @@ async function createTask() {
       <h3 class="text-sm font-medium text-blue-900 mb-2">What happens next?</h3>
       <ul class="text-sm text-blue-800 space-y-1 list-disc list-inside">
         <li>The crate will be downloaded from crates.io</li>
-        <li>LifeSonar will generate test cases and POCs</li>
+        <li>CrateProbe will generate test cases and POCs</li>
         <li>Results will be available in real-time on the task detail page</li>
         <li>You can monitor progress from the dashboard</li>
       </ul>

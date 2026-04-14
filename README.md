@@ -1,6 +1,6 @@
-# 实验平台 (Experiment Platform)
+# CrateProbe
 
-自动化下载Rust crate、运行实验并提供Web界面实时展示实验进度和结果的平台。
+CrateProbe 是一个自动化 Rust crate 分析引擎，可下载 crate、运行实验，并通过 Web 界面实时展示进度和结果。
 
 ## 功能特性
 

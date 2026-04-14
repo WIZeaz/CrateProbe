@@ -1,10 +1,10 @@
-# Project.md - LifeSonar Experiment Platform
+# Project.md - CrateProbe
 
 > This document provides a comprehensive technical reference for AI models working on this codebase. It covers architecture, data flow, file-by-file descriptions, and key patterns.
 
 ## 1. What This Project Does
 
-LifeSonar Experiment Platform is an automated Rust crate testing platform. It:
+CrateProbe is an automated Rust crate testing platform. It:
 1. Downloads Rust crates from crates.io
 2. Runs `cargo rapx` (a memory safety analysis tool) against them
 3. Generates test cases and POC (Proof of Concept) exploits

@@ -1,5 +1,5 @@
-# 实验平台统一配置文件示例
-# Experiment Platform Unified Configuration Example
+# CrateProbe 统一配置文件示例
+# CrateProbe Unified Configuration Example
 #
 # 使用方法 (Usage):
 #   cp config.toml.example config.toml
