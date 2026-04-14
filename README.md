@@ -15,10 +15,6 @@ CrateProbe 是一个自动化 Rust crate 分析引擎，可下载 crate、运行
 - **后端**: Python 3.10+, FastAPI, SQLite
 - **前端**: Vue 3, Tailwind CSS, Vite
 
-## 文档
-
-详细设计文档请见：[docs/plans/2026-01-26-experiment-platform-design.md](docs/plans/2026-01-26-experiment-platform-design.md)
-
 ## 快速开始
 
 ### 1. 配置
@@ -33,14 +29,6 @@ cp config.toml.example config.toml
 # 默认配置：后端端口 8080，前端端口 5173
 vim config.toml
 ```
-
-**配置文件说明**：
-- `[server]` - 后端 FastAPI 服务器配置（端口、地址）
-- `[workspace]` - 工作空间目录
-- `[execution]` - 任务执行配置（并发数、资源限制）
-- `[database]` - 数据库配置
-- `[logging]` - 日志配置
-- `[frontend]` - 前端开发服务器配置和代理设置
 
 ### 2. 启动后端
 
@@ -82,11 +70,6 @@ npm run dev
 
 打开浏览器访问 `http://localhost:5173`
 
-## 开发
-
-本项目遵循TDD原则，请在实现功能前编写测试。
-
-详细实施计划请见 docs/plans/ 目录。
 
 ## 分布式 Runner 部署（简版）
 
