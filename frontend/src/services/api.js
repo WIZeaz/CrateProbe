@@ -117,6 +117,11 @@ export default {
     return response.data
   },
 
+  async validateAdminToken() {
+    const response = await api.head('/admin/runners')
+    return response.status === 200 || response.status === 204
+  },
+
   // Log endpoints
   async getLog(taskId, logType, lines = 1000) {
     const response = await api.get(`/tasks/${taskId}/logs/${logType}`, {
