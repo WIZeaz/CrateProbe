@@ -99,6 +99,27 @@ pull_policy = "always"
         os.unlink(config_path)
 
 
+def test_config_loads_distributed_runner_settings(tmp_path):
+    """Test that distributed runner and admin security settings are loaded."""
+    config_file = tmp_path / "config.toml"
+    config_file.write_text("""
+[distributed]
+enabled = true
+lease_ttl_seconds = 45
+runner_offline_seconds = 90
+
+[security]
+admin_token = "secret-admin-token"
+""")
+
+    config = Config.from_file(str(config_file))
+
+    assert config.distributed_enabled is True
+    assert config.lease_ttl_seconds == 45
+    assert config.runner_offline_seconds == 90
+    assert config.admin_token == "secret-admin-token"
+
+
 def test_config_loads_docker_mounts(tmp_path):
     """Test that docker mounts are loaded correctly"""
     config_file = tmp_path / "config.toml"

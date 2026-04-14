@@ -1,8 +1,22 @@
 import axios from 'axios'
+import { getAdminToken } from './adminAuth'
 
 const api = axios.create({
   baseURL: '/api',
   timeout: 30000,
+})
+
+api.interceptors.request.use(config => {
+  if (config.url && config.url.startsWith('/admin/')) {
+    const token = getAdminToken()
+    if (token) {
+      config.headers = {
+        ...config.headers,
+        'X-Admin-Token': token,
+      }
+    }
+  }
+  return config
 })
 
 // Request interceptor for error handling
@@ -84,6 +98,22 @@ export default {
 
   async getSystemStats() {
     const response = await api.get('/dashboard/system')
+    return response.data
+  },
+
+  // Admin endpoints
+  async getRunners() {
+    const response = await api.get('/admin/runners')
+    return response.data
+  },
+
+  async createRunner(payload) {
+    const response = await api.post('/admin/runners', payload)
+    return response.data
+  },
+
+  async deleteRunner(runnerId) {
+    const response = await api.delete(`/admin/runners/${runnerId}`)
     return response.data
   },
 

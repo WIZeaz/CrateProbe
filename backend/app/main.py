@@ -1,10 +1,19 @@
 import uvicorn
 import logging
+import base64
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import RedirectResponse, PlainTextResponse
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Literal
 from pathlib import Path
 import asyncio
 from app.config import Config
@@ -13,6 +22,7 @@ from app.models import TaskStatus
 from app.services.crates_api import CratesAPI, CrateNotFoundError
 from app.services.scheduler import TaskScheduler
 from app.services.system_monitor import SystemMonitor
+from app.security import generate_runner_token, generate_salt, hash_token, verify_token
 from app.utils.file_utils import read_last_n_lines
 from app.utils.file_utils import FileNotFoundError as CustomFileNotFoundError
 from app.api.websocket import get_manager
@@ -55,6 +65,47 @@ class TaskDetailResponse(BaseModel):
 class BatchPriorityRequest(BaseModel):
     task_ids: List[int]
     priority: int
+
+
+class CreateRunnerRequest(BaseModel):
+    runner_id: str
+
+
+class RunnerResponse(BaseModel):
+    runner_id: str
+    enabled: bool
+    created_at: str
+    last_seen_at: Optional[str]
+
+
+class RunnerCreateResponse(RunnerResponse):
+    token: str
+    token_hint: str
+
+
+class ClaimTaskResponse(BaseModel):
+    id: int
+    crate_name: str
+    version: str
+    status: str
+    runner_id: Optional[str]
+    lease_token: str
+    lease_expires_at: Optional[str]
+
+
+class RunnerTaskEventRequest(BaseModel):
+    lease_token: str
+    event_seq: int
+    event_type: Literal["started", "progress", "completed", "failed"]
+
+
+class RunnerTaskLogChunkRequest(BaseModel):
+    lease_token: str
+    chunk_seq: int
+    content: str
+
+
+RUNNER_CHUNK_LOG_TYPES = {"stdout", "stderr", "runner"}
 
 
 LOG_PATH_RESOLVERS = {
@@ -108,6 +159,60 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         version="1.0.0",
         lifespan=lifespan,
     )
+
+    def require_admin_token(
+        x_admin_token: Optional[str] = Header(default=None, alias="X-Admin-Token"),
+    ) -> None:
+        if not config.admin_token or x_admin_token != config.admin_token:
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+    def token_hint(token: str) -> str:
+        return f"****{token[-4:]}"
+
+    def _extract_bearer_token(authorization: Optional[str]) -> Optional[str]:
+        if not authorization:
+            return None
+        parts = authorization.strip().split(" ", 1)
+        if len(parts) != 2 or parts[0].lower() != "bearer":
+            return None
+        token = parts[1].strip()
+        return token or None
+
+    def require_runner_auth(
+        runner_id: str,
+        authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    ) -> None:
+        runner = db.get_runner_by_runner_id(runner_id)
+        if runner is None or not runner.enabled:
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+        token = _extract_bearer_token(authorization)
+        if token is None:
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+        try:
+            salt = base64.urlsafe_b64decode(runner.token_salt.encode("ascii"))
+        except Exception:
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+        if not verify_token(token, salt, runner.token_hash):
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+    def require_task_lease(
+        task_id: int, runner_id: str, lease_token: str
+    ) -> TaskRecord:
+        task = db.get_task(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        if (
+            task.runner_id != runner_id
+            or task.lease_token is None
+            or lease_token != task.lease_token
+        ):
+            raise HTTPException(status_code=409, detail="Lease token mismatch")
+
+        return task
 
     @app.get("/", include_in_schema=False)
     async def root():
@@ -187,6 +292,147 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         """Get all tasks"""
         tasks = db.get_all_tasks()
         return [_task_to_response(task) for task in tasks]
+
+    @app.post(
+        "/api/admin/runners",
+        response_model=RunnerCreateResponse,
+        status_code=201,
+        dependencies=[Depends(require_admin_token)],
+    )
+    async def create_runner(request: CreateRunnerRequest):
+        existing = db.get_runner_by_runner_id(request.runner_id)
+        if existing is not None:
+            raise HTTPException(status_code=409, detail="Runner already exists")
+
+        token = generate_runner_token()
+        salt = generate_salt()
+        token_hash = hash_token(token, salt)
+        token_salt = base64.urlsafe_b64encode(salt).decode("ascii")
+        runner = db.create_runner(request.runner_id, token_hash, token_salt)
+
+        return RunnerCreateResponse(
+            runner_id=runner.runner_id,
+            enabled=runner.enabled,
+            created_at=runner.created_at.isoformat(),
+            last_seen_at=(
+                runner.last_seen_at.isoformat() if runner.last_seen_at else None
+            ),
+            token=token,
+            token_hint=token_hint(token),
+        )
+
+    @app.get(
+        "/api/admin/runners",
+        response_model=List[RunnerResponse],
+        dependencies=[Depends(require_admin_token)],
+    )
+    async def list_runners():
+        runners = db.list_runners()
+        return [
+            RunnerResponse(
+                runner_id=runner.runner_id,
+                enabled=runner.enabled,
+                created_at=runner.created_at.isoformat(),
+                last_seen_at=(
+                    runner.last_seen_at.isoformat() if runner.last_seen_at else None
+                ),
+            )
+            for runner in runners
+        ]
+
+    @app.delete(
+        "/api/admin/runners/{runner_id}",
+        response_model=RunnerResponse,
+        dependencies=[Depends(require_admin_token)],
+    )
+    async def disable_runner(runner_id: str):
+        runner = db.get_runner_by_runner_id(runner_id)
+        if runner is None:
+            raise HTTPException(status_code=404, detail="Runner not found")
+
+        db.disable_runner(runner_id)
+        updated_runner = db.get_runner_by_runner_id(runner_id)
+        if updated_runner is None:
+            raise HTTPException(status_code=404, detail="Runner not found")
+
+        return RunnerResponse(
+            runner_id=updated_runner.runner_id,
+            enabled=updated_runner.enabled,
+            created_at=updated_runner.created_at.isoformat(),
+            last_seen_at=(
+                updated_runner.last_seen_at.isoformat()
+                if updated_runner.last_seen_at
+                else None
+            ),
+        )
+
+    @app.post("/api/runners/{runner_id}/heartbeat")
+    async def runner_heartbeat(
+        runner_id: str,
+        _auth: None = Depends(require_runner_auth),
+    ):
+        db.touch_runner_heartbeat(runner_id)
+        return {"success": True}
+
+    @app.post(
+        "/api/runners/{runner_id}/claim",
+        response_model=ClaimTaskResponse,
+        responses={204: {"description": "No pending tasks"}},
+    )
+    async def claim_task(
+        runner_id: str,
+        _auth: None = Depends(require_runner_auth),
+    ):
+        task = db.claim_pending_task(runner_id, config.lease_ttl_seconds)
+        if task is None:
+            return PlainTextResponse(status_code=204, content="")
+
+        return ClaimTaskResponse(
+            id=task.id,
+            crate_name=task.crate_name,
+            version=task.version,
+            status=task.status.value,
+            runner_id=task.runner_id,
+            lease_token=task.lease_token or "",
+            lease_expires_at=(
+                task.lease_expires_at.isoformat() if task.lease_expires_at else None
+            ),
+        )
+
+    @app.post("/api/runners/{runner_id}/tasks/{task_id}/events")
+    async def ingest_runner_task_event(
+        runner_id: str,
+        task_id: int,
+        request: RunnerTaskEventRequest,
+        _auth: None = Depends(require_runner_auth),
+    ):
+        require_task_lease(task_id, runner_id, request.lease_token)
+        applied = db.apply_task_event(task_id, request.event_seq, request.event_type)
+        if applied is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return {"applied": applied}
+
+    @app.post("/api/runners/{runner_id}/tasks/{task_id}/logs/{log_type}/chunks")
+    async def ingest_runner_task_log_chunk(
+        runner_id: str,
+        task_id: int,
+        log_type: str,
+        request: RunnerTaskLogChunkRequest,
+        _auth: None = Depends(require_runner_auth),
+    ):
+        if log_type not in RUNNER_CHUNK_LOG_TYPES:
+            raise HTTPException(status_code=404, detail="Unknown log type")
+
+        task = require_task_lease(task_id, runner_id, request.lease_token)
+
+        should_append = db.record_task_log_chunk(task_id, log_type, request.chunk_seq)
+        if should_append:
+            log_path = LOG_PATH_RESOLVERS[log_type](task, config)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(request.content)
+
+        return {"appended": should_append}
 
     @app.get("/api/tasks/{task_id}", response_model=TaskDetailResponse)
     async def get_task(task_id: int):

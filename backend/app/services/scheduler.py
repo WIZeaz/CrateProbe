@@ -30,14 +30,18 @@ class TaskScheduler:
 
     async def schedule_tasks(self):
         """Schedule pending tasks if capacity available"""
+        if self.config.distributed_enabled:
+            self.reconcile_expired_leases()
+
         running_count = self.get_running_count()
         available_slots = self.config.max_jobs - running_count
 
         if available_slots <= 0:
             return
 
-        # Check for and fix any stuck running tasks before scheduling new ones
-        self._check_and_fix_stuck_tasks()
+        # Check for and fix local stuck tasks before scheduling new ones
+        if not self.config.distributed_enabled:
+            self._check_and_fix_stuck_tasks()
 
         # Get pending tasks
         pending = self.db.get_pending_tasks_ordered()
@@ -47,6 +51,35 @@ class TaskScheduler:
             task_future = asyncio.create_task(self._execute_and_cleanup(task.id))
             self._running_task_futures.add(task_future)
             task_future.add_done_callback(self._running_task_futures.discard)
+
+    def reconcile_expired_leases(self):
+        """Requeue RUNNING tasks whose distributed lease has expired."""
+        if not self.config.distributed_enabled:
+            return
+
+        now = datetime.now()
+        cursor = self.db.conn.cursor()
+        cursor.execute(
+            """
+            UPDATE tasks
+            SET status = ?,
+                runner_id = NULL,
+                lease_token = NULL,
+                lease_expires_at = NULL,
+                attempt = COALESCE(attempt, 0) + 1
+            WHERE status = ?
+              AND lease_expires_at IS NOT NULL
+              AND lease_expires_at <= ?
+            """,
+            (TaskStatus.PENDING.value, TaskStatus.RUNNING.value, now),
+        )
+        self.db.conn.commit()
+
+        if cursor.rowcount > 0:
+            logger.warning(
+                "Requeued %s running task(s) with expired lease",
+                cursor.rowcount,
+            )
 
     async def _execute_and_cleanup(self, task_id: int):
         """Execute task and clean up tracking when done"""

@@ -29,6 +29,10 @@ class Config:
     log_console: bool = True
     log_file: bool = True
     log_file_path: str = "server.log"
+    distributed_enabled: bool = False
+    lease_ttl_seconds: int = 30
+    runner_offline_seconds: int = 30
+    admin_token: str = ""
 
     @classmethod
     def from_file(cls, path: str) -> "Config":
@@ -44,6 +48,8 @@ class Config:
         execution = data.get("execution", {})
         docker_config = execution.get("docker", {})
         docker_mounts = docker_config.get("mounts", [])
+        distributed = data.get("distributed", {})
+        security = data.get("security", {})
 
         if docker_mounts is None:
             docker_mounts = []
@@ -68,6 +74,10 @@ class Config:
             log_console=data.get("logging", {}).get("console", True),
             log_file=data.get("logging", {}).get("file", True),
             log_file_path=data.get("logging", {}).get("file_path", "server.log"),
+            distributed_enabled=distributed.get("enabled", False),
+            lease_ttl_seconds=distributed.get("lease_ttl_seconds", 30),
+            runner_offline_seconds=distributed.get("runner_offline_seconds", 30),
+            admin_token=security.get("admin_token", ""),
         )
 
     @staticmethod

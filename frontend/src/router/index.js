@@ -35,6 +35,11 @@ const routes = [
     name: 'TaskDetail',
     component: () => import('../views/TaskDetail.vue'),
     props: true
+  },
+  {
+    path: '/runners',
+    name: 'RunnerList',
+    component: () => import('../views/RunnerList.vue')
   }
 ]
 
