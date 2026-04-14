@@ -100,3 +100,15 @@ def test_list_runners_returns_created_runners(client):
     for runner in runners:
         assert "enabled" in runner
         assert "last_seen_at" in runner
+
+
+def test_head_runners_with_valid_token_returns_200(client):
+    response = client.head("/api/admin/runners", headers=_admin_headers())
+    assert response.status_code == 200
+
+
+def test_head_runners_with_invalid_token_returns_403(client):
+    response = client.head(
+        "/api/admin/runners", headers={"X-Admin-Token": "wrong-token"}
+    )
+    assert response.status_code == 403
