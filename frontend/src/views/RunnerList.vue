@@ -1,7 +1,10 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import api from '../services/api'
 import { getAdminToken } from '../services/adminAuth'
+
+const router = useRouter()
 
 const runners = ref([])
 const loading = ref(true)
@@ -26,8 +29,7 @@ async function fetchRunners() {
   error.value = ''
 
   if (!hasAdminToken.value) {
-    error.value = 'Admin token is missing. Set an admin token, then refresh this page.'
-    loading.value = false
+    router.replace('/settings')
     return
   }
 
