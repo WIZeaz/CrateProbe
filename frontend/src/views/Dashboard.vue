@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import api from '../services/api'
 import websocket from '../services/websocket'
 import StatCard from '../components/StatCard.vue'
-import SystemMonitor from '../components/SystemMonitor.vue'
+import RunnerMonitorPanel from '../components/RunnerMonitorPanel.vue'
 
 const router = useRouter()
 const dashboard = ref({
@@ -16,6 +16,9 @@ const dashboard = ref({
 })
 const loading = ref(true)
 const error = ref(null)
+const runnerOverview = ref([])
+const runnerLoading = ref(true)
+const runnerError = ref('')
 let refreshInterval = null
 
 async function fetchDashboard(isRefresh = false) {
@@ -46,6 +49,27 @@ async function fetchDashboard(isRefresh = false) {
     error.value = err.message
     if (!isRefresh) {
       loading.value = false
+    }
+  }
+}
+
+async function fetchRunnerOverview(isRefresh = false) {
+  if (!isRefresh) {
+    runnerLoading.value = true
+  }
+  runnerError.value = ''
+
+  try {
+    runnerOverview.value = await api.getRunnerOverview()
+  } catch (err) {
+    if (err.response?.status === 403) {
+      runnerError.value = 'Admin token is missing or invalid. Please update it in Settings.'
+    } else {
+      runnerError.value = err.response?.data?.detail || err.message || 'Failed to load runner overview.'
+    }
+  } finally {
+    if (!isRefresh) {
+      runnerLoading.value = false
     }
   }
 }
@@ -88,6 +112,7 @@ function navigateToTasks(status = 'all') {
 
 onMounted(() => {
   fetchDashboard()
+  fetchRunnerOverview()
   websocket.connect('/ws/dashboard')
   websocket.on('task_update', handleTaskUpdate)
   websocket.on('task_created', handleTaskUpdate)
@@ -96,7 +121,8 @@ onMounted(() => {
   // Auto-refresh every 5 seconds (non-intrusive)
   refreshInterval = setInterval(() => {
     fetchDashboard(true)
-  }, 5000)
+    fetchRunnerOverview(true)
+  }, 10000)
 })
 
 onUnmounted(() => {
@@ -170,9 +196,13 @@ onUnmounted(() => {
 
       <!-- System Monitor and Recent Tasks -->
       <div class="bento-grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <!-- System Monitor -->
+        <!-- Runner Monitor -->
         <div class="lg:col-span-1">
-          <SystemMonitor />
+          <RunnerMonitorPanel
+            :runners="runnerOverview"
+            :loading="runnerLoading"
+            :error="runnerError"
+          />
         </div>
 
         <!-- Recent Tasks -->

@@ -1,8 +1,9 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../services/api'
 import { getAdminToken } from '../services/adminAuth'
+import RunnerMetricsChart from '../components/RunnerMetricsChart.vue'
 
 const router = useRouter()
 
@@ -14,6 +15,12 @@ const error = ref('')
 const createError = ref('')
 const copySuccess = ref(false)
 const createdToken = ref(null)
+const selectedRunnerId = ref('')
+const metricsWindow = ref('1h')
+const metricsLoading = ref(false)
+const metricsError = ref('')
+const metricsData = ref(null)
+let metricsInterval = null
 
 const form = ref({
   runner_id: '',
@@ -23,6 +30,16 @@ const form = ref({
 })
 
 const hasAdminToken = computed(() => Boolean(getAdminToken()))
+const selectedRunner = computed(() => {
+  if (!selectedRunnerId.value) return null
+  return runners.value.find(r => r.runner_id === selectedRunnerId.value) || null
+})
+const metricsSeries = computed(() => metricsData.value?.series || [])
+const activeTasksMaxY = computed(() => {
+  const values = metricsSeries.value.map(item => Number(item.active_tasks || 0))
+  const maxValue = values.length ? Math.max(...values) : 0
+  return Math.max(1, maxValue)
+})
 
 async function fetchRunners() {
   loading.value = true
@@ -66,14 +83,18 @@ function parseTags(raw) {
 
 function runnerStatus(runner) {
   if (!runner.enabled) return 'disabled'
-  if (!runner.last_seen_at) return 'ready'
+  if (!runner.last_seen_at) return 'offline'
 
   const seen = new Date(runner.last_seen_at)
-  if (Number.isNaN(seen.getTime())) return 'ready'
+  if (Number.isNaN(seen.getTime())) return 'offline'
 
   const secondsAgo = (Date.now() - seen.getTime()) / 1000
   if (secondsAgo <= 120) return 'online'
-  return 'idle'
+  return 'offline'
+}
+
+function selectedRunnerHealth() {
+  return metricsData.value?.runner?.health_status || (selectedRunner.value ? runnerStatus(selectedRunner.value) : 'offline')
 }
 
 function normalizeCapacity(value) {
@@ -166,7 +187,69 @@ async function deleteRunner(runner) {
   }
 }
 
-onMounted(fetchRunners)
+async function fetchRunnerMetrics(isRefresh = false) {
+  if (!selectedRunnerId.value) return
+
+  if (!isRefresh) {
+    metricsLoading.value = true
+  }
+  metricsError.value = ''
+
+  try {
+    metricsData.value = await api.getRunnerMetrics(selectedRunnerId.value, metricsWindow.value)
+  } catch (err) {
+    if (err.response?.status === 403) {
+      metricsError.value = 'Admin token is invalid or missing. Update token and retry.'
+    } else {
+      metricsError.value = err.response?.data?.detail || err.message || 'Failed to load runner metrics.'
+    }
+  } finally {
+    if (!isRefresh) {
+      metricsLoading.value = false
+    }
+  }
+}
+
+function selectRunner(runner) {
+  if (selectedRunnerId.value === runner.runner_id) {
+    selectedRunnerId.value = ''
+    metricsData.value = null
+    metricsError.value = ''
+    return
+  }
+
+  selectedRunnerId.value = runner.runner_id
+  metricsWindow.value = '1h'
+  fetchRunnerMetrics()
+}
+
+function setMetricsWindow(windowValue) {
+  metricsWindow.value = windowValue
+  fetchRunnerMetrics()
+}
+
+function startMetricsRefresh() {
+  stopMetricsRefresh()
+  metricsInterval = setInterval(() => {
+    fetchRunnerMetrics(true)
+  }, 10000)
+}
+
+function stopMetricsRefresh() {
+  if (metricsInterval) {
+    clearInterval(metricsInterval)
+    metricsInterval = null
+  }
+}
+
+onMounted(() => {
+  fetchRunners()
+  startMetricsRefresh()
+})
+
+onUnmounted(() => {
+  stopMetricsRefresh()
+})
 </script>
 
 <template>
@@ -307,14 +390,19 @@ onMounted(fetchRunners)
           </tr>
         </thead>
         <tbody class="divide-y divide-gray-200">
-          <tr v-for="runner in runners" :key="runner.runner_id" class="hover:bg-gray-50 transition-colors">
+          <tr
+            v-for="runner in runners"
+            :key="runner.runner_id"
+            class="hover:bg-gray-50 transition-colors cursor-pointer"
+            @click="selectRunner(runner)"
+          >
             <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">{{ runner.runner_id }}</td>
             <td class="px-4 py-3 whitespace-nowrap">
               <span
                 class="status-badge"
                 :class="{
                   'status-running': runnerStatus(runner) === 'online',
-                  'status-pending': runnerStatus(runner) === 'ready' || runnerStatus(runner) === 'idle',
+                  'status-failed': runnerStatus(runner) === 'offline',
                   'status-cancelled': runnerStatus(runner) === 'disabled'
                 }"
               >
@@ -343,6 +431,7 @@ onMounted(fetchRunners)
             <td class="px-4 py-3 whitespace-nowrap text-sm">
               <button
                 @click="deleteRunner(runner)"
+                @click.stop
                 :disabled="deletingRunnerId === runner.runner_id"
                 class="px-3 py-1.5 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
               >
@@ -352,6 +441,85 @@ onMounted(fetchRunners)
           </tr>
         </tbody>
       </table>
+    </section>
+
+    <section v-if="selectedRunner" class="bento-card mt-6">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+        <div>
+          <h2 class="text-lg font-semibold text-gray-900">Runner Details</h2>
+          <p class="text-sm text-gray-600 mt-1">{{ selectedRunner.runner_id }}</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <button
+            v-for="windowValue in ['1h', '6h', '24h']"
+            :key="windowValue"
+            @click="setMetricsWindow(windowValue)"
+            class="px-3 py-1.5 text-xs font-medium rounded-lg border"
+            :class="metricsWindow === windowValue ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'"
+          >
+            {{ windowValue }}
+          </button>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4 text-sm">
+        <div>
+          <p class="text-gray-500">Runner ID</p>
+          <p class="font-medium text-gray-900">{{ selectedRunner.runner_id }}</p>
+        </div>
+        <div>
+          <p class="text-gray-500">Health</p>
+          <span
+            class="status-badge"
+            :class="{
+              'status-running': selectedRunnerHealth() === 'online',
+              'status-failed': selectedRunnerHealth() === 'offline',
+              'status-cancelled': selectedRunnerHealth() === 'disabled'
+            }"
+          >
+            {{ selectedRunnerHealth() }}
+          </span>
+        </div>
+        <div>
+          <p class="text-gray-500">Enabled</p>
+          <p class="font-medium text-gray-900">{{ selectedRunner.enabled ? 'yes' : 'no' }}</p>
+        </div>
+        <div>
+          <p class="text-gray-500">Last Seen</p>
+          <p class="font-medium text-gray-900">{{ formatDate(selectedRunner.last_seen_at || selectedRunner.last_seen) }}</p>
+        </div>
+      </div>
+
+      <div v-if="metricsLoading" class="flex justify-center py-8">
+        <div class="spinner border-blue-500"></div>
+      </div>
+
+      <div v-else-if="metricsError" class="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg text-sm">
+        {{ metricsError }}
+      </div>
+
+      <div v-else-if="metricsSeries.length === 0" class="text-sm text-gray-500 py-6 text-center">
+        暂无监控数据
+      </div>
+
+      <div v-else class="grid grid-cols-1 gap-4">
+        <div class="rounded-lg border border-gray-200 p-3">
+          <p class="text-sm font-medium text-gray-700 mb-2">CPU %</p>
+          <RunnerMetricsChart :points="metricsSeries" field="cpu_percent" :max-y="100" stroke="#2563eb" />
+        </div>
+        <div class="rounded-lg border border-gray-200 p-3">
+          <p class="text-sm font-medium text-gray-700 mb-2">Memory %</p>
+          <RunnerMetricsChart :points="metricsSeries" field="memory_percent" :max-y="100" stroke="#16a34a" />
+        </div>
+        <div class="rounded-lg border border-gray-200 p-3">
+          <p class="text-sm font-medium text-gray-700 mb-2">Disk %</p>
+          <RunnerMetricsChart :points="metricsSeries" field="disk_percent" :max-y="100" stroke="#d97706" />
+        </div>
+        <div class="rounded-lg border border-gray-200 p-3">
+          <p class="text-sm font-medium text-gray-700 mb-2">Active Tasks</p>
+          <RunnerMetricsChart :points="metricsSeries" field="active_tasks" :max-y="activeTasksMaxY" stroke="#7c3aed" />
+        </div>
+      </div>
     </section>
   </div>
 </template>

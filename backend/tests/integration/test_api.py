@@ -57,6 +57,7 @@ def test_get_all_tasks(client):
     assert tasks[0]["crate_name"] == "serde"
     assert "compile_failed" in tasks[0]
     assert tasks[0]["compile_failed"] is None
+    assert "runner_id" in tasks[0]
 
 
 def test_get_task_by_id(client):
@@ -74,6 +75,20 @@ def test_get_task_by_id(client):
     assert data["crate_name"] == "serde"
     assert "compile_failed" in data
     assert data["compile_failed"] is None
+    assert "runner_id" in data
+
+
+def test_queue_items_include_runner_id(client):
+    client.post("/api/tasks", json={"crate_name": "serde", "version": "1.0.0"})
+
+    response = client.get("/api/queue")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "running" in data
+    assert "pending" in data
+    if data["pending"]:
+        assert "runner_id" in data["pending"][0]
 
 
 def test_delete_task_not_running(client):

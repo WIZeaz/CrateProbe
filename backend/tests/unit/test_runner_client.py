@@ -88,3 +88,30 @@ async def test_send_event_retries_transient_5xx(monkeypatch: pytest.MonkeyPatch)
     assert attempts == 3
     assert result == {"applied": True}
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_send_metrics_posts_to_metrics_endpoint(monkeypatch: pytest.MonkeyPatch):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/runners/runner-2/metrics"
+        return httpx.Response(status_code=200, json={"success": True}, request=request)
+
+    _patch_async_client(monkeypatch, handler)
+    client = RunnerControlClient(
+        base_url="http://control.local",
+        runner_id="runner-2",
+        token="metrics-token",
+        timeout=5.0,
+    )
+
+    result = await client.send_metrics(
+        {
+            "cpu_percent": 1,
+            "memory_percent": 2,
+            "disk_percent": 3,
+            "active_tasks": 0,
+        }
+    )
+
+    assert result == {"success": True}
+    await client.aclose()

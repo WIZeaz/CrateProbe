@@ -183,3 +183,279 @@ def test_events_endpoint_returns_409_for_lease_mismatch(client):
     )
 
     assert response.status_code == 409
+
+
+def test_runner_metrics_endpoint_accepts_valid_payload(client):
+    token = _create_runner(client, "runner-metrics-1")
+    response = client.post(
+        "/api/runners/runner-metrics-1/metrics",
+        headers=_runner_headers(token),
+        json={
+            "cpu_percent": 12.5,
+            "memory_percent": 48.0,
+            "disk_percent": 66.1,
+            "active_tasks": 1,
+        },
+    )
+    assert response.status_code == 200
+
+
+def test_runner_metrics_rejects_invalid_ranges(client):
+    token = _create_runner(client, "runner-metrics-range")
+    response = client.post(
+        "/api/runners/runner-metrics-range/metrics",
+        headers=_runner_headers(token),
+        json={
+            "cpu_percent": 120,
+            "memory_percent": 10,
+            "disk_percent": 10,
+            "active_tasks": 0,
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_runner_metrics_rejects_negative_active_tasks(client):
+    token = _create_runner(client, "runner-metrics-negative")
+    response = client.post(
+        "/api/runners/runner-metrics-negative/metrics",
+        headers=_runner_headers(token),
+        json={
+            "cpu_percent": 10,
+            "memory_percent": 10,
+            "disk_percent": 10,
+            "active_tasks": -1,
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_runner_metrics_rejects_invalid_token(client):
+    _create_runner(client, "runner-metrics-2")
+    response = client.post(
+        "/api/runners/runner-metrics-2/metrics",
+        headers=_runner_headers("wrong-token"),
+        json={
+            "cpu_percent": 1,
+            "memory_percent": 2,
+            "disk_percent": 3,
+            "active_tasks": 0,
+        },
+    )
+    assert response.status_code == 403
+
+
+def test_runner_metrics_missing_timestamp_falls_back_to_server_time(client):
+    token = _create_runner(client, "runner-time-missing")
+    post_response = client.post(
+        "/api/runners/runner-time-missing/metrics",
+        headers=_runner_headers(token),
+        json={
+            "cpu_percent": 11,
+            "memory_percent": 22,
+            "disk_percent": 33,
+            "active_tasks": 0,
+        },
+    )
+    assert post_response.status_code == 200
+
+    query_response = client.get(
+        "/api/admin/runners/runner-time-missing/metrics",
+        headers=_admin_headers(),
+        params={"window": "1h"},
+    )
+    assert query_response.status_code == 200
+    assert len(query_response.json()["series"]) >= 1
+
+
+def test_runner_metrics_invalid_timestamp_falls_back_to_server_time(client):
+    token = _create_runner(client, "runner-time-invalid")
+    post_response = client.post(
+        "/api/runners/runner-time-invalid/metrics",
+        headers=_runner_headers(token),
+        json={
+            "timestamp": "not-a-datetime",
+            "cpu_percent": 9,
+            "memory_percent": 9,
+            "disk_percent": 9,
+            "active_tasks": 0,
+        },
+    )
+    assert post_response.status_code == 200
+
+    query_response = client.get(
+        "/api/admin/runners/runner-time-invalid/metrics",
+        headers=_admin_headers(),
+        params={"window": "1h"},
+    )
+    assert query_response.status_code == 200
+    assert len(query_response.json()["series"]) >= 1
+
+
+def test_admin_overview_requires_admin_token(client):
+    _create_runner(client, "runner-overview-auth")
+    response = client.get(
+        "/api/admin/runners/overview",
+        headers={"X-Admin-Token": "wrong-token"},
+    )
+    assert response.status_code == 403
+
+
+def test_admin_overview_returns_health_and_latest_metrics(client):
+    token = _create_runner(client, "runner-overview-1")
+    metrics_resp = client.post(
+        "/api/runners/runner-overview-1/metrics",
+        headers=_runner_headers(token),
+        json={
+            "cpu_percent": 20,
+            "memory_percent": 30,
+            "disk_percent": 40,
+            "active_tasks": 0,
+        },
+    )
+    assert metrics_resp.status_code == 200
+
+    heartbeat = client.post(
+        "/api/runners/runner-overview-1/heartbeat",
+        headers=_runner_headers(token),
+    )
+    assert heartbeat.status_code == 200
+
+    response = client.get("/api/admin/runners/overview", headers=_admin_headers())
+    assert response.status_code == 200
+    items = response.json()
+    target = next(i for i in items if i["runner_id"] == "runner-overview-1")
+    assert target["health_status"] == "online"
+    assert target["latest_metrics"]["cpu_percent"] == 20
+
+
+def test_admin_overview_marks_disabled_runner_as_disabled(client):
+    _create_runner(client, "runner-disabled-1")
+    disable_resp = client.delete(
+        "/api/admin/runners/runner-disabled-1", headers=_admin_headers()
+    )
+    assert disable_resp.status_code == 200
+
+    response = client.get("/api/admin/runners/overview", headers=_admin_headers())
+    target = next(i for i in response.json() if i["runner_id"] == "runner-disabled-1")
+    assert target["health_status"] == "disabled"
+    assert target["health_status"] != "idle"
+
+
+def test_admin_overview_marks_no_heartbeat_runner_as_offline(client):
+    _create_runner(client, "runner-offline-1")
+    response = client.get("/api/admin/runners/overview", headers=_admin_headers())
+    target = next(i for i in response.json() if i["runner_id"] == "runner-offline-1")
+    assert target["health_status"] == "offline"
+
+
+def test_admin_runner_metrics_requires_admin_token(client):
+    _create_runner(client, "runner-window-auth")
+    response = client.get(
+        "/api/admin/runners/runner-window-auth/metrics",
+        headers={"X-Admin-Token": "wrong-token"},
+        params={"window": "1h"},
+    )
+    assert response.status_code == 403
+
+
+def test_admin_runner_metrics_returns_windowed_series_and_latest(client):
+    token = _create_runner(client, "runner-window-1")
+    post_response = client.post(
+        "/api/runners/runner-window-1/metrics",
+        headers=_runner_headers(token),
+        json={
+            "cpu_percent": 10,
+            "memory_percent": 20,
+            "disk_percent": 30,
+            "active_tasks": 1,
+        },
+    )
+    assert post_response.status_code == 200
+
+    response = client.get(
+        "/api/admin/runners/runner-window-1/metrics",
+        headers=_admin_headers(),
+        params={"window": "1h"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "runner" in data
+    assert data["window"] == "1h"
+    assert "latest" in data
+    assert "series" in data
+    assert data["runner"]["runner_id"] == "runner-window-1"
+    assert "enabled" in data["runner"]
+    assert "last_seen_at" in data["runner"]
+    assert data["runner"]["health_status"] in ("online", "offline", "disabled")
+    assert len(data["series"]) >= 1
+    timestamps = [item["timestamp"] for item in data["series"]]
+    assert timestamps == sorted(timestamps)
+
+
+def test_admin_runner_metrics_supports_6h_and_24h_windows(client):
+    token = _create_runner(client, "runner-window-2")
+    post_response = client.post(
+        "/api/runners/runner-window-2/metrics",
+        headers=_runner_headers(token),
+        json={
+            "cpu_percent": 5,
+            "memory_percent": 5,
+            "disk_percent": 5,
+            "active_tasks": 0,
+        },
+    )
+    assert post_response.status_code == 200
+
+    for window in ("6h", "24h"):
+        response = client.get(
+            "/api/admin/runners/runner-window-2/metrics",
+            headers=_admin_headers(),
+            params={"window": window},
+        )
+        assert response.status_code == 200
+        assert response.json()["window"] == window
+
+
+def test_admin_runner_metrics_defaults_window_to_1h(client):
+    token = _create_runner(client, "runner-window-default")
+    client.post(
+        "/api/runners/runner-window-default/metrics",
+        headers=_runner_headers(token),
+        json={
+            "cpu_percent": 7,
+            "memory_percent": 8,
+            "disk_percent": 9,
+            "active_tasks": 0,
+        },
+    )
+
+    response = client.get(
+        "/api/admin/runners/runner-window-default/metrics",
+        headers=_admin_headers(),
+    )
+    assert response.status_code == 200
+    assert response.json()["window"] == "1h"
+
+
+def test_admin_runner_metrics_rejects_invalid_window(client):
+    _create_runner(client, "runner-window-invalid")
+    response = client.get(
+        "/api/admin/runners/runner-window-invalid/metrics",
+        headers=_admin_headers(),
+        params={"window": "2h"},
+    )
+    assert response.status_code == 422
+
+
+def test_admin_runner_metrics_returns_empty_series_without_metrics(client):
+    _create_runner(client, "runner-window-empty")
+    response = client.get(
+        "/api/admin/runners/runner-window-empty/metrics",
+        headers=_admin_headers(),
+        params={"window": "1h"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["series"] == []
+    assert data["latest"] is None

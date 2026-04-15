@@ -5,6 +5,7 @@ import { RecycleScroller } from 'vue-virtual-scroller'
 import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
 import api from '../services/api'
 import websocket from '../services/websocket'
+import RunnerIdBadge from '../components/RunnerIdBadge.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -380,6 +381,13 @@ onUnmounted(() => {
             Runtime
             <span v-if="sortColumn === 'runtime'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
           </div>
+          <div
+            @click="sortBy('runner_id')"
+            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 w-40"
+          >
+            Runner
+            <span v-if="sortColumn === 'runner_id'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
+          </div>
         </div>
       </div>
       <RecycleScroller
@@ -430,6 +438,9 @@ onUnmounted(() => {
           </div>
           <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer w-28" @click="viewTask(task.id)">
             {{ formatDuration(task.started_at, task.finished_at) }}
+          </div>
+          <div class="px-4 py-3 whitespace-nowrap cursor-pointer w-40" @click="viewTask(task.id)">
+            <RunnerIdBadge :runner-id="task.runner_id || ''" />
           </div>
         </div>
       </RecycleScroller>

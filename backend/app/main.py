@@ -1,6 +1,7 @@
 import uvicorn
 import logging
 import base64
+from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from fastapi import (
     Depends,
@@ -12,7 +13,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.responses import RedirectResponse, PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
 from pathlib import Path
 import asyncio
@@ -22,6 +23,7 @@ from app.models import TaskStatus
 from app.services.crates_api import CratesAPI, CrateNotFoundError
 from app.services.scheduler import TaskScheduler
 from app.services.system_monitor import SystemMonitor
+from app.services.runner_metrics_store import RunnerMetricsStore, RunnerMetricPoint
 from app.security import generate_runner_token, generate_salt, hash_token, verify_token
 from app.utils.file_utils import read_last_n_lines
 from app.utils.file_utils import FileNotFoundError as CustomFileNotFoundError
@@ -60,6 +62,7 @@ class TaskDetailResponse(BaseModel):
     message: Optional[str]
     compile_failed: Optional[int]
     priority: Optional[int]
+    runner_id: Optional[str]
 
 
 class BatchPriorityRequest(BaseModel):
@@ -105,6 +108,38 @@ class RunnerTaskLogChunkRequest(BaseModel):
     content: str
 
 
+class RunnerMetricsRequest(BaseModel):
+    timestamp: Optional[str] = None
+    cpu_percent: float = Field(ge=0.0, le=100.0)
+    memory_percent: float = Field(ge=0.0, le=100.0)
+    disk_percent: float = Field(ge=0.0, le=100.0)
+    active_tasks: int = Field(ge=0)
+
+
+class RunnerLatestMetricsResponse(BaseModel):
+    timestamp: str
+    cpu_percent: float
+    memory_percent: float
+    disk_percent: float
+    active_tasks: int
+
+
+class RunnerOverviewResponse(BaseModel):
+    runner_id: str
+    enabled: bool
+    created_at: str
+    last_seen_at: Optional[str]
+    health_status: Literal["online", "offline", "disabled"]
+    latest_metrics: Optional[RunnerLatestMetricsResponse]
+
+
+class RunnerMetricsQueryResponse(BaseModel):
+    runner: RunnerOverviewResponse
+    window: Literal["1h", "6h", "24h"]
+    latest: Optional[RunnerLatestMetricsResponse]
+    series: List[RunnerLatestMetricsResponse]
+
+
 RUNNER_CHUNK_LOG_TYPES = {"stdout", "stderr", "runner"}
 
 
@@ -130,6 +165,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
     # Create scheduler
     scheduler = TaskScheduler(config, db)
+    metrics_store = RunnerMetricsStore(max_age=timedelta(hours=24))
 
     # Get WebSocket manager
     ws_manager = get_manager()
@@ -214,6 +250,52 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
         return task
 
+    def _parse_metric_timestamp(value: Optional[str]) -> datetime:
+        if not value:
+            return datetime.now()
+        try:
+            normalized = value.replace("Z", "+00:00")
+            parsed = datetime.fromisoformat(normalized)
+            if parsed.tzinfo is not None:
+                return parsed.replace(tzinfo=None)
+            return parsed
+        except Exception:
+            return datetime.now()
+
+    def _health_status(runner) -> Literal["online", "offline", "disabled"]:
+        if not runner.enabled:
+            return "disabled"
+        if not runner.last_seen_at:
+            return "offline"
+        age = (datetime.now() - runner.last_seen_at).total_seconds()
+        if age > config.runner_offline_seconds:
+            return "offline"
+        return "online"
+
+    def _metric_to_response(
+        metric: Optional[RunnerMetricPoint],
+    ) -> Optional[RunnerLatestMetricsResponse]:
+        if metric is None:
+            return None
+        return RunnerLatestMetricsResponse(
+            timestamp=metric.ts.isoformat(),
+            cpu_percent=metric.cpu_percent,
+            memory_percent=metric.memory_percent,
+            disk_percent=metric.disk_percent,
+            active_tasks=metric.active_tasks,
+        )
+
+    def _window_to_timedelta(window: str) -> timedelta:
+        mapping = {
+            "1h": timedelta(hours=1),
+            "6h": timedelta(hours=6),
+            "24h": timedelta(hours=24),
+        }
+        value = mapping.get(window)
+        if value is None:
+            raise HTTPException(status_code=422, detail="Invalid window")
+        return value
+
     @app.get("/", include_in_schema=False)
     async def root():
         return RedirectResponse(url="/docs")
@@ -273,6 +355,12 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                 stdout_log=str(stdout_log),
                 stderr_log=str(stderr_log),
             )
+
+            created_task = db.get_task(task_id)
+            if created_task is not None:
+                payload = _task_to_dict(created_task)
+                payload["type"] = "task_created"
+                await ws_manager.broadcast_dashboard_update(payload)
 
             return TaskResponse(
                 task_id=task_id,
@@ -380,6 +468,83 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         db.touch_runner_heartbeat(runner_id)
         return {"success": True}
 
+    @app.post("/api/runners/{runner_id}/metrics")
+    async def ingest_runner_metrics(
+        runner_id: str,
+        request: RunnerMetricsRequest,
+        _auth: None = Depends(require_runner_auth),
+    ):
+        timestamp = _parse_metric_timestamp(request.timestamp)
+        await metrics_store.append(
+            runner_id=runner_id,
+            ts=timestamp,
+            cpu_percent=request.cpu_percent,
+            memory_percent=request.memory_percent,
+            disk_percent=request.disk_percent,
+            active_tasks=request.active_tasks,
+        )
+        return {"success": True}
+
+    @app.get(
+        "/api/admin/runners/overview",
+        response_model=List[RunnerOverviewResponse],
+        dependencies=[Depends(require_admin_token)],
+    )
+    async def get_runner_overview():
+        runners = db.list_runners()
+        result: List[RunnerOverviewResponse] = []
+        for runner in runners:
+            latest = await metrics_store.get_latest(runner.runner_id)
+            result.append(
+                RunnerOverviewResponse(
+                    runner_id=runner.runner_id,
+                    enabled=runner.enabled,
+                    created_at=runner.created_at.isoformat(),
+                    last_seen_at=(
+                        runner.last_seen_at.isoformat() if runner.last_seen_at else None
+                    ),
+                    health_status=_health_status(runner),
+                    latest_metrics=_metric_to_response(latest),
+                )
+            )
+        return result
+
+    @app.get(
+        "/api/admin/runners/{runner_id}/metrics",
+        response_model=RunnerMetricsQueryResponse,
+        dependencies=[Depends(require_admin_token)],
+    )
+    async def get_runner_metrics(
+        runner_id: str,
+        window: Literal["1h", "6h", "24h"] = Query(default="1h"),
+    ):
+        runner = db.get_runner_by_runner_id(runner_id)
+        if runner is None:
+            raise HTTPException(status_code=404, detail="Runner not found")
+
+        window_delta = _window_to_timedelta(window)
+        latest = await metrics_store.get_latest(runner_id)
+        series = await metrics_store.get_series(runner_id, window_delta)
+        series = sorted(series, key=lambda point: point.ts)
+
+        runner_info = RunnerOverviewResponse(
+            runner_id=runner.runner_id,
+            enabled=runner.enabled,
+            created_at=runner.created_at.isoformat(),
+            last_seen_at=runner.last_seen_at.isoformat()
+            if runner.last_seen_at
+            else None,
+            health_status=_health_status(runner),
+            latest_metrics=_metric_to_response(latest),
+        )
+        series_response = [_metric_to_response(point) for point in series]
+        return RunnerMetricsQueryResponse(
+            runner=runner_info,
+            window=window,
+            latest=_metric_to_response(latest),
+            series=[point for point in series_response if point is not None],
+        )
+
     @app.post(
         "/api/runners/{runner_id}/claim",
         response_model=ClaimTaskResponse,
@@ -416,6 +581,22 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         applied = db.apply_task_event(task_id, request.event_seq, request.event_type)
         if applied is None:
             raise HTTPException(status_code=404, detail="Task not found")
+
+        if applied:
+            updated_task = db.get_task(task_id)
+            if updated_task is not None:
+                task_payload = _task_to_dict(updated_task)
+                task_payload["type"] = "task_update"
+                await ws_manager.broadcast_task_update(task_id, task_payload)
+
+                dashboard_payload = _task_to_dict(updated_task)
+                dashboard_payload["type"] = (
+                    "task_completed"
+                    if request.event_type in ("completed", "failed")
+                    else "task_update"
+                )
+                await ws_manager.broadcast_dashboard_update(dashboard_payload)
+
         return {"applied": applied}
 
     @app.post("/api/runners/{runner_id}/tasks/{task_id}/logs/{log_type}/chunks")
@@ -758,6 +939,7 @@ def _task_to_dict(task: TaskRecord) -> dict:
         "message": task.message,
         "compile_failed": task.compile_failed,
         "priority": task.priority,
+        "runner_id": task.runner_id,
     }
 
 
@@ -778,6 +960,7 @@ def _task_to_response(task: TaskRecord) -> TaskDetailResponse:
         message=task.message,
         compile_failed=task.compile_failed,
         priority=task.priority,
+        runner_id=task.runner_id,
     )
 
 

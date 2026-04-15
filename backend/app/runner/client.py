@@ -29,6 +29,13 @@ class RunnerControlClient:
         response.raise_for_status()
         return response.json()
 
+    async def send_metrics(self, payload: dict[str, Any]) -> dict[str, Any]:
+        response = await self._client.post(
+            f"/api/runners/{self.runner_id}/metrics", json=payload
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def claim(self, payload: dict[str, Any]) -> Optional[dict[str, Any]]:
         response = await self._client.post(
             f"/api/runners/{self.runner_id}/claim", json=payload
