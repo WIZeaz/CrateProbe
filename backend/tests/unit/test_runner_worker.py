@@ -9,6 +9,7 @@ class FakeClient:
         self.heartbeats = []
         self.claims = []
         self.events = []
+        self.metrics = []
 
     async def heartbeat(self, payload):
         self.heartbeats.append(payload)
@@ -22,6 +23,10 @@ class FakeClient:
         self.events.append((task_id, payload))
         return {"applied": True}
 
+    async def send_metrics(self, payload):
+        self.metrics.append(payload)
+        return {"success": True}
+
 
 @pytest.mark.asyncio
 async def test_worker_heartbeats_when_idle():
@@ -33,6 +38,7 @@ async def test_worker_heartbeats_when_idle():
     assert did_work is False
     assert len(client.heartbeats) == 1
     assert len(client.claims) == 1
+    assert len(client.metrics) == 1
     assert client.events == []
 
 
@@ -51,6 +57,7 @@ async def test_worker_claims_and_reports_started_completed():
 
     assert did_work is True
     assert executed == [42]
+    assert len(client.metrics) == 1
     assert client.events == [
         (42, {"lease_token": "lease-42", "event_seq": 1, "event_type": "started"}),
         (
@@ -73,7 +80,44 @@ async def test_worker_reports_failed_on_executor_exception():
     did_work = await worker.run_once()
 
     assert did_work is True
+    assert len(client.metrics) == 1
     assert client.events == [
         (9, {"lease_token": "lease-9", "event_seq": 1, "event_type": "started"}),
         (9, {"lease_token": "lease-9", "event_seq": 2, "event_type": "failed"}),
     ]
+
+
+@pytest.mark.asyncio
+async def test_worker_metrics_failure_does_not_break_run_once():
+    client = FakeClient(claimed_task=None)
+
+    async def broken_send_metrics(_payload):
+        raise RuntimeError("metrics down")
+
+    client.send_metrics = broken_send_metrics
+    worker = RunnerWorker(client=client, runner_id="runner-1")
+
+    did_work = await worker.run_once()
+
+    assert did_work is False
+
+
+@pytest.mark.asyncio
+async def test_worker_run_forever_uses_sleep_interval(monkeypatch):
+    client = FakeClient(claimed_task=None)
+    worker = RunnerWorker(
+        client=client, runner_id="runner-1", metrics_interval_seconds=10
+    )
+
+    sleep_calls = []
+
+    async def fake_sleep(duration):
+        sleep_calls.append(duration)
+        raise RuntimeError("stop-loop")
+
+    monkeypatch.setattr("app.runner.worker.asyncio.sleep", fake_sleep)
+
+    with pytest.raises(RuntimeError, match="stop-loop"):
+        await worker.run_forever(3.5)
+
+    assert sleep_calls == [3.5]

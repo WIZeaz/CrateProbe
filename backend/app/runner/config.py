@@ -8,6 +8,7 @@ class RunnerConfig:
     runner_id: str
     runner_token: str
     poll_interval_seconds: float = 3.0
+    metrics_interval_seconds: float = 10.0
     request_timeout_seconds: float = 10.0
 
     @classmethod
@@ -16,6 +17,7 @@ class RunnerConfig:
         runner_id = os.environ.get("RUNNER_ID")
         runner_token = os.environ.get("RUNNER_TOKEN")
         poll_interval_raw = os.environ.get("RUNNER_POLL_INTERVAL_SECONDS", "3")
+        metrics_interval_raw = os.environ.get("RUNNER_METRICS_INTERVAL_SECONDS", "10")
 
         missing = []
         if not server_url:
@@ -35,12 +37,23 @@ class RunnerConfig:
         except ValueError as exc:
             raise ValueError("RUNNER_POLL_INTERVAL_SECONDS must be a number") from exc
 
+        try:
+            metrics_interval_seconds = float(metrics_interval_raw)
+        except ValueError as exc:
+            raise ValueError(
+                "RUNNER_METRICS_INTERVAL_SECONDS must be a number"
+            ) from exc
+
         if poll_interval_seconds <= 0:
             raise ValueError("RUNNER_POLL_INTERVAL_SECONDS must be > 0")
+
+        if metrics_interval_seconds <= 0:
+            raise ValueError("RUNNER_METRICS_INTERVAL_SECONDS must be > 0")
 
         return cls(
             server_url=server_url,
             runner_id=runner_id,
             runner_token=runner_token,
             poll_interval_seconds=poll_interval_seconds,
+            metrics_interval_seconds=metrics_interval_seconds,
         )

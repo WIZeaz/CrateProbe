@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import api from '../services/api'
 import websocket from '../services/websocket'
 import LogViewer from '../components/LogViewer.vue'
+import RunnerIdBadge from '../components/RunnerIdBadge.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -247,7 +248,7 @@ onUnmounted(() => {
           </div>
           <div>
             <p class="text-sm font-medium text-gray-600">Runner ID</p>
-            <p class="mt-1 text-sm text-gray-900">{{ task.runner_id || '-' }}</p>
+            <div class="mt-1"><RunnerIdBadge :runner-id="task.runner_id || ''" /></div>
           </div>
           <div>
             <p class="text-sm font-medium text-gray-600">Attempt</p>

@@ -122,6 +122,18 @@ export default {
     return response.status === 200 || response.status === 204
   },
 
+  async getRunnerOverview() {
+    const response = await api.get('/admin/runners/overview')
+    return response.data
+  },
+
+  async getRunnerMetrics(runnerId, window = '1h') {
+    const response = await api.get(`/admin/runners/${runnerId}/metrics`, {
+      params: { window }
+    })
+    return response.data
+  },
+
   // Log endpoints
   async getLog(taskId, logType, lines = 1000) {
     const response = await api.get(`/tasks/${taskId}/logs/${logType}`, {

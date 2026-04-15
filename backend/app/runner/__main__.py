@@ -14,7 +14,11 @@ async def _run() -> None:
         timeout=config.request_timeout_seconds,
     )
 
-    worker = RunnerWorker(client=client, runner_id=config.runner_id)
+    worker = RunnerWorker(
+        client=client,
+        runner_id=config.runner_id,
+        metrics_interval_seconds=config.metrics_interval_seconds,
+    )
     try:
         await worker.run_forever(config.poll_interval_seconds)
     finally:

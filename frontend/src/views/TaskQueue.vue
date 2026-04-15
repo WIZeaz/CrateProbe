@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../services/api'
 import websocket from '../services/websocket'
+import RunnerIdBadge from '../components/RunnerIdBadge.vue'
 
 const router = useRouter()
 const runningTasks = ref([])
@@ -238,7 +239,7 @@ onUnmounted(() => {
             <td class="px-4 py-3 whitespace-nowrap">
               <span class="status-badge status-running">{{ task.status }}</span>
             </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">{{ task.runner_id || '-' }}</td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500"><RunnerIdBadge :runner-id="task.runner_id || ''" /></td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">-</td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">{{ formatDuration(task.started_at, task.finished_at) }}</td>
           </tr>
@@ -263,7 +264,7 @@ onUnmounted(() => {
             <td class="px-4 py-3 whitespace-nowrap">
               <span class="status-badge status-pending">{{ task.status }}</span>
             </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">{{ task.runner_id || '-' }}</td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500"><RunnerIdBadge :runner-id="task.runner_id || ''" /></td>
             <td class="px-4 py-3 whitespace-nowrap text-sm font-medium" :class="task.priority > 0 ? 'text-orange-600' : 'text-gray-500'">
               {{ getQueuePosition(task, idx) }}
             </td>
