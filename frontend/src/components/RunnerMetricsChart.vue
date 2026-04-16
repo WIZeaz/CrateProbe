@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
   RESOURCE_FIELDS,
   buildXTicks,
@@ -28,6 +28,9 @@ const props = defineProps({
 
 const width = 480
 const height = 140
+const svgRef = ref(null)
+const renderedWidth = ref(width)
+let resizeObserver = null
 
 const plot = {
   left: 40,
@@ -52,7 +55,45 @@ const yTicks = computed(() => {
   return [0, max * 0.25, max * 0.5, max * 0.75, max]
 })
 
-const xTicks = computed(() => buildXTicks(props.points, { width: plot.width, minLabelSpacing: 60 }))
+const renderedLeftMargin = computed(() => (plot.left / width) * renderedWidth.value)
+const renderedRightMargin = computed(() => ((width - plot.right) / width) * renderedWidth.value)
+const renderedPlotWidth = computed(() => {
+  const effectiveWidth = renderedWidth.value - renderedLeftMargin.value - renderedRightMargin.value
+  return Math.max(0, effectiveWidth)
+})
+
+const xTicks = computed(() =>
+  buildXTicks(props.points, {
+    width: renderedPlotWidth.value,
+    minLabelSpacing: 60,
+  }),
+)
+
+function updateRenderedWidth() {
+  const nextWidth = svgRef.value?.clientWidth
+  if (Number.isFinite(nextWidth) && nextWidth > 0) {
+    renderedWidth.value = nextWidth
+  }
+}
+
+onMounted(() => {
+  updateRenderedWidth()
+  if (typeof ResizeObserver === 'undefined' || !svgRef.value) {
+    return
+  }
+
+  resizeObserver = new ResizeObserver(() => {
+    updateRenderedWidth()
+  })
+  resizeObserver.observe(svgRef.value)
+})
+
+onBeforeUnmount(() => {
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+    resizeObserver = null
+  }
+})
 
 function xForIndex(index) {
   if (props.points.length <= 1) {
@@ -87,7 +128,7 @@ const polyline = computed(() => {
 </script>
 
 <template>
-  <svg :viewBox="`0 0 ${width} ${height}`" class="w-full h-32">
+  <svg ref="svgRef" :viewBox="`0 0 ${width} ${height}`" class="w-full h-32">
     <rect x="0" y="0" :width="width" :height="height" fill="#f8fafc" rx="8" />
 
     <g v-for="tick in yTicks" :key="`y-${tick}`">
