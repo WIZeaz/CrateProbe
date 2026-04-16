@@ -1,0 +1,128 @@
+import pytest
+
+from runner.worker import RunnerWorker
+
+
+class FakeClient:
+    def __init__(self, claimed_task=None):
+        self.claimed_task = claimed_task
+        self.heartbeats = []
+        self.claims = []
+        self.events = []
+        self.metrics = []
+
+    async def heartbeat(self, payload):
+        self.heartbeats.append(payload)
+        return {"ok": True}
+
+    async def claim(self, payload):
+        self.claims.append(payload)
+        return self.claimed_task
+
+    async def send_event(self, task_id, payload):
+        self.events.append((task_id, payload))
+        return {"applied": True}
+
+    async def send_metrics(self, payload):
+        self.metrics.append(payload)
+        return {"success": True}
+
+
+@pytest.mark.asyncio
+async def test_worker_heartbeats_when_idle():
+    client = FakeClient(claimed_task=None)
+    worker = RunnerWorker(client=client, runner_id="runner-1", executor=None)
+
+    did_work = await worker.run_once()
+
+    assert did_work is False
+    assert len(client.heartbeats) == 1
+    assert len(client.claims) == 1
+    assert len(client.metrics) == 1
+    assert client.events == []
+
+
+@pytest.mark.asyncio
+async def test_worker_claims_and_executes_task():
+    task = {
+        "id": 42,
+        "lease_token": "lease-42",
+        "crate_name": "foo",
+        "crate_version": "1.0.0",
+    }
+    client = FakeClient(claimed_task=task)
+    executed = []
+
+    class FakeExecutor:
+        async def execute_claimed_task(self, claimed_task):
+            executed.append(claimed_task["id"])
+
+    worker = RunnerWorker(client=client, runner_id="runner-1", executor=FakeExecutor())
+
+    did_work = await worker.run_once()
+
+    assert did_work is True
+    assert executed == [42]
+    assert len(client.metrics) == 1
+    assert client.events == []
+
+
+@pytest.mark.asyncio
+async def test_worker_reports_executor_exception():
+    task = {
+        "id": 9,
+        "lease_token": "lease-9",
+        "crate_name": "foo",
+        "crate_version": "1.0.0",
+    }
+    client = FakeClient(claimed_task=task)
+
+    class BrokenExecutor:
+        async def execute_claimed_task(self, _):
+            raise RuntimeError("boom")
+
+    worker = RunnerWorker(
+        client=client, runner_id="runner-1", executor=BrokenExecutor()
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await worker.run_once()
+
+    assert len(client.metrics) == 1
+    assert client.events == []
+
+
+@pytest.mark.asyncio
+async def test_worker_metrics_failure_does_not_break_run_once():
+    client = FakeClient(claimed_task=None)
+
+    async def broken_send_metrics(_payload):
+        raise RuntimeError("metrics down")
+
+    client.send_metrics = broken_send_metrics
+    worker = RunnerWorker(client=client, runner_id="runner-1", executor=None)
+
+    did_work = await worker.run_once()
+
+    assert did_work is False
+
+
+@pytest.mark.asyncio
+async def test_worker_run_forever_uses_sleep_interval(monkeypatch):
+    client = FakeClient(claimed_task=None)
+    worker = RunnerWorker(
+        client=client, runner_id="runner-1", executor=None, metrics_interval_seconds=10
+    )
+
+    sleep_calls = []
+
+    async def fake_sleep(duration):
+        sleep_calls.append(duration)
+        raise RuntimeError("stop-loop")
+
+    monkeypatch.setattr("runner.worker.asyncio.sleep", fake_sleep)
+
+    with pytest.raises(RuntimeError, match="stop-loop"):
+        await worker.run_forever(3.5)
+
+    assert sleep_calls == [3.5]
