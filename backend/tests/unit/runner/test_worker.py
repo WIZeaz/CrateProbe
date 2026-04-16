@@ -126,3 +126,21 @@ async def test_worker_run_forever_uses_sleep_interval(monkeypatch):
         await worker.run_forever(3.5)
 
     assert sleep_calls == [3.5]
+
+
+@pytest.mark.asyncio
+async def test_worker_metrics_payload_uses_disk_percent():
+    """Regression test: metrics payload must use disk_percent to match backend API schema."""
+    client = FakeClient(claimed_task=None)
+    worker = RunnerWorker(client=client, runner_id="runner-1", executor=None)
+
+    await worker.run_once()
+
+    assert len(client.metrics) == 1
+    payload = client.metrics[0]
+    assert "disk_percent" in payload
+    assert "disk_usage_percent" not in payload
+    assert isinstance(payload["cpu_percent"], float)
+    assert isinstance(payload["memory_percent"], float)
+    assert isinstance(payload["disk_percent"], float)
+    assert isinstance(payload["active_tasks"], int)

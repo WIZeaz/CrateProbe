@@ -31,7 +31,7 @@ class RunnerWorker:
         payload = {
             "cpu_percent": psutil.cpu_percent(interval=0.0),
             "memory_percent": psutil.virtual_memory().percent,
-            "disk_usage_percent": psutil.disk_usage("/").percent,
+            "disk_percent": psutil.disk_usage("/").percent,
             "active_tasks": 1 if self._is_executing else 0,
         }
         try:

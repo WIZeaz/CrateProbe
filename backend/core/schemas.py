@@ -5,7 +5,7 @@ from typing import Optional
 class RunnerHeartbeatPayload(BaseModel):
     cpu_percent: float
     memory_percent: float
-    disk_usage_percent: float
+    disk_percent: float
     active_tasks: int
 
 
