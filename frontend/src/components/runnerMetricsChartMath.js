@@ -39,7 +39,12 @@ export function resolvePointTimestamp(point) {
 export function formatHoverLabel({ index, timestamp }) {
   const parsed = new Date(timestamp)
   if (timestamp != null && Number.isFinite(parsed.getTime())) {
-    return { timeText: parsed.toLocaleString() }
+    const month = String(parsed.getMonth() + 1).padStart(2, '0')
+    const day = String(parsed.getDate()).padStart(2, '0')
+    const hours = String(parsed.getHours()).padStart(2, '0')
+    const minutes = String(parsed.getMinutes()).padStart(2, '0')
+    const seconds = String(parsed.getSeconds()).padStart(2, '0')
+    return { timeText: `${month}/${day} ${hours}:${minutes}:${seconds}` }
   }
 
   return { timeText: `Sample #${Number(index) + 1}` }

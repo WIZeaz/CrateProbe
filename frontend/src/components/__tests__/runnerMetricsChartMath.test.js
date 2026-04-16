@@ -98,6 +98,11 @@ test('hover label with epoch 0 timestamp does not fallback to Sample #1', () => 
   assert.notEqual(formatHoverLabel({ index: 0, timestamp: 0 }).timeText, 'Sample #1')
 })
 
+test('hover label uses bounded local timestamp format', () => {
+  const { timeText } = formatHoverLabel({ index: 0, timestamp: '2026-04-17T10:11:12Z' })
+  assert.match(timeText, /^\d{2}\/\d{2} \d{2}:\d{2}:\d{2}$/)
+})
+
 test('pickXTicks returns empty array for zero count', () => {
   assert.deepEqual(pickXTicks({ count: 0 }), [])
 })

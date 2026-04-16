@@ -32,7 +32,7 @@ const props = defineProps({
 
 const width = 480
 const height = 140
-const tooltipWidth = 168
+const tooltipWidth = 150
 const tooltipHeight = 44
 const svgRef = ref(null)
 const renderedWidth = ref(width)
@@ -307,8 +307,9 @@ function clearHover() {
       :width="plot.width"
       :height="plot.height"
       fill="transparent"
-      @mousemove="handleHoverMove"
-      @mouseleave="clearHover"
+      @pointermove="handleHoverMove"
+      @pointerleave="clearHover"
+      @pointercancel="clearHover"
     />
   </svg>
 </template>
