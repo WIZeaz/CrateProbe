@@ -138,3 +138,24 @@ test('buildXTicks dedupes equal labels while preserving deterministic order', ()
     { index: 4, label: '10:15' },
   ])
 })
+
+test('buildXTicks preserves endpoint ticks even when labels match', () => {
+  const points = [
+    { timestamp: '2026-04-17T10:00:00Z' },
+    { timestamp: '2026-04-17T10:02:00Z' },
+    { timestamp: '2026-04-17T10:04:00Z' },
+    { timestamp: '2026-04-17T10:06:00Z' },
+    { timestamp: '2026-04-17T10:08:00Z' },
+  ]
+
+  const ticks = buildXTicks(points, {
+    width: 480,
+    minLabelSpacing: 60,
+    formatter: () => '10:00',
+  })
+
+  assert.deepEqual(ticks, [
+    { index: 0, label: '10:00' },
+    { index: 4, label: '10:00' },
+  ])
+})

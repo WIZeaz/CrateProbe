@@ -102,16 +102,26 @@ export function buildXTicks(points, { width, minLabelSpacing = 60, formatter } =
           return `#${index + 1}`
         }
 
-  const seen = new Set()
+  const firstIndex = tickIndices[0]
+  const lastIndex = tickIndices[tickIndices.length - 1]
+  const seenLabels = new Set()
   const ticks = []
 
   for (const index of tickIndices) {
     const point = safePoints[index]
     const label = String(formatLabel(point, index, safePoints))
-    if (seen.has(label)) {
+
+    const isEndpoint = index === firstIndex || index === lastIndex
+    if (isEndpoint) {
+      ticks.push({ index, label })
+      seenLabels.add(label)
       continue
     }
-    seen.add(label)
+
+    if (seenLabels.has(label)) {
+      continue
+    }
+    seenLabels.add(label)
     ticks.push({ index, label })
   }
 
