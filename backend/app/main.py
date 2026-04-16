@@ -140,7 +140,7 @@ class RunnerMetricsQueryResponse(BaseModel):
     series: List[RunnerLatestMetricsResponse]
 
 
-RUNNER_CHUNK_LOG_TYPES = {"stdout", "stderr", "runner"}
+RUNNER_CHUNK_LOG_TYPES = {"stdout", "stderr", "runner", "miri_report", "stats-yaml"}
 
 
 LOG_PATH_RESOLVERS = {

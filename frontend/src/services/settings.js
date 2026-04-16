@@ -1,6 +1,7 @@
 import { reactive, readonly } from 'vue'
 
 const STORAGE_KEY = 'lifesonar_settings'
+const LEGACY_ADMIN_TOKEN_KEY = 'admin_token'
 
 const defaultSettings = {
   version: 1,
@@ -15,7 +16,10 @@ function loadSettings() {
   }
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return { ...defaultSettings }
+    if (!raw) {
+      const legacyToken = sessionStorage.getItem(LEGACY_ADMIN_TOKEN_KEY) || ''
+      return mergeDefaults({ security: { adminToken: legacyToken } }, defaultSettings)
+    }
     const parsed = JSON.parse(raw)
     return mergeDefaults(parsed, defaultSettings)
   } catch (e) {
@@ -70,8 +74,5 @@ export function updateSetting(path, value) {
 }
 
 export function saveSettings() {
-  const cloned = typeof structuredClone === 'function'
-    ? structuredClone(settings)
-    : JSON.parse(JSON.stringify(settings))
-  saveToStorage(cloned)
+  saveToStorage(JSON.parse(JSON.stringify(settings)))
 }
