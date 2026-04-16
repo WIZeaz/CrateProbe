@@ -75,9 +75,24 @@ test('timestamp fallback skips invalid timestamp and collected_at, then uses rec
   )
 })
 
+test('timestamp fallback treats epoch 0 as valid and keeps priority', () => {
+  assert.equal(
+    resolvePointTimestamp({
+      timestamp: 0,
+      collected_at: '2026-04-17T10:01:00Z',
+      recorded_at: '2026-04-17T10:00:00Z',
+    }),
+    0,
+  )
+})
+
 test('hover label falls back to Sample # when timestamp invalid', () => {
   assert.equal(formatHoverLabel({ index: 0, timestamp: null }).timeText, 'Sample #1')
   assert.equal(formatHoverLabel({ index: 1, timestamp: 'not-a-date' }).timeText, 'Sample #2')
+})
+
+test('hover label with epoch 0 timestamp does not fallback to Sample #1', () => {
+  assert.notEqual(formatHoverLabel({ index: 0, timestamp: 0 }).timeText, 'Sample #1')
 })
 
 test('pickXTicks returns empty array for zero count', () => {

@@ -28,7 +28,7 @@ export function resolvePointTimestamp(point) {
   const candidates = [point.timestamp, point.collected_at, point.recorded_at]
   for (const candidate of candidates) {
     const parsed = new Date(candidate)
-    if (candidate && Number.isFinite(parsed.getTime())) {
+    if (candidate != null && Number.isFinite(parsed.getTime())) {
       return candidate
     }
   }
@@ -38,7 +38,7 @@ export function resolvePointTimestamp(point) {
 
 export function formatHoverLabel({ index, timestamp }) {
   const parsed = new Date(timestamp)
-  if (timestamp && Number.isFinite(parsed.getTime())) {
+  if (timestamp != null && Number.isFinite(parsed.getTime())) {
     return { timeText: parsed.toLocaleString() }
   }
 
