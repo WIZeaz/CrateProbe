@@ -25,7 +25,15 @@ export function resolvePointTimestamp(point) {
     return null
   }
 
-  return point.timestamp ?? point.collected_at ?? point.recorded_at ?? null
+  const candidates = [point.timestamp, point.collected_at, point.recorded_at]
+  for (const candidate of candidates) {
+    const parsed = new Date(candidate)
+    if (candidate && Number.isFinite(parsed.getTime())) {
+      return candidate
+    }
+  }
+
+  return null
 }
 
 export function formatHoverLabel({ index, timestamp }) {

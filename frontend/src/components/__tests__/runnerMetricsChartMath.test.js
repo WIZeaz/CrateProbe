@@ -53,6 +53,28 @@ test('timestamp fallback priority is timestamp then collected_at then recorded_a
   assert.equal(resolvePointTimestamp({}), null)
 })
 
+test('timestamp fallback skips invalid timestamp and uses collected_at when parseable', () => {
+  assert.equal(
+    resolvePointTimestamp({
+      timestamp: 'not-a-date',
+      collected_at: '2026-04-17T10:01:00Z',
+      recorded_at: '2026-04-17T10:00:00Z',
+    }),
+    '2026-04-17T10:01:00Z',
+  )
+})
+
+test('timestamp fallback skips invalid timestamp and collected_at, then uses recorded_at', () => {
+  assert.equal(
+    resolvePointTimestamp({
+      timestamp: 'not-a-date',
+      collected_at: 'still-not-a-date',
+      recorded_at: '2026-04-17T10:02:00Z',
+    }),
+    '2026-04-17T10:02:00Z',
+  )
+})
+
 test('hover label falls back to Sample # when timestamp invalid', () => {
   assert.equal(formatHoverLabel({ index: 0, timestamp: null }).timeText, 'Sample #1')
   assert.equal(formatHoverLabel({ index: 1, timestamp: 'not-a-date' }).timeText, 'Sample #2')
