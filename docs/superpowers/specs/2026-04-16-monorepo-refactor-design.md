@@ -2,14 +2,14 @@
 
 ## Overview
 
-Refactor the current Experiment Platform (CrateProbe) from a tightly coupled two-tier structure into a cleanly separated monorepo with four independent top-level components:
+Refactor the current Experiment Platform (CrateProbe) into a cleanly separated monorepo where the Python components (Backend, Runner, and shared Core) share a single `pyproject.toml`, while Frontend remains independent. Each component retains its own entry point and configuration:
 
-- `backend/` — Pure control plane (FastAPI)
+- `backend/app/` — Pure control plane (FastAPI)
+- `backend/runner/` — Standalone task worker (Python)
+- `backend/core/` — Shared Python contracts and models
 - `frontend/` — Web UI (Vue 3 + Vite)
-- `runner/` — Standalone task worker (Python)
-- `core/` — Shared Python contracts and models
 
-This enables each component to be independently configured, containerized, and deployed.
+This reduces dependency-management overhead while keeping runtime boundaries clean.
 
 ---
 
@@ -17,15 +17,8 @@ This enables each component to be independently configured, containerized, and d
 
 ```
 /home/wizeaz/exp-plat/
-├── core/                          # Shared Python package: crateprobe_core
-│   ├── pyproject.toml
-│   └── crateprobe_core/
-│       ├── __init__.py
-│       ├── models.py              # TaskStatus enum
-│       └── schemas.py             # Pydantic API contracts
-│
-├── backend/                       # Pure control plane (FastAPI)
-│   ├── app/
+├── backend/                       # Unified Python project
+│   ├── app/                       # Pure control plane (FastAPI)
 │   │   ├── main.py                # FastAPI entry point
 │   │   ├── config.py              # Backend-only configuration
 │   │   ├── database.py            # SQLite operations
@@ -34,26 +27,30 @@ This enables each component to be independently configured, containerized, and d
 │   │   │   ├── scheduler.py       # Queue + lease management only
 │   │   │   └── runner_metrics_store.py
 │   │   └── security.py            # Runner token generation/verification
-│   ├── tests/
-│   ├── docker/
-│   │   └── Dockerfile
-│   └── pyproject.toml
-│
-├── runner/                        # Standalone worker
-│   ├── crateprobe_runner/
+│   ├── runner/                    # Standalone worker (same project, independent entry)
 │   │   ├── __init__.py
-│   │   ├── __main__.py            # Entry point
+│   │   ├── __main__.py            # Entry point: python -m runner
 │   │   ├── config.py              # Environment-variable configuration
 │   │   ├── client.py              # RunnerControlClient (httpx)
 │   │   ├── worker.py              # Heartbeat + claim + execute loop
 │   │   ├── executor.py            # Task execution logic (Docker only)
 │   │   ├── docker_runner.py       # Docker execution helper
 │   │   └── crates_api.py          # crates.io download client
+│   ├── core/                      # Shared models & schemas
+│   │   ├── __init__.py
+│   │   ├── models.py              # TaskStatus enum
+│   │   └── schemas.py             # Pydantic API contracts
 │   ├── tests/
+│   │   ├── unit/
+│   │   │   ├── app/
+│   │   │   ├── runner/
+│   │   │   └── core/
+│   │   └── integration/
 │   ├── docker/
-│   │   ├── Dockerfile
-│   │   └── Dockerfile.executor    # Task execution environment image
-│   └── pyproject.toml
+│   │   ├── Dockerfile.backend
+│   │   ├── Dockerfile.runner
+│   │   └── Dockerfile.executor
+│   └── pyproject.toml             # Single unified Python manifest
 │
 ├── frontend/                      # Vue 3 + Vite
 │   ├── src/
@@ -108,15 +105,15 @@ This enables each component to be independently configured, containerized, and d
 - Configuration switches from runtime `config.toml` parsing to build-time `.env` injection.
 - `vite.config.js` proxy targets are read from `process.env.VITE_API_BASE_URL` and `VITE_WS_BASE_URL`.
 
-### 2.4 Core (`crateprobe_core`)
+### 2.4 Core (`backend.core`)
 
 **Responsibilities:**
 - Provide shared data models and API schemas to both Backend and Runner.
 - Remain framework-agnostic except for `pydantic` (used for schema definitions).
 
 **Contents:**
-- `models.py` — `TaskStatus` enum.
-- `schemas.py` — Pydantic `BaseModel` definitions for Runner API request/response payloads (e.g., `RunnerHeartbeatPayload`, `TaskClaimResponse`).
+- `backend/core/models.py` — `TaskStatus` enum.
+- `backend/core/schemas.py` — Pydantic `BaseModel` definitions for Runner API request/response payloads (e.g., `RunnerHeartbeatPayload`, `TaskClaimResponse`).
 
 **Non-goals:**
 - No FastAPI, httpx, Vue, or database dependencies.
@@ -203,7 +200,9 @@ A root-level `docker-compose.yml` orchestrates all three services for local deve
 ```yaml
 services:
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: docker/Dockerfile.backend
     ports:
       - "8080:8080"
     volumes:
@@ -211,6 +210,7 @@ services:
       - ./config.toml:/app/config.toml:ro
     environment:
       - CONFIG_PATH=/app/config.toml
+    command: ["python", "-m", "app.main"]
 
   frontend:
     build:
@@ -223,7 +223,9 @@ services:
       - VITE_WS_BASE_URL=ws://localhost:8080
 
   runner:
-    build: ./runner
+    build:
+      context: ./backend
+      dockerfile: docker/Dockerfile.runner
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./workspace:/workspace
@@ -253,9 +255,9 @@ The following endpoints remain unchanged; Runner relocation does not affect thei
 - `POST /api/runners/{runner_id}/tasks/{task_id}/logs/{log_type}/chunks`
 - `POST /api/runners/{runner_id}/metrics`
 
-### 5.2 Shared Pydantic Schemas in `core/`
+### 5.2 Shared Pydantic Schemas in `backend.core`
 
-To keep Backend and Runner type-consistent, the following schemas live in `crateprobe_core.schemas`:
+To keep Backend and Runner type-consistent, the following schemas live in `backend.core.schemas`:
 
 ```python
 from pydantic import BaseModel
@@ -283,14 +285,14 @@ Backend uses these for request validation; Runner uses them for request construc
 
 | Source (Current) | Target (After Refactor) | Action |
 |------------------|-------------------------|--------|
-| `backend/app/models.py` | `core/crateprobe_core/models.py` | Move `TaskStatus` enum |
-| `backend/app/runner/__main__.py` | `runner/crateprobe_runner/__main__.py` | Relocate entry point |
-| `backend/app/runner/config.py` | `runner/crateprobe_runner/config.py` | Relocate; add Docker ENV |
-| `backend/app/runner/client.py` | `runner/crateprobe_runner/client.py` | Relocate |
-| `backend/app/runner/worker.py` | `runner/crateprobe_runner/worker.py` | Relocate |
-| `backend/app/services/task_executor.py` | `runner/crateprobe_runner/executor.py` | Migrate execution logic |
-| `backend/app/utils/docker_runner.py` | `runner/crateprobe_runner/docker_runner.py` | Migrate Docker helper |
-| `backend/app/services/crates_api.py` | `runner/crateprobe_runner/crates_api.py` | Migrate crate download |
+| `backend/app/models.py` | `backend/core/models.py` | Move `TaskStatus` enum |
+| `backend/app/runner/__main__.py` | `backend/runner/__main__.py` | Relocate entry point |
+| `backend/app/runner/config.py` | `backend/runner/config.py` | Relocate; add Docker ENV |
+| `backend/app/runner/client.py` | `backend/runner/client.py` | Relocate |
+| `backend/app/runner/worker.py` | `backend/runner/worker.py` | Relocate |
+| `backend/app/services/task_executor.py` | `backend/runner/executor.py` | Migrate execution logic |
+| `backend/app/utils/docker_runner.py` | `backend/runner/docker_runner.py` | Migrate Docker helper |
+| `backend/app/services/crates_api.py` | `backend/runner/crates_api.py` | Migrate crate download |
 | `backend/app/utils/local_runner.py` | — | **Delete** |
 | `backend/app/utils/resource_limit.py` | — | **Delete** |
 | `backend/app/config.py` (execution/docker blocks) | — | **Delete** from Backend config |
@@ -302,9 +304,10 @@ Backend uses these for request validation; Runner uses them for request construc
 ## 7. Testing Strategy
 
 ### 7.1 Unit Tests
-- `backend/tests/unit/` — Control plane logic (API routes, database, scheduler lease expiry).
-- `runner/tests/unit/` — ENV parsing, Docker command building, payload serialization.
-- `core/tests/` — Pydantic schema validation.
+All tests live under the unified `backend/tests/` tree:
+- `backend/tests/unit/app/` — Control plane logic (API routes, database, scheduler lease expiry).
+- `backend/tests/unit/runner/` — ENV parsing, Docker command building, payload serialization.
+- `backend/tests/unit/core/` — Pydantic schema validation.
 
 ### 7.2 Integration Tests
 - `backend/tests/integration/` — Spin up a test Backend and verify end-to-end task flow with a mock Runner client.
@@ -321,17 +324,19 @@ Backend uses these for request validation; Runner uses them for request construc
 2. **`distributed.enabled` is removed.** The system always operates in distributed mode.
 3. **Systemd and resource execution modes are removed.** Only Docker mode remains.
 4. **Frontend dev server no longer reads `config.toml`.** Developers must use `.env.development` for proxy settings.
-5. **Runner no longer shares Backend's Python namespace.** It is a standalone installable package.
+5. **Runner moved out of `app/` namespace.** It now lives in `backend/runner/` with its own `__main__.py` entry point, but shares the same `pyproject.toml`.
 
 ---
 
 ## 9. Implementation Order
 
-1. Create `core/` package and migrate `TaskStatus` + Pydantic schemas.
-2. Update Backend to depend on `core/` and delete local execution code.
+1. Create `backend/core/` package and migrate `TaskStatus` + Pydantic schemas.
+2. Update Backend (`app/`) to import from `core/` and delete local execution code.
 3. Update Backend to remove `distributed.enabled` and `execution.*` configuration.
-4. Migrate Runner code to `runner/` and add independent `pyproject.toml` + Dockerfile.
-5. Update Frontend `vite.config.js` to use `.env` injection.
-6. Add root-level `docker-compose.yml`.
-7. Update and relocate tests.
-8. Update documentation (`README.md`, `CLAUDE.md`, `Project.md`).
+4. Migrate Runner code from `backend/app/runner/` to `backend/runner/` and add Docker ENV support.
+5. Ensure `backend/pyproject.toml` covers all dependencies for `app`, `runner`, and `core`.
+6. Add `docker/Dockerfile.backend` and `docker/Dockerfile.runner`.
+7. Update Frontend `vite.config.js` to use `.env` injection.
+8. Add root-level `docker-compose.yml`.
+9. Update and relocate tests under `backend/tests/unit/{app,runner,core}/`.
+10. Update documentation (`README.md`, `CLAUDE.md`, `Project.md`).
