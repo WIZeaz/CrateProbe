@@ -220,6 +220,37 @@ def test_events_endpoint_returns_409_for_lease_mismatch(client):
     assert response.status_code == 409
 
 
+def test_heartbeat_extends_task_lease(short_lease_client):
+    """Regression test: heartbeat must extend RUNNING task leases to prevent 409 on log uploads."""
+    app, client = short_lease_client
+    task_id, token, lease_token = _create_and_claim_task(client, "runner-lease-hb")
+
+    # Wait long enough that the original 1-second lease would have expired
+    time.sleep(1.5)
+
+    # Send heartbeat, which should extend the lease
+    heartbeat_response = client.post(
+        "/api/runners/runner-lease-hb/heartbeat",
+        headers=_runner_headers(token),
+    )
+    assert heartbeat_response.status_code == 200
+
+    # Run reconciliation: task should NOT be reset because lease was extended
+    app.state.scheduler.reconcile_expired_leases()
+    task_response = client.get(f"/api/tasks/{task_id}")
+    assert task_response.status_code == 200
+    task_data = task_response.json()
+    assert task_data["status"] == "running"
+
+    # Log chunk upload should succeed without 409
+    chunk_response = client.post(
+        f"/api/runners/runner-lease-hb/tasks/{task_id}/logs/stdout/chunks",
+        headers=_runner_headers(token),
+        json={"lease_token": lease_token, "chunk_seq": 1, "content": "hello\n"},
+    )
+    assert chunk_response.status_code == 200
+
+
 def test_runner_metrics_endpoint_accepts_valid_payload(client):
     token = _create_runner(client, "runner-metrics-1")
     response = client.post(

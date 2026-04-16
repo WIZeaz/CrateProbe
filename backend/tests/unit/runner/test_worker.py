@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from runner.worker import RunnerWorker
@@ -144,3 +146,27 @@ async def test_worker_metrics_payload_uses_disk_percent():
     assert isinstance(payload["memory_percent"], float)
     assert isinstance(payload["disk_percent"], float)
     assert isinstance(payload["active_tasks"], int)
+
+
+@pytest.mark.asyncio
+async def test_worker_sends_heartbeats_during_task_execution():
+    """Regression test: heartbeats must continue while a task is executing to keep lease alive."""
+    task = {
+        "id": 77,
+        "lease_token": "lease-77",
+        "crate_name": "foo",
+        "crate_version": "1.0.0",
+    }
+    client = FakeClient(claimed_task=task)
+
+    class SlowExecutor:
+        async def execute_claimed_task(self, _):
+            await asyncio.sleep(0.15)
+
+    worker = RunnerWorker(client=client, runner_id="runner-1", executor=SlowExecutor())
+
+    did_work = await worker.run_once()
+
+    assert did_work is True
+    # Should see at least 2 heartbeats: one before claim and one during execution
+    assert len(client.heartbeats) >= 2

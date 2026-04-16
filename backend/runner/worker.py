@@ -40,6 +40,18 @@ class RunnerWorker:
         except Exception as exc:
             logger.warning("Failed to send runner metrics: %s", exc)
 
+    async def _heartbeat_loop(self, interval: float, stop_event: asyncio.Event) -> None:
+        while not stop_event.is_set():
+            try:
+                await self._client.heartbeat({"runner_id": self._runner_id})
+                await self._send_metrics_if_due()
+            except Exception as exc:
+                logger.warning("Background heartbeat failed: %s", exc)
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval)
+            except asyncio.TimeoutError:
+                pass
+
     async def run_once(self) -> bool:
         await self._send_metrics_if_due(force=True)
         await self._client.heartbeat({"runner_id": self._runner_id})
@@ -48,10 +60,21 @@ class RunnerWorker:
             return False
 
         self._is_executing = True
+        stop_event = asyncio.Event()
+        heartbeat_task = asyncio.create_task(self._heartbeat_loop(5.0, stop_event))
         try:
             await self._executor.execute_claimed_task(claimed)
         finally:
             self._is_executing = False
+            stop_event.set()
+            try:
+                await asyncio.wait_for(heartbeat_task, timeout=5.0)
+            except asyncio.TimeoutError:
+                heartbeat_task.cancel()
+                try:
+                    await heartbeat_task
+                except asyncio.CancelledError:
+                    pass
         return True
 
     async def run_forever(self, poll_interval_seconds: float) -> None:

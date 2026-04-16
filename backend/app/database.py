@@ -679,6 +679,22 @@ class Database:
         self.conn.commit()
         return cursor.rowcount > 0
 
+    def extend_runner_task_leases(self, runner_id: str, lease_ttl_seconds: int) -> int:
+        """Extend lease expiration of all RUNNING tasks for a runner."""
+        now = datetime.now()
+        lease_expires_at = now + timedelta(seconds=lease_ttl_seconds)
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            UPDATE tasks
+            SET lease_expires_at = ?
+            WHERE status = ? AND runner_id = ?
+            """,
+            (lease_expires_at, TaskStatus.RUNNING.value, runner_id),
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
     def claim_pending_task(
         self, runner_id: str, lease_ttl_seconds: int
     ) -> Optional[TaskRecord]:

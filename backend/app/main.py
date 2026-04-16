@@ -492,6 +492,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         _auth: None = Depends(require_runner_auth),
     ):
         db.touch_runner_heartbeat(runner_id)
+        db.extend_runner_task_leases(runner_id, config.lease_ttl_seconds)
         return {"success": True}
 
     @app.post("/api/runners/{runner_id}/metrics")
