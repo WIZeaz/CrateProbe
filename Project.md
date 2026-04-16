@@ -25,12 +25,12 @@ CrateProbe is an automated Rust crate testing platform. It:
 
 ```
 exp-plat/
-├── config.toml.example          # Configuration template (bilingual CN/EN comments)
+├── config.toml.example          # Backend configuration template
 ├── CLAUDE.md                    # Instructions for Claude Code
 ├── Project.md                   # This file
 │
 ├── backend/
-│   ├── app/
+│   ├── app/                     # FastAPI control plane
 │   │   ├── main.py              # FastAPI app factory, all REST + WS endpoints
 │   │   ├── config.py            # Config dataclass, loads from config.toml
 │   │   ├── database.py          # SQLite ORM (raw SQL, no SQLAlchemy)
@@ -46,12 +46,15 @@ exp-plat/
 │   │       ├── file_utils.py    # read_last_n_lines() for log tailing
 │   │       ├── resource_limit.py# systemd-run / resource module wrapper
 │   │       └── docker_runner.py # Docker container execution
+│   ├── runner/                  # Standalone worker
+│   │   └── __main__.py          # Entry point: python -m runner
+│   ├── core/                    # Shared models/schemas
 │   ├── tests/
 │   │   ├── unit/                # Unit tests for each module
 │   │   └── integration/         # API + WebSocket integration tests
 │   └── pyproject.toml           # Python dependencies (uv)
 │
-├── frontend/
+├── frontend/                    # Vue 3 + Vite
 │   ├── src/
 │   │   ├── App.vue              # Root layout: nav bar + router-view + footer
 │   │   ├── style.css            # Global CSS: bento cards, status badges, log viewer, spinner
@@ -69,7 +72,7 @@ exp-plat/
 │   │       ├── LogViewer.vue    # Tabbed log display (stdout/stderr/miri_report)
 │   │       ├── StatCard.vue     # Reusable stat card with icon and color
 │   │       └── SystemMonitor.vue# CPU/memory/disk progress bars
-│   └── vite.config.js           # Reads config.toml for proxy settings
+│   └── vite.config.js           # Vite dev server with proxy to backend
 │
 └── workspace/                    # Runtime directory (created at startup)
     ├── repos/                    # Downloaded and extracted crate source
@@ -185,7 +188,7 @@ All endpoints defined in `backend/app/main.py`:
 1. Set `[security].admin_token` in `config.toml` (required for runner admin APIs).
 2. Create runner via `POST /api/admin/runners` with `X-Admin-Token`; save returned plaintext `token` (shown once).
 3. On runner machine set `RUNNER_SERVER_URL`, `RUNNER_ID`, and `RUNNER_TOKEN`.
-4. Start runner process with `uv run python -m app.runner` from `backend/`.
+4. Start runner process with `uv run python -m runner` from `backend/`.
 
 ### Runner delete/disable semantics and lease recovery
 
@@ -278,29 +281,18 @@ Singleton `WebSocketService` class:
 
 ## 10. Configuration (`config.toml`)
 
-Loaded by `Config.from_file()` on backend, and by Vite at build time for dev proxy.
+Loaded by `Config.from_file()` on backend.
 
 | Section | Key | Default | Description |
 |---------|-----|---------|-------------|
 | server | port | 8080 | Backend port |
 | server | host | 0.0.0.0 | Bind address |
 | workspace | path | ./workspace | Runtime files root |
-| execution | max_jobs | 3 | Max concurrent tasks |
-| execution | max_memory_gb | 20 | Memory limit per task |
-| execution | max_runtime_hours | 24 | Time limit per task |
-| execution | execution_mode | systemd | systemd / resource / docker |
-| execution | max_cpus | 4 | CPU cores (Docker mode) |
-| execution.docker | image | rust-cargo-rapx:latest | Docker image |
-| execution.docker | pull_policy | if-not-present | always / if-not-present / never |
 | database | path | tasks.db | SQLite path (relative to workspace) |
 | logging | level | INFO | Log level |
 | logging | console | true | Console output |
 | logging | file | true | File output |
 | logging | file_path | server.log | Log file path |
-| frontend | dev_port | 5173 | Vite dev server port |
-| frontend | api_proxy_target | http://localhost:8080 | API proxy |
-| frontend | ws_proxy_target | ws://localhost:8080 | WebSocket proxy |
-| distributed | enabled | false | Enable distributed runner control plane |
 | distributed | lease_ttl_seconds | 30 | Task lease TTL used for claim/recovery |
 | distributed | runner_offline_seconds | 30 | Runner offline threshold |
 | security | admin_token | "" | Admin token for `/api/admin/runners*` |

@@ -1,131 +1,25 @@
-# CrateProbe 统一配置文件示例
-# CrateProbe Unified Configuration Example
-#
-# 使用方法 (Usage):
-#   cp config.toml.example config.toml
-#   编辑 config.toml 以适配你的环境
-
-# ============================================
-# 后端配置 (Backend Configuration)
-# ============================================
+# CrateProbe Backend Configuration Example
+# Usage: cp config.toml.example config.toml
 
 [server]
-# Web服务端口
-# Backend server port
 port = 8080
-
-# 绑定地址（0.0.0.0 表示监听所有网络接口）
-# Bind address (0.0.0.0 means listen on all network interfaces)
 host = "0.0.0.0"
 
 [workspace]
-# 工作空间根目录（所有运行时文件都在此目录下）
-# Workspace root directory (all runtime files stored here)
 path = "./workspace"
 
-[execution]
-# 最大并发任务数
-# Maximum concurrent tasks
-max_jobs = 3
-
-# 单个任务最大内存限制（GB）
-# Maximum memory limit per task (GB)
-max_memory_gb = 20
-
-# 单个任务最长运行时间（秒）
-# Maximum runtime per task (seconds)
-max_runtime_seconds = 86400  # 24 hours
-
-# 任务执行模式：systemd, resource, docker
-# Task execution mode
-execution_mode = "systemd"
-
-# 单个任务最大CPU核心数（Docker模式生效）
-# Maximum CPU cores per task (effective in Docker mode)
-max_cpus = 4
-
-# Docker 配置（当 execution_mode = "docker" 时生效）
-[execution.docker]
-# Docker 镜像名称
-# Docker image name
-image = "rust-cargo-rapx:latest"
-
-# 镜像拉取策略：always, if-not-present, never
-# Image pull policy
-pull_policy = "if-not-present"
-
-# 额外挂载目录（可选）
-# Additional bind mounts (optional)
-# 格式: "宿主机绝对路径:容器绝对路径[:模式]"
-# Format: "host_abs_path:container_abs_path[:mode]"
-# 模式仅允许以下子集（按平台统一校验）: ro, rw, z, Z（可逗号组合；ro 与 rw 不能同时出现）
-# Enforced mode subset (platform-validated): ro, rw, z, Z (comma-combinable; ro and rw are mutually exclusive)
-# 示例:
-# mounts = [
-#   "/data/cache:/workspace/cache",
-#   "/var/log/rapx:/workspace/host-logs:ro"
-# ]
-mounts = []
-
 [database]
-# SQLite数据库路径（相对于workspace或绝对路径）
-# SQLite database path (relative to workspace or absolute path)
 path = "tasks.db"
 
 [logging]
-# 日志级别：DEBUG, INFO, WARNING, ERROR
-# Log level: DEBUG, INFO, WARNING, ERROR
 level = "INFO"
-
-# 是否输出到控制台
-# Output to console
 console = true
-
-# 是否写入文件
-# Write to file
 file = true
-
-# 日志文件路径
-# Log file path
 file_path = "server.log"
 
 [distributed]
-# 是否启用分布式 Runner 模式
-# Enable distributed runner mode
-enabled = false
-
-# 任务租约过期时间（秒）
-# Task lease TTL in seconds
 lease_ttl_seconds = 30
-
-# Runner 离线判定阈值（秒）
-# Runner offline threshold in seconds
 runner_offline_seconds = 30
 
 [security]
-# 管理员 API 令牌（为空表示未设置）
-# Admin API token (empty means not set)
-# 用于 /api/admin/runners* 管理端点（请求头：X-Admin-Token）
-# Used by /api/admin/runners* admin endpoints (header: X-Admin-Token)
 admin_token = ""
-
-# ============================================
-# 前端配置 (Frontend Configuration)
-# ============================================
-
-[frontend]
-# 开发服务器端口
-# Development server port
-dev_port = 5173
-
-# 生产构建输出目录
-# Production build output directory
-dist_dir = "dist"
-
-# API 代理目标（指向后端服务器）
-# API proxy target (points to backend server)
-api_proxy_target = "http://localhost:8080"
-
-# WebSocket 代理目标
-# WebSocket proxy target
-ws_proxy_target = "ws://localhost:8080"

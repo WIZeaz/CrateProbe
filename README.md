@@ -15,65 +15,28 @@ CrateProbe 是一个自动化 Rust crate 分析引擎，可下载 crate、运行
 - **后端**: Python 3.10+, FastAPI, SQLite
 - **前端**: Vue 3, Tailwind CSS, Vite
 
-## 快速开始
+## Quick Start
 
-### 1. 配置
+1. Copy config:
+   ```bash
+   cp config.toml.example config.toml
+   ```
 
-项目使用**统一的配置文件** `config.toml` 管理前后端配置。
+2. Start all services with Docker Compose:
+   ```bash
+   export RUNNER_TOKEN="your-admin-created-token"
+   docker compose up --build
+   ```
 
-```bash
-# 复制示例配置文件
-cp config.toml.example config.toml
-
-# 根据需要编辑配置（可选）
-# 默认配置：后端端口 8080，前端端口 5173
-vim config.toml
-```
-
-### 2. 启动后端
-
-本项目使用 [uv](https://github.com/astral-sh/uv) 进行Python依赖管理。
-
-```bash
-cd backend
-
-# 安装依赖
-uv sync
-
-# 运行测试（可选）
-uv run pytest
-
-# 启动后端服务
-uv run python -m app.main
-```
-
-后端将在配置文件指定的端口启动（默认 `http://localhost:8080`）
-
-### 3. 启动前端
-
-```bash
-cd frontend
-
-# 安装依赖
-npm install
-
-# 启动开发服务器
-npm run dev
-```
-
-前端将自动：
-- 从 `config.toml` 读取配置
-- 在配置的端口启动（默认 `http://localhost:5173`）
-- 代理 `/api` 和 `/ws` 请求到后端
-
-### 4. 访问应用
-
-打开浏览器访问 `http://localhost:5173`
+3. Or start individually:
+   - Backend: `cd backend && uv sync && uv run python -m app.main`
+   - Runner: `cd backend && RUNNER_SERVER_URL=http://localhost:8080 RUNNER_ID=local RUNNER_TOKEN=... uv run python -m runner`
+   - Frontend: `cd frontend && npm install && npm run dev`
 
 
 ## 分布式 Runner 部署（简版）
 
-1. 在 `config.toml` 设置：`[distributed].enabled = true`，并配置 `lease_ttl_seconds`。
+1. 在 `config.toml` 配置 `lease_ttl_seconds`。
 2. 设置 `security.admin_token`（用于 Runner 管理 API 的 `X-Admin-Token` 鉴权）。
 3. 通过管理 API 创建 Runner（返回一次性明文 token）：
 
@@ -92,7 +55,7 @@ export RUNNER_ID="runner-01"
 export RUNNER_TOKEN="<token-from-create-runner-response>"
 
 cd backend
-uv run python -m app.runner
+uv run python -m runner
 ```
 
 5. Runner 启动后会周期性心跳并 claim 任务；执行期间通过 Runner API 上报事件与日志分片。
