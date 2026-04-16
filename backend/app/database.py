@@ -639,11 +639,35 @@ class Database:
         return [self._row_to_runner_record(row) for row in rows]
 
     def disable_runner(self, runner_id: str) -> bool:
-        """Disable a runner; returns True when a row changed."""
+        """Disable a runner; returns True when runner exists."""
         cursor = self.conn.cursor()
+        cursor.execute("SELECT 1 FROM runners WHERE runner_id = ?", (runner_id,))
+        if cursor.fetchone() is None:
+            return False
+
         cursor.execute(
             "UPDATE runners SET enabled = 0 WHERE runner_id = ?", (runner_id,)
         )
+        self.conn.commit()
+        return True
+
+    def enable_runner(self, runner_id: str) -> bool:
+        """Enable a runner; returns True when runner exists."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT 1 FROM runners WHERE runner_id = ?", (runner_id,))
+        if cursor.fetchone() is None:
+            return False
+
+        cursor.execute(
+            "UPDATE runners SET enabled = 1 WHERE runner_id = ?", (runner_id,)
+        )
+        self.conn.commit()
+        return True
+
+    def delete_runner(self, runner_id: str) -> bool:
+        """Delete a runner; returns True when a row was deleted."""
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM runners WHERE runner_id = ?", (runner_id,))
         self.conn.commit()
         return cursor.rowcount > 0
 

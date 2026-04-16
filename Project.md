@@ -172,7 +172,9 @@ All endpoints defined in `backend/app/main.py`:
 |--------|------|------|-------------|
 | POST | `/api/admin/runners` | `X-Admin-Token` | Create runner and return one-time plaintext token |
 | GET | `/api/admin/runners` | `X-Admin-Token` | List runners |
-| DELETE | `/api/admin/runners/{runner_id}` | `X-Admin-Token` | Soft-disable runner (`enabled=false`) |
+| DELETE | `/api/admin/runners/{runner_id}` | `X-Admin-Token` | Permanently delete runner |
+| POST | `/api/admin/runners/{runner_id}/disable` | `X-Admin-Token` | Disable runner (`enabled=false`) |
+| POST | `/api/admin/runners/{runner_id}/enable` | `X-Admin-Token` | Enable runner (`enabled=true`) |
 | POST | `/api/runners/{runner_id}/heartbeat` | `Authorization: Bearer <runner_token>` | Runner heartbeat |
 | POST | `/api/runners/{runner_id}/claim` | `Authorization: Bearer <runner_token>` | Claim one pending task (204 if none) |
 | POST | `/api/runners/{runner_id}/tasks/{task_id}/events` | Bearer + lease token | Ingest task lifecycle events |
@@ -185,9 +187,11 @@ All endpoints defined in `backend/app/main.py`:
 3. On runner machine set `RUNNER_SERVER_URL`, `RUNNER_ID`, and `RUNNER_TOKEN`.
 4. Start runner process with `uv run python -m app.runner` from `backend/`.
 
-### Runner deletion and lease-recovery semantics
+### Runner delete/disable semantics and lease recovery
 
-- `DELETE /api/admin/runners/{runner_id}` immediately disables auth for that runner; subsequent heartbeat/claim/event/log requests are rejected.
+- `POST /api/admin/runners/{runner_id}/disable` immediately disables auth for that runner; subsequent heartbeat/claim/event/log requests are rejected.
+- `DELETE /api/admin/runners/{runner_id}` permanently removes the runner record and also immediately rejects subsequent heartbeat/claim/event/log requests.
+- `POST /api/admin/runners/{runner_id}/enable` re-enables a previously disabled runner.
 - Tasks already claimed by that runner remain `running` until lease expiry.
 - Scheduler periodically requeues expired leased tasks back to `pending` and clears runner lease fields.
 

@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 import pytest
+import time
 
 from app.config import Config
 from app.main import create_app
@@ -24,6 +25,21 @@ def app(config):
 @pytest.fixture
 def client(app):
     return TestClient(app)
+
+
+@pytest.fixture
+def short_lease_client(tmp_path):
+    cfg = Config(
+        workspace_path=tmp_path / "workspace-short-lease",
+        admin_token="admin-secret-token",
+        distributed_enabled=True,
+        lease_ttl_seconds=1,
+    )
+    cfg.ensure_workspace_structure()
+    short_lease_app = create_app(cfg, str(cfg.get_db_full_path()))
+
+    with TestClient(short_lease_app) as short_lease_test_client:
+        yield short_lease_app, short_lease_test_client
 
 
 def _admin_headers() -> dict[str, str]:
@@ -62,6 +78,26 @@ def _create_and_claim_task(
     assert claim_response.status_code == 200
     lease_token = claim_response.json()["lease_token"]
     return task_id, token, lease_token
+
+
+def _reconcile_until_pending(
+    app,
+    client: TestClient,
+    task_id: int,
+    timeout_seconds: float = 5.0,
+    interval_seconds: float = 0.1,
+):
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        app.state.scheduler.reconcile_expired_leases()
+        response = client.get(f"/api/tasks/{task_id}")
+        assert response.status_code == 200
+        task_data = response.json()
+        if task_data["status"] == "pending":
+            return task_data
+        time.sleep(interval_seconds)
+
+    pytest.fail(f"Task {task_id} did not return to pending before timeout")
 
 
 def test_heartbeat_rejects_invalid_token(client):
@@ -331,8 +367,8 @@ def test_admin_overview_returns_health_and_latest_metrics(client):
 
 def test_admin_overview_marks_disabled_runner_as_disabled(client):
     _create_runner(client, "runner-disabled-1")
-    disable_resp = client.delete(
-        "/api/admin/runners/runner-disabled-1", headers=_admin_headers()
+    disable_resp = client.post(
+        "/api/admin/runners/runner-disabled-1/disable", headers=_admin_headers()
     )
     assert disable_resp.status_code == 200
 
@@ -459,3 +495,102 @@ def test_admin_runner_metrics_returns_empty_series_without_metrics(client):
     data = response.json()
     assert data["series"] == []
     assert data["latest"] is None
+
+
+def test_disabled_runner_rejected_by_runner_endpoints(client):
+    token = _create_runner(client, "runner-disabled-auth")
+
+    disable_response = client.post(
+        "/api/admin/runners/runner-disabled-auth/disable",
+        headers=_admin_headers(),
+    )
+    assert disable_response.status_code == 200
+
+    heartbeat_response = client.post(
+        "/api/runners/runner-disabled-auth/heartbeat",
+        headers=_runner_headers(token),
+    )
+    assert heartbeat_response.status_code == 403
+
+    claim_response = client.post(
+        "/api/runners/runner-disabled-auth/claim",
+        headers=_runner_headers(token),
+    )
+    assert claim_response.status_code == 403
+
+
+def test_deleted_runner_rejected_by_runner_endpoints(client):
+    token = _create_runner(client, "runner-deleted-auth")
+
+    delete_response = client.delete(
+        "/api/admin/runners/runner-deleted-auth",
+        headers=_admin_headers(),
+    )
+    assert delete_response.status_code == 200
+
+    heartbeat_response = client.post(
+        "/api/runners/runner-deleted-auth/heartbeat",
+        headers=_runner_headers(token),
+    )
+    assert heartbeat_response.status_code == 403
+
+    claim_response = client.post(
+        "/api/runners/runner-deleted-auth/claim",
+        headers=_runner_headers(token),
+    )
+    assert claim_response.status_code == 403
+
+
+def test_enable_restores_runner_auth(client):
+    token = _create_runner(client, "runner-enable-auth")
+
+    disable_response = client.post(
+        "/api/admin/runners/runner-enable-auth/disable",
+        headers=_admin_headers(),
+    )
+    assert disable_response.status_code == 200
+
+    enable_response = client.post(
+        "/api/admin/runners/runner-enable-auth/enable",
+        headers=_admin_headers(),
+    )
+    assert enable_response.status_code == 200
+
+    heartbeat_response = client.post(
+        "/api/runners/runner-enable-auth/heartbeat",
+        headers=_runner_headers(token),
+    )
+    assert heartbeat_response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("action", "http_method", "action_path"),
+    [
+        ("disable", "post", "/api/admin/runners/{runner_id}/disable"),
+        ("delete", "delete", "/api/admin/runners/{runner_id}"),
+    ],
+)
+def test_action_after_claim_requeues_task_after_lease_expiry(
+    short_lease_client,
+    action,
+    http_method,
+    action_path,
+):
+    app, client = short_lease_client
+    runner_id = f"runner-{action}-lease"
+    task_id, _token, _lease_token = _create_and_claim_task(client, runner_id)
+
+    action_response = getattr(client, http_method)(
+        action_path.format(runner_id=runner_id),
+        headers=_admin_headers(),
+    )
+    assert action_response.status_code == 200
+
+    before_expiry = client.get(f"/api/tasks/{task_id}")
+    assert before_expiry.status_code == 200
+    assert before_expiry.json()["status"] == "running"
+
+    task_data = _reconcile_until_pending(app, client, task_id)
+    assert task_data["runner_id"] is None
+    assert task_data.get("lease_token") is None
+    assert task_data.get("lease_expires_at") is None

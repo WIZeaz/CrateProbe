@@ -11,9 +11,12 @@ const runners = ref([])
 const loading = ref(true)
 const creating = ref(false)
 const deletingRunnerId = ref(null)
+const disablingRunnerId = ref(null)
+const enablingRunnerId = ref(null)
 const error = ref('')
 const createError = ref('')
 const copySuccess = ref(false)
+const copyError = ref('')
 const createdToken = ref(null)
 const selectedRunnerId = ref('')
 const metricsWindow = ref('1h')
@@ -46,12 +49,18 @@ async function fetchRunners() {
   error.value = ''
 
   if (!hasAdminToken.value) {
+    loading.value = false
     router.replace('/settings')
     return
   }
 
   try {
     runners.value = await api.getRunners()
+    if (selectedRunnerId.value && !runners.value.some(r => r.runner_id === selectedRunnerId.value)) {
+      selectedRunnerId.value = ''
+      metricsData.value = null
+      metricsError.value = ''
+    }
   } catch (err) {
     if (err.response?.status === 403) {
       error.value = 'Admin token is invalid or expired. Update the token and try again.'
@@ -82,10 +91,15 @@ function parseTags(raw) {
 }
 
 function runnerStatus(runner) {
-  if (!runner.enabled) return 'disabled'
-  if (!runner.last_seen_at) return 'offline'
+  if (runner.health_status === 'online' || runner.health_status === 'offline' || runner.health_status === 'disabled') {
+    return runner.health_status
+  }
 
-  const seen = new Date(runner.last_seen_at)
+  if (!runner.enabled) return 'disabled'
+  const lastSeen = runner.last_seen_at || runner.last_seen
+  if (!lastSeen) return 'offline'
+
+  const seen = new Date(lastSeen)
   if (Number.isNaN(seen.getTime())) return 'offline'
 
   const secondsAgo = (Date.now() - seen.getTime()) / 1000
@@ -117,7 +131,10 @@ function mapCreatePayload() {
   }
 
   if (form.value.capacity_total !== '') {
-    payload.capacity_total = Number(form.value.capacity_total)
+    const capacity = Number(form.value.capacity_total)
+    if (Number.isFinite(capacity) && capacity > 0) {
+      payload.capacity_total = capacity
+    }
   }
 
   return payload
@@ -136,11 +153,17 @@ async function createRunner() {
     return
   }
 
+  if (form.value.capacity_total !== '' && !Number.isFinite(Number(form.value.capacity_total))) {
+    createError.value = 'Capacity must be a positive number.'
+    return
+  }
+
   creating.value = true
   try {
     const response = await api.createRunner(mapCreatePayload())
     createdToken.value = response.token || null
     copySuccess.value = false
+    copyError.value = ''
     form.value = {
       runner_id: '',
       description: '',
@@ -165,13 +188,15 @@ async function copyToken() {
   try {
     await navigator.clipboard.writeText(createdToken.value)
     copySuccess.value = true
+    copyError.value = ''
   } catch {
     copySuccess.value = false
+    copyError.value = 'Copy failed. Please copy the token manually.'
   }
 }
 
 async function deleteRunner(runner) {
-  if (!confirm(`Delete runner "${runner.runner_id}"? This will disable it.`)) {
+  if (!confirm(`Permanently delete runner "${runner.runner_id}"? This action cannot be undone.`)) {
     return
   }
 
@@ -187,8 +212,41 @@ async function deleteRunner(runner) {
   }
 }
 
+async function disableRunner(runner) {
+  if (!confirm(`Disable runner "${runner.runner_id}"? It will stop claiming new tasks until re-enabled.`)) {
+    return
+  }
+
+  disablingRunnerId.value = runner.runner_id
+  try {
+    await api.disableRunner(runner.runner_id)
+    await fetchRunners()
+  } catch (err) {
+    const message = err.response?.data?.detail || err.message || 'Failed to disable runner.'
+    alert(message)
+  } finally {
+    disablingRunnerId.value = null
+  }
+}
+
+async function enableRunner(runner) {
+  enablingRunnerId.value = runner.runner_id
+  try {
+    await api.enableRunner(runner.runner_id)
+    await fetchRunners()
+  } catch (err) {
+    const message = err.response?.data?.detail || err.message || 'Failed to enable runner.'
+    alert(message)
+  } finally {
+    enablingRunnerId.value = null
+  }
+}
+
 async function fetchRunnerMetrics(isRefresh = false) {
   if (!selectedRunnerId.value) return
+
+  const requestRunnerId = selectedRunnerId.value
+  const requestWindow = metricsWindow.value
 
   if (!isRefresh) {
     metricsLoading.value = true
@@ -196,12 +254,17 @@ async function fetchRunnerMetrics(isRefresh = false) {
   metricsError.value = ''
 
   try {
-    metricsData.value = await api.getRunnerMetrics(selectedRunnerId.value, metricsWindow.value)
+    const response = await api.getRunnerMetrics(requestRunnerId, requestWindow)
+    if (selectedRunnerId.value === requestRunnerId && metricsWindow.value === requestWindow) {
+      metricsData.value = response
+    }
   } catch (err) {
-    if (err.response?.status === 403) {
-      metricsError.value = 'Admin token is invalid or missing. Update token and retry.'
-    } else {
-      metricsError.value = err.response?.data?.detail || err.message || 'Failed to load runner metrics.'
+    if (selectedRunnerId.value === requestRunnerId && metricsWindow.value === requestWindow) {
+      if (err.response?.status === 403) {
+        metricsError.value = 'Admin token is invalid or missing. Update token and retry.'
+      } else {
+        metricsError.value = err.response?.data?.detail || err.message || 'Failed to load runner metrics.'
+      }
     }
   } finally {
     if (!isRefresh) {
@@ -357,6 +420,7 @@ onUnmounted(() => {
             Copy Token
           </button>
           <span v-if="copySuccess" class="text-sm text-green-700">Copied to clipboard</span>
+          <span v-else-if="copyError" class="text-sm text-red-700">{{ copyError }}</span>
           <span v-else class="text-sm text-gray-500">Use this token as `RUNNER_TOKEN`.</span>
         </div>
       </section>
@@ -429,14 +493,31 @@ onUnmounted(() => {
               </span>
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm">
-              <button
-                @click="deleteRunner(runner)"
-                @click.stop
-                :disabled="deletingRunnerId === runner.runner_id"
-                class="px-3 py-1.5 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-              >
-                {{ deletingRunnerId === runner.runner_id ? 'Deleting...' : 'Delete' }}
-              </button>
+              <div class="flex items-center gap-2">
+                <button
+                  v-if="runner.enabled"
+                  @click.stop="disableRunner(runner)"
+                  :disabled="disablingRunnerId === runner.runner_id"
+                  class="px-3 py-1.5 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                >
+                  {{ disablingRunnerId === runner.runner_id ? 'Disabling...' : 'Disable' }}
+                </button>
+                <button
+                  v-else
+                  @click.stop="enableRunner(runner)"
+                  :disabled="enablingRunnerId === runner.runner_id"
+                  class="px-3 py-1.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                >
+                  {{ enablingRunnerId === runner.runner_id ? 'Enabling...' : 'Enable' }}
+                </button>
+                <button
+                  @click.stop="deleteRunner(runner)"
+                  :disabled="deletingRunnerId === runner.runner_id"
+                  class="px-3 py-1.5 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                >
+                  {{ deletingRunnerId === runner.runner_id ? 'Deleting...' : 'Delete' }}
+                </button>
+              </div>
             </td>
           </tr>
         </tbody>
@@ -499,7 +580,7 @@ onUnmounted(() => {
       </div>
 
       <div v-else-if="metricsSeries.length === 0" class="text-sm text-gray-500 py-6 text-center">
-        暂无监控数据
+        No monitoring data yet
       </div>
 
       <div v-else class="grid grid-cols-1 gap-4">

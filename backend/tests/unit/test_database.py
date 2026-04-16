@@ -280,3 +280,53 @@ def test_create_and_disable_runner(db):
     fetched_after_disable = db.get_runner_by_runner_id("runner-1")
     assert fetched_after_disable is not None
     assert fetched_after_disable.enabled is False
+
+
+def test_enable_runner_sets_enabled_true_after_disable(db):
+    """Test enabling a runner after disabling it"""
+    db.create_runner(
+        runner_id="runner-1",
+        token_hash="hash-123",
+        token_salt="salt-123",
+    )
+
+    assert db.disable_runner("runner-1") is True
+    assert db.enable_runner("runner-1") is True
+
+    fetched = db.get_runner_by_runner_id("runner-1")
+    assert fetched is not None
+    assert fetched.enabled is True
+
+
+def test_delete_runner_removes_record(db):
+    """Test deleting a runner removes it from database"""
+    db.create_runner(
+        runner_id="runner-1",
+        token_hash="hash-123",
+        token_salt="salt-123",
+    )
+
+    assert db.delete_runner("runner-1") is True
+    assert db.get_runner_by_runner_id("runner-1") is None
+
+
+def test_disable_and_enable_runner_are_idempotent_for_existing_runner(db):
+    """Test disable and enable return True for existing runner, even when unchanged"""
+    db.create_runner(
+        runner_id="runner-1",
+        token_hash="hash-123",
+        token_salt="salt-123",
+    )
+
+    assert db.disable_runner("runner-1") is True
+    assert db.disable_runner("runner-1") is True
+
+    assert db.enable_runner("runner-1") is True
+    assert db.enable_runner("runner-1") is True
+
+
+def test_runner_mutations_return_false_for_missing_runner(db):
+    """Test disable, enable, and delete return False for missing runner"""
+    assert db.disable_runner("missing-runner") is False
+    assert db.enable_runner("missing-runner") is False
+    assert db.delete_runner("missing-runner") is False

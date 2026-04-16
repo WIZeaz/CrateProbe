@@ -195,6 +195,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         version="1.0.0",
         lifespan=lifespan,
     )
+    app.state.scheduler = scheduler
 
     def require_admin_token(
         x_admin_token: Optional[str] = Header(default=None, alias="X-Admin-Token"),
@@ -204,6 +205,16 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
     def token_hint(token: str) -> str:
         return f"****{token[-4:]}"
+
+    def _runner_to_response(runner) -> RunnerResponse:
+        return RunnerResponse(
+            runner_id=runner.runner_id,
+            enabled=runner.enabled,
+            created_at=runner.created_at.isoformat(),
+            last_seen_at=runner.last_seen_at.isoformat()
+            if runner.last_seen_at
+            else None,
+        )
 
     def _extract_bearer_token(authorization: Optional[str]) -> Optional[str]:
         if not authorization:
@@ -415,17 +426,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     )
     async def list_runners():
         runners = db.list_runners()
-        return [
-            RunnerResponse(
-                runner_id=runner.runner_id,
-                enabled=runner.enabled,
-                created_at=runner.created_at.isoformat(),
-                last_seen_at=(
-                    runner.last_seen_at.isoformat() if runner.last_seen_at else None
-                ),
-            )
-            for runner in runners
-        ]
+        return [_runner_to_response(runner) for runner in runners]
 
     @app.head(
         "/api/admin/runners",
@@ -439,6 +440,23 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         response_model=RunnerResponse,
         dependencies=[Depends(require_admin_token)],
     )
+    async def delete_runner(runner_id: str):
+        runner = db.get_runner_by_runner_id(runner_id)
+        if runner is None:
+            raise HTTPException(status_code=404, detail="Runner not found")
+
+        response = _runner_to_response(runner)
+        deleted = db.delete_runner(runner_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Runner not found")
+
+        return response
+
+    @app.post(
+        "/api/admin/runners/{runner_id}/disable",
+        response_model=RunnerResponse,
+        dependencies=[Depends(require_admin_token)],
+    )
     async def disable_runner(runner_id: str):
         runner = db.get_runner_by_runner_id(runner_id)
         if runner is None:
@@ -449,16 +467,24 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         if updated_runner is None:
             raise HTTPException(status_code=404, detail="Runner not found")
 
-        return RunnerResponse(
-            runner_id=updated_runner.runner_id,
-            enabled=updated_runner.enabled,
-            created_at=updated_runner.created_at.isoformat(),
-            last_seen_at=(
-                updated_runner.last_seen_at.isoformat()
-                if updated_runner.last_seen_at
-                else None
-            ),
-        )
+        return _runner_to_response(updated_runner)
+
+    @app.post(
+        "/api/admin/runners/{runner_id}/enable",
+        response_model=RunnerResponse,
+        dependencies=[Depends(require_admin_token)],
+    )
+    async def enable_runner(runner_id: str):
+        runner = db.get_runner_by_runner_id(runner_id)
+        if runner is None:
+            raise HTTPException(status_code=404, detail="Runner not found")
+
+        db.enable_runner(runner_id)
+        updated_runner = db.get_runner_by_runner_id(runner_id)
+        if updated_runner is None:
+            raise HTTPException(status_code=404, detail="Runner not found")
+
+        return _runner_to_response(updated_runner)
 
     @app.post("/api/runners/{runner_id}/heartbeat")
     async def runner_heartbeat(

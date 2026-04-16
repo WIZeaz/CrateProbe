@@ -97,8 +97,10 @@ uv run python -m app.runner
 
 5. Runner 启动后会周期性心跳并 claim 任务；执行期间通过 Runner API 上报事件与日志分片。
 
-### 删除 Runner 的语义
+### Runner 管理语义
 
-- `DELETE /api/admin/runners/{runner_id}` 为软删除（`enabled=false`），不是物理删除。
-- 被删除后，该 Runner 的心跳/claim/事件/日志上报会立刻鉴权失败（403）。
-- 若该 Runner 已 claim 任务，任务会先保持 `running`，并在租约到期后由调度器自动回收并重新排队（`pending`）。
+- `DELETE /api/admin/runners/{runner_id}` 为物理删除（永久移除 runner 记录）。
+- `POST /api/admin/runners/{runner_id}/disable` 为禁用（`enabled=false`），runner 仍保留在列表中。
+- `POST /api/admin/runners/{runner_id}/enable` 为启用（`enabled=true`）。
+- 对于已被删除或禁用的 runner，其心跳/claim/事件/日志上报会立刻鉴权失败（403）。
+- 若该 runner 已 claim 任务，任务会先保持 `running`，并在租约到期后由调度器自动回收并重新排队（`pending`）。

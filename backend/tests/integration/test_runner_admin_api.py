@@ -55,7 +55,7 @@ def test_invalid_admin_token_rejected(client):
     assert response.status_code == 403
 
 
-def test_delete_runner_soft_disables(client):
+def test_delete_runner_removes_runner_from_list(client):
     create_response = client.post(
         "/api/admin/runners",
         headers=_admin_headers(),
@@ -71,7 +71,57 @@ def test_delete_runner_soft_disables(client):
     assert delete_response.status_code == 200
     data = delete_response.json()
     assert data["runner_id"] == "runner-delete"
+    assert data["enabled"] is True
+
+    list_response = client.get("/api/admin/runners", headers=_admin_headers())
+    assert list_response.status_code == 200
+    runner_ids = {runner["runner_id"] for runner in list_response.json()}
+    assert "runner-delete" not in runner_ids
+
+
+def test_disable_runner_endpoint_sets_enabled_false(client):
+    create_response = client.post(
+        "/api/admin/runners",
+        headers=_admin_headers(),
+        json={"runner_id": "runner-disable"},
+    )
+    assert create_response.status_code == 201
+
+    disable_response = client.post(
+        "/api/admin/runners/runner-disable/disable",
+        headers=_admin_headers(),
+    )
+
+    assert disable_response.status_code == 200
+    data = disable_response.json()
+    assert data["runner_id"] == "runner-disable"
     assert data["enabled"] is False
+
+
+def test_enable_runner_endpoint_sets_enabled_true_after_disable(client):
+    create_response = client.post(
+        "/api/admin/runners",
+        headers=_admin_headers(),
+        json={"runner_id": "runner-enable"},
+    )
+    assert create_response.status_code == 201
+
+    disable_response = client.post(
+        "/api/admin/runners/runner-enable/disable",
+        headers=_admin_headers(),
+    )
+    assert disable_response.status_code == 200
+    assert disable_response.json()["enabled"] is False
+
+    enable_response = client.post(
+        "/api/admin/runners/runner-enable/enable",
+        headers=_admin_headers(),
+    )
+
+    assert enable_response.status_code == 200
+    data = enable_response.json()
+    assert data["runner_id"] == "runner-enable"
+    assert data["enabled"] is True
 
 
 def test_list_runners_returns_created_runners(client):

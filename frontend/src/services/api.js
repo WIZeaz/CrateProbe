@@ -117,6 +117,16 @@ export default {
     return response.data
   },
 
+  async disableRunner(runnerId) {
+    const response = await api.post(`/admin/runners/${runnerId}/disable`)
+    return response.data
+  },
+
+  async enableRunner(runnerId) {
+    const response = await api.post(`/admin/runners/${runnerId}/enable`)
+    return response.data
+  },
+
   async validateAdminToken() {
     const response = await api.head('/admin/runners')
     return response.status === 200 || response.status === 204
