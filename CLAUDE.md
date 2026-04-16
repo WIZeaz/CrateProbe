@@ -115,3 +115,24 @@ workspace/
 - Unit tests in `tests/unit/`
 - Integration tests in `tests/integration/`
 - TDD approach preferred for new features
+
+**Logging**
+- Use Python `logging` module consistently; avoid `print()` in production code.
+- Emit structured logs where possible (key-value style) so task_id, runner_id, crate_name, and status are searchable.
+- Include correlation identifiers in every important log line:
+	- API path: `task_id`, `request_id`, `runner_id`
+	- Runner path: `task_id`, `runner_id`, `crate_name`, `attempt`
+- Choose clear log levels:
+	- `DEBUG`: verbose internal state for local debugging
+	- `INFO`: task lifecycle transitions and expected operations
+	- `WARNING`: recoverable issues or retries
+	- `ERROR`: failures that affect a task or request
+	- `CRITICAL`: service-level failures requiring immediate attention
+- Never log secrets (tokens, credentials, full auth headers). Mask sensitive values when needed.
+- Keep one event per line and use concise, actionable messages with stable wording.
+- For exceptions, use `logger.exception(...)` in `except` blocks to preserve stack traces.
+- Record task lifecycle boundaries explicitly (`pending` -> `running` -> terminal state) for auditability.
+- Log external command execution with command summary, exit code, duration, and truncated stdout/stderr pointers (store full output in task log files, not DB fields).
+- Use UTC timestamps and consistent formatting across backend and runner logs.
+- Avoid high-volume logging inside tight loops; sample or aggregate when necessary.
+- Ensure logs under `workspace/logs/` are rotated or cleaned up to prevent unbounded disk usage.
