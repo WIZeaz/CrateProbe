@@ -3,7 +3,7 @@ import json
 from fastapi.testclient import TestClient
 from app.main import create_app
 from app.config import Config
-from app.models import TaskStatus
+from core.models import TaskStatus
 
 
 def _admin_headers() -> dict[str, str]:

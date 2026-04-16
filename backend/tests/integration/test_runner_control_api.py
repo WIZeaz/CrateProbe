@@ -32,7 +32,6 @@ def short_lease_client(tmp_path):
     cfg = Config(
         workspace_path=tmp_path / "workspace-short-lease",
         admin_token="admin-secret-token",
-        distributed_enabled=True,
         lease_ttl_seconds=1,
     )
     cfg.ensure_workspace_structure()

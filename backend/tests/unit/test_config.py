@@ -125,7 +125,7 @@ def test_runner_config_defaults_metrics_interval_to_10_seconds(monkeypatch):
     monkeypatch.setenv("RUNNER_ID", "runner-1")
     monkeypatch.setenv("RUNNER_TOKEN", "token-1")
 
-    from app.runner.config import RunnerConfig
+    from runner.config import RunnerConfig
 
     cfg = RunnerConfig.from_env()
     assert cfg.metrics_interval_seconds == 10.0
@@ -137,7 +137,7 @@ def test_runner_config_reads_metrics_interval_from_env(monkeypatch):
     monkeypatch.setenv("RUNNER_TOKEN", "token-1")
     monkeypatch.setenv("RUNNER_METRICS_INTERVAL_SECONDS", "5")
 
-    from app.runner.config import RunnerConfig
+    from runner.config import RunnerConfig
 
     cfg = RunnerConfig.from_env()
     assert cfg.metrics_interval_seconds == 5.0

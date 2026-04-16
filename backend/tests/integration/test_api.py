@@ -111,7 +111,7 @@ def test_delete_task_not_running(client):
 def test_dashboard_stats(client, app):
     """Test getting dashboard statistics"""
     # Create some tasks with different statuses
-    from app.models import TaskStatus
+    from core.models import TaskStatus
 
     # Access the database through the app's dependency injection
     db = app.dependency_overrides.get("get_db")
@@ -298,7 +298,7 @@ def test_get_task_realtime_stats_not_found(client):
 
 def test_retry_task(client, app):
     """Test retrying a task resets it instead of creating new one"""
-    from app.models import TaskStatus
+    from core.models import TaskStatus
     from datetime import datetime
 
     # Create a task

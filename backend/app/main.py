@@ -19,8 +19,8 @@ from pathlib import Path
 import asyncio
 from app.config import Config
 from app.database import Database, TaskRecord
-from app.models import TaskStatus
-from app.services.crates_api import CratesAPI, CrateNotFoundError
+from core.models import TaskStatus
+from runner.crates_api import CratesAPI, CrateNotFoundError
 from app.services.scheduler import TaskScheduler
 from app.services.system_monitor import SystemMonitor
 from app.services.runner_metrics_store import RunnerMetricsStore, RunnerMetricPoint
@@ -211,9 +211,9 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             runner_id=runner.runner_id,
             enabled=runner.enabled,
             created_at=runner.created_at.isoformat(),
-            last_seen_at=runner.last_seen_at.isoformat()
-            if runner.last_seen_at
-            else None,
+            last_seen_at=(
+                runner.last_seen_at.isoformat() if runner.last_seen_at else None
+            ),
         )
 
     def _extract_bearer_token(authorization: Optional[str]) -> Optional[str]:
@@ -557,9 +557,9 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             runner_id=runner.runner_id,
             enabled=runner.enabled,
             created_at=runner.created_at.isoformat(),
-            last_seen_at=runner.last_seen_at.isoformat()
-            if runner.last_seen_at
-            else None,
+            last_seen_at=(
+                runner.last_seen_at.isoformat() if runner.last_seen_at else None
+            ),
             health_status=_health_status(runner),
             latest_metrics=_metric_to_response(latest),
         )

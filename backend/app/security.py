@@ -3,7 +3,6 @@ import hashlib
 import hmac
 import secrets
 
-
 _TOKEN_PREFIX = "rnr_"
 _TOKEN_ENTROPY_BYTES = 24
 _SALT_BYTES = 16

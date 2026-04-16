@@ -2,7 +2,7 @@ import pytest
 from datetime import datetime
 from pathlib import Path
 from app.database import Database, TaskRecord
-from app.models import TaskStatus
+from core.models import TaskStatus
 
 
 @pytest.fixture
@@ -129,7 +129,7 @@ def test_update_task_pid(db):
 def test_reset_task_for_retry(db):
     """Test resetting task state for retry"""
     from datetime import datetime
-    from app.models import TaskStatus
+    from core.models import TaskStatus
 
     # Create and complete a task
     task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")

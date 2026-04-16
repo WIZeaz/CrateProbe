@@ -9,9 +9,6 @@ def test_config(tmp_path):
     """Create a test configuration"""
     config = Config(
         workspace_path=tmp_path / "workspace",
-        max_memory_gb=1,
-        max_runtime_seconds=3600,
-        max_jobs=1,
         server_host="127.0.0.1",
         server_port=8000,
         log_level="INFO",

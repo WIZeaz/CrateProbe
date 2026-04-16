@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List
 
-from app.models import TaskStatus
+from core.models import TaskStatus
 
 
 @dataclass
@@ -109,16 +109,14 @@ class Database:
                 last_seen_at TIMESTAMP
             )
         """)
-        cursor.execute(
-            """
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS task_log_chunk_sequences (
                 task_id INTEGER NOT NULL,
                 log_type TEXT NOT NULL,
                 last_chunk_seq INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (task_id, log_type)
             )
-            """
-        )
+            """)
         # Backward-compatible migration for existing databases.
         columns = {
             row["name"] for row in cursor.execute("PRAGMA table_info(tasks)").fetchall()
