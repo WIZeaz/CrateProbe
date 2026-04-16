@@ -141,3 +141,26 @@ def test_runner_config_reads_metrics_interval_from_env(monkeypatch):
 
     cfg = RunnerConfig.from_env()
     assert cfg.metrics_interval_seconds == 5.0
+
+
+def test_runner_config_defaults_workspace_dir_to_slash_workspace(monkeypatch):
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://localhost:8080")
+    monkeypatch.setenv("RUNNER_ID", "runner-1")
+    monkeypatch.setenv("RUNNER_TOKEN", "token-1")
+
+    from runner.config import RunnerConfig
+
+    cfg = RunnerConfig.from_env()
+    assert cfg.workspace_dir == "/workspace"
+
+
+def test_runner_config_reads_workspace_dir_from_env(monkeypatch):
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://localhost:8080")
+    monkeypatch.setenv("RUNNER_ID", "runner-1")
+    monkeypatch.setenv("RUNNER_TOKEN", "token-1")
+    monkeypatch.setenv("RUNNER_WORKSPACE_DIR", "/tmp/custom-runner-workspace")
+
+    from runner.config import RunnerConfig
+
+    cfg = RunnerConfig.from_env()
+    assert cfg.workspace_dir == "/tmp/custom-runner-workspace"

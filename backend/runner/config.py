@@ -18,6 +18,7 @@ class RunnerConfig:
     docker_image: str = "rust-cargo-rapx:latest"
     docker_pull_policy: str = "if-not-present"
     docker_mounts: List[str] = field(default_factory=list)
+    workspace_dir: str = "/workspace"
 
     @classmethod
     def from_env(cls) -> "RunnerConfig":
@@ -36,6 +37,7 @@ class RunnerConfig:
             "RUNNER_DOCKER_PULL_POLICY", "if-not-present"
         )
         mounts_raw = os.environ.get("RUNNER_DOCKER_MOUNTS", "")
+        workspace_dir = os.environ.get("RUNNER_WORKSPACE_DIR", "/workspace")
 
         missing = []
         if not server_url:
@@ -83,4 +85,5 @@ class RunnerConfig:
             docker_image=docker_image,
             docker_pull_policy=docker_pull_policy,
             docker_mounts=docker_mounts,
+            workspace_dir=workspace_dir,
         )

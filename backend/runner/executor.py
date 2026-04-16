@@ -41,8 +41,10 @@ class TaskExecutor:
             {"lease_token": lease_token, "event_seq": 1, "event_type": "started"},
         )
 
-        workspace_dir = Path("/workspace") / f"{crate_name}-{crate_version}"
-        logs_dir = Path("/workspace") / "logs"
+        workspace_dir = (
+            Path(self.config.workspace_dir) / f"{crate_name}-{crate_version}"
+        )
+        logs_dir = Path(self.config.workspace_dir) / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
         runner_log = logs_dir / f"{task_id}-runner.log"
 
