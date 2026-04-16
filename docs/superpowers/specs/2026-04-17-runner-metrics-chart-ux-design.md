@@ -67,9 +67,16 @@ X-axis timestamp extraction priority:
 
 ### Axis Rules
 
-- Y-axis domain: `0..100` (fixed)
+- Y-axis domain:
+  - `field in {cpu_percent, memory_percent, disk_percent}`: fixed `0..100`
+  - otherwise: preserve existing behavior (including caller-provided `maxY`) to avoid changing non-resource chart semantics in this scope
 - Y ticks: `0, 25, 50, 75, 100`
-- X ticks: sample 3-5 labels depending on point count to avoid overlap
+- X ticks: deterministic sampling with overlap control
+  - target 4 ticks
+  - always include first and last indices
+  - choose interior ticks by even index spacing
+  - deduplicate labels when two ticks format to the same time string
+  - if available width cannot maintain ~60px per label, reduce to 3 ticks
 
 ### Value Rules
 
@@ -88,7 +95,7 @@ X-axis timestamp extraction priority:
   - vertical crosshair at hovered X
   - point highlight at `(x, y)`
   - tooltip near pointer with:
-    - formatted local timestamp
+    - formatted local timestamp (or `Sample #<index+1>` when no parseable timestamp)
     - formatted metric value
 - On mouse leave:
   - clear hover state
