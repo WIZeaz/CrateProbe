@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  buildXTicks,
   clampValue,
   computeDomainMaxY,
   formatHoverLabel,
@@ -103,6 +104,37 @@ test('pickXTicks returns [0] for single point', () => {
   assert.deepEqual(pickXTicks({ count: 1 }), [0])
 })
 
-test('pickXTicks includes first and last indices when count is greater than one', () => {
-  assert.deepEqual(pickXTicks({ count: 5 }), [0, 4])
+test('pickXTicks chooses 4 ticks for wide chart', () => {
+  assert.deepEqual(pickXTicks({ count: 10, width: 480, minLabelSpacing: 60 }), [0, 3, 6, 9])
+})
+
+test('pickXTicks chooses 3 ticks for narrow chart', () => {
+  assert.deepEqual(pickXTicks({ count: 10, width: 150, minLabelSpacing: 60 }), [0, 4, 9])
+})
+
+test('pickXTicks always includes first and last index for multi-point series', () => {
+  const ticks = pickXTicks({ count: 7, width: 480, minLabelSpacing: 60 })
+  assert.equal(ticks[0], 0)
+  assert.equal(ticks[ticks.length - 1], 6)
+})
+
+test('buildXTicks dedupes equal labels while preserving deterministic order', () => {
+  const points = [
+    { timestamp: '2026-04-17T10:00:00Z' },
+    { timestamp: '2026-04-17T10:00:10Z' },
+    { timestamp: '2026-04-17T10:05:00Z' },
+    { timestamp: '2026-04-17T10:10:00Z' },
+    { timestamp: '2026-04-17T10:15:00Z' },
+  ]
+
+  const ticks = buildXTicks(points, {
+    width: 480,
+    minLabelSpacing: 60,
+    formatter: (point, index) => (index < 3 ? '10:00' : '10:15'),
+  })
+
+  assert.deepEqual(ticks, [
+    { index: 0, label: '10:00' },
+    { index: 4, label: '10:15' },
+  ])
 })
