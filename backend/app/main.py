@@ -1,6 +1,7 @@
 import uvicorn
 import logging
 import base64
+import uuid
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from fastapi import (
@@ -28,6 +29,8 @@ from app.security import generate_runner_token, generate_salt, hash_token, verif
 from app.utils.file_utils import read_last_n_lines
 from app.utils.file_utils import FileNotFoundError as CustomFileNotFoundError
 from app.api.websocket import get_manager
+
+logger = logging.getLogger(__name__)
 
 
 # Request/Response models
@@ -225,6 +228,11 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         token = parts[1].strip()
         return token or None
 
+    def _request_id_from_header(x_request_id: Optional[str]) -> str:
+        if x_request_id and x_request_id.strip():
+            return x_request_id.strip()
+        return uuid.uuid4().hex[:12]
+
     def require_runner_auth(
         runner_id: str,
         authorization: Optional[str] = Header(default=None, alias="Authorization"),
@@ -246,10 +254,38 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             raise HTTPException(status_code=403, detail="Forbidden")
 
     def require_task_lease(
-        task_id: int, runner_id: str, lease_token: str
+        task_id: int,
+        runner_id: str,
+        lease_token: str,
+        *,
+        request_id: str,
+        event_seq: Optional[int] = None,
+        log_type: Optional[str] = None,
+        chunk_seq: Optional[int] = None,
     ) -> TaskRecord:
         task = db.get_task(task_id)
         if task is None:
+            if log_type is not None:
+                logger.warning(
+                    "runner task not found for log ingest",
+                    extra={
+                        "request_id": request_id,
+                        "runner_id": runner_id,
+                        "task_id": task_id,
+                        "log_type": log_type,
+                        "chunk_seq": chunk_seq,
+                    },
+                )
+            else:
+                logger.warning(
+                    "runner task not found for event ingest",
+                    extra={
+                        "request_id": request_id,
+                        "runner_id": runner_id,
+                        "task_id": task_id,
+                        "event_seq": event_seq,
+                    },
+                )
             raise HTTPException(status_code=404, detail="Task not found")
 
         if (
@@ -257,6 +293,17 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             or task.lease_token is None
             or lease_token != task.lease_token
         ):
+            logger.warning(
+                "lease token mismatch",
+                extra={
+                    "request_id": request_id,
+                    "runner_id": runner_id,
+                    "task_id": task_id,
+                    "event_seq": event_seq,
+                    "log_type": log_type,
+                    "chunk_seq": chunk_seq,
+                },
+            )
             raise HTTPException(status_code=409, detail="Lease token mismatch")
 
         return task
@@ -602,12 +649,40 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         runner_id: str,
         task_id: int,
         request: RunnerTaskEventRequest,
+        x_request_id: Optional[str] = Header(default=None, alias="X-Request-ID"),
         _auth: None = Depends(require_runner_auth),
     ):
-        require_task_lease(task_id, runner_id, request.lease_token)
+        request_id = _request_id_from_header(x_request_id)
+        require_task_lease(
+            task_id,
+            runner_id,
+            request.lease_token,
+            request_id=request_id,
+            event_seq=request.event_seq,
+        )
         applied = db.apply_task_event(task_id, request.event_seq, request.event_type)
         if applied is None:
+            logger.warning(
+                "runner task not found for event ingest",
+                extra={
+                    "request_id": request_id,
+                    "runner_id": runner_id,
+                    "task_id": task_id,
+                    "event_seq": request.event_seq,
+                },
+            )
             raise HTTPException(status_code=404, detail="Task not found")
+
+        if not applied:
+            logger.info(
+                "runner task event not applied",
+                extra={
+                    "request_id": request_id,
+                    "runner_id": runner_id,
+                    "task_id": task_id,
+                    "event_seq": request.event_seq,
+                },
+            )
 
         if applied:
             updated_task = db.get_task(task_id)
@@ -632,12 +707,31 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         task_id: int,
         log_type: str,
         request: RunnerTaskLogChunkRequest,
+        x_request_id: Optional[str] = Header(default=None, alias="X-Request-ID"),
         _auth: None = Depends(require_runner_auth),
     ):
+        request_id = _request_id_from_header(x_request_id)
         if log_type not in RUNNER_CHUNK_LOG_TYPES:
+            logger.warning(
+                "unknown log type on runner log ingest",
+                extra={
+                    "request_id": request_id,
+                    "runner_id": runner_id,
+                    "task_id": task_id,
+                    "log_type": log_type,
+                    "chunk_seq": request.chunk_seq,
+                },
+            )
             raise HTTPException(status_code=404, detail="Unknown log type")
 
-        task = require_task_lease(task_id, runner_id, request.lease_token)
+        task = require_task_lease(
+            task_id,
+            runner_id,
+            request.lease_token,
+            request_id=request_id,
+            log_type=log_type,
+            chunk_seq=request.chunk_seq,
+        )
 
         should_append = db.record_task_log_chunk(task_id, log_type, request.chunk_seq)
         if should_append:
