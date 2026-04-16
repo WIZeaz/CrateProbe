@@ -1,0 +1,16 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y docker.io && rm -rf /var/lib/apt/lists/*
+
+RUN pip install uv
+
+COPY pyproject.toml ./
+COPY app/ ./app/
+COPY core/ ./core/
+COPY runner/ ./runner/
+
+RUN uv pip install --system -e .
+
+CMD ["python", "-m", "runner"]
