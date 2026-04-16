@@ -34,7 +34,7 @@ class TaskExecutor:
         task_id = claimed["id"]
         lease_token = claimed["lease_token"]
         crate_name = claimed["crate_name"]
-        crate_version = claimed["crate_version"]
+        crate_version = claimed["version"]
 
         await self.client.send_event(
             task_id,
@@ -42,10 +42,9 @@ class TaskExecutor:
         )
 
         workspace_dir = Path("/workspace") / f"{crate_name}-{crate_version}"
-        stdout_log = Path("/workspace") / "logs" / f"{task_id}-stdout.log"
-        stderr_log = Path("/workspace") / "logs" / f"{task_id}-stderr.log"
-        runner_log = Path("/workspace") / "logs" / f"{task_id}-runner.log"
-        stdout_log.parent.mkdir(parents=True, exist_ok=True)
+        logs_dir = Path("/workspace") / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        runner_log = logs_dir / f"{task_id}-runner.log"
 
         handler = logging.FileHandler(str(runner_log), mode="w")
         handler.setFormatter(
@@ -74,6 +73,8 @@ class TaskExecutor:
             cmd = ["cargo", "rapx", f"--test-crate={crate_name}", "test"]
             task_logger.info(f"Running command: {' '.join(cmd)}")
 
+            stdout_log = logs_dir / f"{task_id}-stdout.log"
+            stderr_log = logs_dir / f"{task_id}-stderr.log"
             result = await self.docker.run(
                 command=cmd,
                 workspace_dir=workspace_dir,
@@ -85,9 +86,7 @@ class TaskExecutor:
             case_count, poc_count = self._count_generated_items(workspace_dir)
             compile_failed = self._get_compile_failed_count(workspace_dir)
 
-            await self._upload_logs(
-                task_id, lease_token, stdout_log, stderr_log, runner_log
-            )
+            await self._upload_logs(task_id, lease_token, workspace_dir)
 
             await self.client.send_event(
                 task_id,
@@ -104,9 +103,7 @@ class TaskExecutor:
             )
         except asyncio.CancelledError:
             task_logger.info(f"Task #{task_id} cancelled")
-            await self._upload_logs(
-                task_id, lease_token, stdout_log, stderr_log, runner_log
-            )
+            await self._upload_logs(task_id, lease_token, workspace_dir)
             await self.client.send_event(
                 task_id,
                 {
@@ -119,9 +116,7 @@ class TaskExecutor:
             raise
         except Exception as e:
             task_logger.error(f"Task failed with exception: {e}")
-            await self._upload_logs(
-                task_id, lease_token, stdout_log, stderr_log, runner_log
-            )
+            await self._upload_logs(task_id, lease_token, workspace_dir)
             await self.client.send_event(
                 task_id,
                 {
@@ -175,19 +170,17 @@ class TaskExecutor:
         if crate_file.exists():
             crate_file.unlink()
 
-    async def _upload_logs(
-        self,
-        task_id: int,
-        lease_token: str,
-        stdout_log: Path,
-        stderr_log: Path,
-        runner_log: Path,
-    ):
-        for log_type, path in [
-            ("stdout", stdout_log),
-            ("stderr", stderr_log),
-            ("runner", runner_log),
-        ]:
+    async def _upload_logs(self, task_id: int, lease_token: str, workspace_dir: Path):
+        logs_dir = workspace_dir.parent / "logs"
+        log_paths = [
+            ("stdout", logs_dir / f"{task_id}-stdout.log"),
+            ("stderr", logs_dir / f"{task_id}-stderr.log"),
+            ("runner", logs_dir / f"{task_id}-runner.log"),
+            ("miri_report", workspace_dir / "testgen" / "miri_report.txt"),
+            ("stats-yaml", workspace_dir / "testgen" / "stats.yaml"),
+        ]
+        chunk_seq = 1
+        for log_type, path in log_paths:
             if not path.exists():
                 continue
             content = path.read_text(errors="replace")
@@ -196,8 +189,13 @@ class TaskExecutor:
             await self.client.send_log_chunk(
                 task_id,
                 log_type,
-                {"lease_token": lease_token, "content": content},
+                {
+                    "lease_token": lease_token,
+                    "chunk_seq": chunk_seq,
+                    "content": content,
+                },
             )
+            chunk_seq += 1
 
     def _count_generated_items(self, workspace_dir: Path) -> Tuple[int, int]:
         testgen_dir = workspace_dir / "testgen"
@@ -212,7 +210,7 @@ class TaskExecutor:
         return case_count, poc_count
 
     def _get_compile_failed_count(self, workspace_dir: Path) -> int | None:
-        stats_yaml_path = workspace_dir / "stats.yaml"
+        stats_yaml_path = workspace_dir / "testgen" / "stats.yaml"
         if not stats_yaml_path.exists():
             return None
         try:
