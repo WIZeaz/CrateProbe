@@ -24,11 +24,13 @@ This design improves readability and operator confidence while keeping the exist
 In scope:
 
 - `frontend/src/components/RunnerMetricsChart.vue`
+- Resource percent charts in Runner Details (`cpu_percent`, `memory_percent`, `disk_percent`)
 
 Out of scope:
 
 - Backend services, APIs, or database schema
 - Global theme/styling changes outside this chart component
+- Active Tasks chart domain/tick redesign (kept as-is for this request)
 
 ## Chosen Approach
 
@@ -50,8 +52,8 @@ This was selected because it delivers the requested UX improvements with minimal
 ### Input Data
 
 - `points`: ordered time-series metric points
-- `field`: metric key (`cpu_percent`, `memory_percent`, `disk_percent`, `active_tasks`)
-- `maxY`: currently passed from caller; for this request charts that use this rule are fixed to 100
+- `field`: metric key in this request is limited to `cpu_percent`, `memory_percent`, `disk_percent`
+- `maxY`: may still be passed by caller but is not authoritative for this scoped resource-chart rendering
 - `stroke`: line color
 
 ### Time Source
@@ -74,7 +76,6 @@ X-axis timestamp extraction priority:
 - Numeric values are clamped to `0..100` before plotting.
 - Tooltip value formatting:
   - percent metrics: one decimal + `%`
-  - non-percent metric in this view (if present): integer or one-decimal fallback
 
 ## Interaction Design
 
