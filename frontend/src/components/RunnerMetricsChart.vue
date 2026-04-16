@@ -309,6 +309,8 @@ function clearHover() {
       fill="transparent"
       @pointermove="handleHoverMove"
       @pointerleave="clearHover"
+      @pointerout="clearHover"
+      @pointerup="clearHover"
       @pointercancel="clearHover"
     />
   </svg>
