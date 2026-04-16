@@ -4,7 +4,11 @@ import {
   RESOURCE_FIELDS,
   buildXTicks,
   clampValue,
+  computeTooltipPosition,
   computeDomainMaxY,
+  formatHoverLabel,
+  nearestIndexFromX,
+  resolvePointTimestamp,
 } from './runnerMetricsChartMath.js'
 
 const props = defineProps({
@@ -28,8 +32,12 @@ const props = defineProps({
 
 const width = 480
 const height = 140
+const tooltipWidth = 168
+const tooltipHeight = 44
 const svgRef = ref(null)
 const renderedWidth = ref(width)
+const hoverIndex = ref(null)
+const hoverPointer = ref(null)
 let resizeObserver = null
 
 const plot = {
@@ -125,6 +133,84 @@ const polyline = computed(() => {
     })
     .join(' ')
 })
+
+const hoverData = computed(() => {
+  if (hoverIndex.value == null || hoverIndex.value < 0 || hoverIndex.value >= props.points.length) {
+    return null
+  }
+
+  const point = props.points[hoverIndex.value]
+  const rawValue = point?.[props.field] ?? 0
+  const clampedValue = clampValue(rawValue, domainMaxY.value)
+  const x = xForIndex(hoverIndex.value)
+  const y = yForValue(clampedValue)
+
+  const { timeText } = formatHoverLabel({
+    index: hoverIndex.value,
+    timestamp: resolvePointTimestamp(point),
+  })
+
+  const valueText = isResourceField.value ? `${clampedValue.toFixed(1)}%` : `${clampedValue}`
+  const anchor = hoverPointer.value ?? { x, y }
+  const tooltip = computeTooltipPosition({
+    x: anchor.x,
+    y: anchor.y,
+    chartWidth: width,
+    chartHeight: height,
+    tipWidth: tooltipWidth,
+    tipHeight: tooltipHeight,
+    gap: 10,
+  })
+
+  return {
+    x,
+    y,
+    timeText,
+    valueText,
+    tooltip,
+  }
+})
+
+function pointerToChartCoordinates(event) {
+  const rect = svgRef.value?.getBoundingClientRect()
+  if (!rect || rect.width <= 0 || rect.height <= 0) {
+    return null
+  }
+
+  const x = ((event.clientX - rect.left) / rect.width) * width
+  const y = ((event.clientY - rect.top) / rect.height) * height
+  return { x, y }
+}
+
+function handleHoverMove(event) {
+  if (!props.points.length) {
+    hoverIndex.value = null
+    hoverPointer.value = null
+    return
+  }
+
+  const pointer = pointerToChartCoordinates(event)
+  if (!pointer) {
+    return
+  }
+
+  hoverPointer.value = {
+    x: Math.min(plot.right, Math.max(plot.left, pointer.x)),
+    y: Math.min(plot.bottom, Math.max(plot.top, pointer.y)),
+  }
+
+  hoverIndex.value = nearestIndexFromX({
+    x: hoverPointer.value.x,
+    plotLeft: plot.left,
+    plotWidth: plot.width,
+    count: props.points.length,
+  })
+}
+
+function clearHover() {
+  hoverIndex.value = null
+  hoverPointer.value = null
+}
 </script>
 
 <template>
@@ -182,6 +268,47 @@ const polyline = computed(() => {
       stroke-width="2"
       stroke-linecap="round"
       stroke-linejoin="round"
+    />
+
+    <g v-if="hoverData">
+      <line
+        :x1="hoverData.x"
+        :x2="hoverData.x"
+        :y1="plot.top"
+        :y2="plot.bottom"
+        stroke="#94a3b8"
+        stroke-width="1"
+        stroke-dasharray="3 3"
+      />
+      <circle :cx="hoverData.x" :cy="hoverData.y" r="3.5" :fill="stroke" stroke="#ffffff" stroke-width="1.5" />
+      <g>
+        <rect
+          :x="hoverData.tooltip.x"
+          :y="hoverData.tooltip.y"
+          :width="tooltipWidth"
+          :height="tooltipHeight"
+          rx="6"
+          fill="#0f172a"
+          fill-opacity="0.95"
+        />
+        <text :x="hoverData.tooltip.x + 8" :y="hoverData.tooltip.y + 16" font-size="10" fill="#cbd5e1">
+          {{ hoverData.timeText }}
+        </text>
+        <text :x="hoverData.tooltip.x + 8" :y="hoverData.tooltip.y + 33" font-size="12" font-weight="600" fill="#f8fafc">
+          {{ hoverData.valueText }}
+        </text>
+      </g>
+    </g>
+
+    <rect
+      v-if="points.length"
+      :x="plot.left"
+      :y="plot.top"
+      :width="plot.width"
+      :height="plot.height"
+      fill="transparent"
+      @mousemove="handleHoverMove"
+      @mouseleave="clearHover"
     />
   </svg>
 </template>

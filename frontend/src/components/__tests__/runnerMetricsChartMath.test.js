@@ -3,8 +3,10 @@ import assert from 'node:assert/strict'
 import {
   buildXTicks,
   clampValue,
+  computeTooltipPosition,
   computeDomainMaxY,
   formatHoverLabel,
+  nearestIndexFromX,
   pickXTicks,
   resolvePointTimestamp,
 } from '../runnerMetricsChartMath.js'
@@ -158,4 +160,46 @@ test('buildXTicks preserves endpoint ticks even when labels match', () => {
     { index: 0, label: '10:00' },
     { index: 4, label: '10:00' },
   ])
+})
+
+test('nearestIndexFromX maps x positions to nearest clamped index', () => {
+  const shared = { plotLeft: 40, plotWidth: 400, count: 5 }
+
+  assert.equal(nearestIndexFromX({ ...shared, x: 40 }), 0)
+  assert.equal(nearestIndexFromX({ ...shared, x: 90 }), 1)
+  assert.equal(nearestIndexFromX({ ...shared, x: 244 }), 2)
+  assert.equal(nearestIndexFromX({ ...shared, x: 339 }), 3)
+  assert.equal(nearestIndexFromX({ ...shared, x: 440 }), 4)
+  assert.equal(nearestIndexFromX({ ...shared, x: -999 }), 0)
+  assert.equal(nearestIndexFromX({ ...shared, x: 9999 }), 4)
+})
+
+test('computeTooltipPosition prefers top-right when there is space', () => {
+  assert.deepEqual(
+    computeTooltipPosition({
+      x: 150,
+      y: 90,
+      chartWidth: 480,
+      chartHeight: 140,
+      tipWidth: 120,
+      tipHeight: 44,
+      gap: 10,
+    }),
+    { x: 160, y: 36 },
+  )
+})
+
+test('computeTooltipPosition flips near top-right and clamps in bounds', () => {
+  assert.deepEqual(
+    computeTooltipPosition({
+      x: 474,
+      y: 8,
+      chartWidth: 480,
+      chartHeight: 140,
+      tipWidth: 120,
+      tipHeight: 44,
+      gap: 10,
+    }),
+    { x: 344, y: 18 },
+  )
 })

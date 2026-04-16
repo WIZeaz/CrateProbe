@@ -127,3 +127,61 @@ export function buildXTicks(points, { width, minLabelSpacing = 60, formatter } =
 
   return ticks
 }
+
+export function nearestIndexFromX({ x, plotLeft, plotWidth, count }) {
+  const numericCount = Number(count)
+  if (!Number.isInteger(numericCount) || numericCount <= 0) {
+    return 0
+  }
+  if (numericCount === 1) {
+    return 0
+  }
+
+  const numericPlotLeft = Number(plotLeft)
+  const safePlotLeft = Number.isFinite(numericPlotLeft) ? numericPlotLeft : 0
+  const numericPlotWidth = Number(plotWidth)
+  const safePlotWidth = Number.isFinite(numericPlotWidth) && numericPlotWidth > 0 ? numericPlotWidth : 1
+  const numericX = Number(x)
+  const safeX = Number.isFinite(numericX) ? numericX : safePlotLeft
+
+  const ratio = (safeX - safePlotLeft) / safePlotWidth
+  const clampedRatio = Math.min(1, Math.max(0, ratio))
+  const nearest = Math.round(clampedRatio * (numericCount - 1))
+  return Math.min(numericCount - 1, Math.max(0, nearest))
+}
+
+export function computeTooltipPosition({
+  x,
+  y,
+  chartWidth,
+  chartHeight,
+  tipWidth,
+  tipHeight,
+  gap = 10,
+}) {
+  const safeChartWidth = Math.max(0, Number(chartWidth) || 0)
+  const safeChartHeight = Math.max(0, Number(chartHeight) || 0)
+  const safeTipWidth = Math.max(0, Number(tipWidth) || 0)
+  const safeTipHeight = Math.max(0, Number(tipHeight) || 0)
+  const safeGap = Math.max(0, Number(gap) || 0)
+  const safeX = Number.isFinite(Number(x)) ? Number(x) : 0
+  const safeY = Number.isFinite(Number(y)) ? Number(y) : 0
+
+  let nextX = safeX + safeGap
+  let nextY = safeY - safeTipHeight - safeGap
+
+  if (nextX + safeTipWidth > safeChartWidth) {
+    nextX = safeX - safeTipWidth - safeGap
+  }
+  if (nextY < 0) {
+    nextY = safeY + safeGap
+  }
+
+  nextX = Math.min(Math.max(0, nextX), Math.max(0, safeChartWidth - safeTipWidth))
+  nextY = Math.min(Math.max(0, nextY), Math.max(0, safeChartHeight - safeTipHeight))
+
+  return {
+    x: nextX,
+    y: nextY,
+  }
+}
