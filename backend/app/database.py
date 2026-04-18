@@ -497,10 +497,19 @@ class Database:
                 case_count = 0,
                 poc_count = 0,
                 compile_failed = NULL,
-                pid = NULL
+                pid = NULL,
+                runner_id = NULL,
+                lease_token = NULL,
+                lease_expires_at = NULL,
+                last_event_seq = 0,
+                cancel_requested = 0
             WHERE id = ?
         """,
             (TaskStatus.PENDING.value, task_id),
+        )
+        cursor.execute(
+            "DELETE FROM task_log_chunk_sequences WHERE task_id = ?",
+            (task_id,),
         )
         self.conn.commit()
 

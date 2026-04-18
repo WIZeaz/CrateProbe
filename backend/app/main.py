@@ -159,6 +159,18 @@ LOG_PATH_RESOLVERS = {
 }
 
 
+def _clear_task_logs(task: TaskRecord, config: Config) -> None:
+    for log_name, resolver in LOG_PATH_RESOLVERS.items():
+        log_path = resolver(task, config)
+        if not log_path.exists() or not log_path.is_file():
+            continue
+        log_path.unlink()
+        logger.info(
+            "task log cleared for retry",
+            extra={"task_id": task.id, "log_type": log_name, "path": str(log_path)},
+        )
+
+
 def create_app(config: Config, db_path: str) -> FastAPI:
     """Create FastAPI application"""
 
@@ -800,6 +812,8 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         if task.status == TaskStatus.RUNNING:
             raise HTTPException(status_code=400, detail="Cannot retry a running task")
 
+        _clear_task_logs(task, config)
+
         # Reset task to pending state
         db.reset_task_for_retry(task_id)
 
@@ -840,6 +854,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             elif task.status == TaskStatus.RUNNING:
                 results["skipped"].append(task_id)
             else:
+                _clear_task_logs(task, config)
                 db.reset_task_for_retry(task_id)
                 results["retried"].append(task_id)
 

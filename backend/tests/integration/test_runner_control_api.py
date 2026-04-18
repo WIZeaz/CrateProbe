@@ -208,6 +208,45 @@ def test_logs_endpoint_ignores_duplicate_chunk_seq_and_writes_once(client):
     assert raw_log.text == "hello\n"
 
 
+def test_retry_clears_old_logs_and_allows_chunk_seq_restart(client):
+    task_id, token, lease_token = _create_and_claim_task(client, "runner-retry-logs")
+
+    first_chunk = client.post(
+        f"/api/runners/runner-retry-logs/tasks/{task_id}/logs/stdout/chunks",
+        headers=_runner_headers(token),
+        json={"lease_token": lease_token, "chunk_seq": 1, "content": "old\n"},
+    )
+    assert first_chunk.status_code == 200
+
+    complete_response = client.post(
+        f"/api/runners/runner-retry-logs/tasks/{task_id}/events",
+        headers=_runner_headers(token),
+        json={"lease_token": lease_token, "event_seq": 1, "event_type": "completed"},
+    )
+    assert complete_response.status_code == 200
+
+    retry_response = client.post(f"/api/tasks/{task_id}/retry")
+    assert retry_response.status_code == 200
+
+    second_claim = client.post(
+        "/api/runners/runner-retry-logs/claim",
+        headers=_runner_headers(token),
+    )
+    assert second_claim.status_code == 200
+    second_lease_token = second_claim.json()["lease_token"]
+
+    second_chunk = client.post(
+        f"/api/runners/runner-retry-logs/tasks/{task_id}/logs/stdout/chunks",
+        headers=_runner_headers(token),
+        json={"lease_token": second_lease_token, "chunk_seq": 1, "content": "new\n"},
+    )
+    assert second_chunk.status_code == 200
+
+    raw_log = client.get(f"/api/tasks/{task_id}/logs/stdout/raw")
+    assert raw_log.status_code == 200
+    assert raw_log.text == "new\n"
+
+
 def test_events_endpoint_returns_409_for_lease_mismatch(client):
     task_id, token, _lease_token = _create_and_claim_task(client, "runner-lease-1")
 

@@ -175,6 +175,18 @@ def test_reset_task_for_retry(db):
     assert task.workspace_path == "/path"
 
 
+def test_reset_task_for_retry_resets_log_chunk_sequence(db):
+    """Retry reset should allow ingesting chunk_seq from 1 again."""
+    task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
+
+    assert db.record_task_log_chunk(task_id, "stdout", 1) is True
+    assert db.record_task_log_chunk(task_id, "stdout", 1) is False
+
+    db.reset_task_for_retry(task_id)
+
+    assert db.record_task_log_chunk(task_id, "stdout", 1) is True
+
+
 def test_get_task_by_crate_and_version_returns_task(db, tmp_path):
     """Test retrieving task by crate name and version"""
     db.init_db()
