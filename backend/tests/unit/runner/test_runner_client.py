@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 
@@ -22,6 +24,8 @@ def _patch_async_client(monkeypatch: pytest.MonkeyPatch, handler):
 async def test_claim_returns_none_on_204(monkeypatch: pytest.MonkeyPatch):
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/runners/runner-1/claim"
+        payload = json.loads(request.content.decode())
+        assert payload == {"runner_id": "runner-1", "jobs": 0, "max_jobs": 3}
         return httpx.Response(status_code=204, request=request)
 
     _patch_async_client(monkeypatch, handler)
@@ -32,7 +36,7 @@ async def test_claim_returns_none_on_204(monkeypatch: pytest.MonkeyPatch):
         timeout=5.0,
     )
 
-    result = await client.claim({"capabilities": ["cpu"]})
+    result = await client.claim({"runner_id": "runner-1", "jobs": 0, "max_jobs": 3})
 
     assert result is None
     await client.aclose()
