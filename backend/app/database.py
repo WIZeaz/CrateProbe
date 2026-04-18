@@ -191,14 +191,14 @@ class Database:
                 params.append(TaskStatus.RUNNING.value)
                 updates.append("started_at = COALESCE(started_at, ?)")
                 params.append(now)
-            elif event_type == "completed":
+            else:
+                # All non-running events are terminal
+                if event_type == "completed":
+                    terminal_status = TaskStatus.COMPLETED.value
+                else:
+                    terminal_status = TaskStatus.FAILED.value
                 updates.append("status = ?")
-                params.append(TaskStatus.COMPLETED.value)
-                updates.append("finished_at = ?")
-                params.append(now)
-            elif event_type == "failed":
-                updates.append("status = ?")
-                params.append(TaskStatus.FAILED.value)
+                params.append(terminal_status)
                 updates.append("finished_at = ?")
                 params.append(now)
 

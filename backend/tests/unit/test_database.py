@@ -342,3 +342,53 @@ def test_runner_mutations_return_false_for_missing_runner(db):
     assert db.disable_runner("missing-runner") is False
     assert db.enable_runner("missing-runner") is False
     assert db.delete_runner("missing-runner") is False
+
+
+def test_apply_task_event_started_sets_running(db):
+    task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
+    result = db.apply_task_event(task_id, 1, "started")
+    assert result is True
+    task = db.get_task(task_id)
+    assert task.status == TaskStatus.RUNNING
+    assert task.started_at is not None
+    assert task.finished_at is None
+
+
+def test_apply_task_event_progress_sets_running(db):
+    task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
+    db.apply_task_event(task_id, 1, "started")
+    result = db.apply_task_event(task_id, 2, "progress")
+    assert result is True
+    task = db.get_task(task_id)
+    assert task.status == TaskStatus.RUNNING
+    assert task.finished_at is None
+
+
+def test_apply_task_event_completed_sets_terminal(db):
+    task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
+    db.apply_task_event(task_id, 1, "started")
+    result = db.apply_task_event(task_id, 2, "completed")
+    assert result is True
+    task = db.get_task(task_id)
+    assert task.status == TaskStatus.COMPLETED
+    assert task.finished_at is not None
+
+
+def test_apply_task_event_failed_sets_terminal(db):
+    task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
+    db.apply_task_event(task_id, 1, "started")
+    result = db.apply_task_event(task_id, 2, "failed")
+    assert result is True
+    task = db.get_task(task_id)
+    assert task.status == TaskStatus.FAILED
+    assert task.finished_at is not None
+
+
+def test_apply_task_event_unknown_type_treats_as_terminal(db):
+    task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
+    db.apply_task_event(task_id, 1, "started")
+    result = db.apply_task_event(task_id, 2, "timeout")
+    assert result is True
+    task = db.get_task(task_id)
+    assert task.status == TaskStatus.FAILED
+    assert task.finished_at is not None
