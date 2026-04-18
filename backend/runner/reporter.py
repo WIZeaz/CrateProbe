@@ -64,13 +64,15 @@ class TaskReporter:
                 continue
 
             sent_offset = self._sent_offsets.get(log_type, 0)
-            chunk_seq = self._next_chunk_seq.get(log_type, 1)
 
             if current_size == sent_offset:
                 continue
 
             if current_size < sent_offset:
                 sent_offset = 0
+                self._next_chunk_seq[log_type] = 1
+
+            chunk_seq = self._next_chunk_seq.get(log_type, 1)
 
             try:
                 with open(path, "rb") as f:

@@ -119,7 +119,7 @@ async def test_reporter_flush_logs_handles_truncation(tmp_path):
     await reporter._flush_logs()
     assert len(sent_chunks) == 1
     assert sent_chunks[0]["content"] == "new"
-    assert sent_chunks[0]["chunk_seq"] == 2
+    assert sent_chunks[0]["chunk_seq"] == 1
 
 
 @pytest.mark.asyncio
@@ -216,11 +216,18 @@ async def test_reporter_run_loop_stops_on_event(tmp_path):
 
     run_task = asyncio.create_task(reporter.run())
     await asyncio.sleep(0.1)
+
+    # Write more content while reporter is running
+    with open(log_file, "a") as f:
+        f.write("line 2\n")
+
     reporter.stop()
     await run_task
 
-    assert len(sent_chunks) >= 1
-    assert sent_chunks[0]["content"] == "line 1\n"
+    # Should have received both chunks (initial + after stop final flush)
+    contents = [c["content"] for c in sent_chunks]
+    assert any("line 1" in c for c in contents)
+    assert any("line 2" in c for c in contents)
 
 
 def test_reporter_count_generated_items(tmp_path):
