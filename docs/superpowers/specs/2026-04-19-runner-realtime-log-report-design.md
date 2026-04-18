@@ -220,12 +220,23 @@ TaskReporter 的所有状态（`_next_chunk_seq`、`_sent_offsets`、`_next_even
 - 验证 terminal event 的 seq 大于所有 progress event seq
 - 验证任务取消时 reporter 正确停止，terminal failed event 正常发送
 
+## 附带 Bug 修复
+
+### 后端：所有非 running 的 event_type 都应视为终态
+
+当前代码中，`apply_task_event` 和 `ingest_runner_task_event` 仅对 `"completed"` 和 `"failed"` 做终态处理。若 runner 未来发送新的终态 event_type（如 `"timeout"`、`"oom"`），后端会忽略状态更新。
+
+修复：
+1. `database.py` 的 `apply_task_event`：else 分支处理所有非 `"started"`/`"progress"` 的 event_type，统一设置 `status` 和 `finished_at`
+2. `main.py` 的 `ingest_runner_task_event`：将条件 `request.event_type in ("completed", "failed")` 改为 `request.event_type not in ("started", "progress")`，确保所有终态事件都触发 `update_task_status`
+
 ## 文件变更清单
 
 | 文件 | 变更类型 | 说明 |
 |------|---------|------|
 | `backend/runner/reporter.py` | 新增 | TaskReporter 组件 |
 | `backend/runner/executor.py` | 修改 | 集成 TaskReporter，移除 `_upload_logs` |
-| `backend/app/main.py` | 修改 | progress event 处理 counts 和 WebSocket 广播 |
+| `backend/app/main.py` | 修改 | progress event 处理 counts 和 WebSocket 广播；终态事件通用化 |
+| `backend/app/database.py` | 修改 | `apply_task_event` 终态事件通用化 |
 | `backend/tests/unit/test_reporter.py` | 新增 | TaskReporter 单元测试 |
 | `backend/tests/integration/test_api.py` | 修改 | 新增 progress event 集成测试 |
