@@ -195,6 +195,12 @@ class Database:
                 # All non-running events are terminal
                 if event_type == "completed":
                     terminal_status = TaskStatus.COMPLETED.value
+                elif event_type == "cancelled":
+                    terminal_status = TaskStatus.CANCELLED.value
+                elif event_type == "timeout":
+                    terminal_status = TaskStatus.TIMEOUT.value
+                elif event_type == "oom":
+                    terminal_status = TaskStatus.OOM.value
                 else:
                     terminal_status = TaskStatus.FAILED.value
                 updates.append("status = ?")

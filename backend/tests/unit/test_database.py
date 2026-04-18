@@ -387,8 +387,38 @@ def test_apply_task_event_failed_sets_terminal(db):
 def test_apply_task_event_unknown_type_treats_as_terminal(db):
     task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
     db.apply_task_event(task_id, 1, "started")
-    result = db.apply_task_event(task_id, 2, "timeout")
+    result = db.apply_task_event(task_id, 2, "garbage")
     assert result is True
     task = db.get_task(task_id)
     assert task.status == TaskStatus.FAILED
+    assert task.finished_at is not None
+
+
+def test_apply_task_event_timeout_sets_timeout_status(db):
+    task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
+    db.apply_task_event(task_id, 1, "started")
+    result = db.apply_task_event(task_id, 2, "timeout")
+    assert result is True
+    task = db.get_task(task_id)
+    assert task.status == TaskStatus.TIMEOUT
+    assert task.finished_at is not None
+
+
+def test_apply_task_event_oom_sets_oom_status(db):
+    task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
+    db.apply_task_event(task_id, 1, "started")
+    result = db.apply_task_event(task_id, 2, "oom")
+    assert result is True
+    task = db.get_task(task_id)
+    assert task.status == TaskStatus.OOM
+    assert task.finished_at is not None
+
+
+def test_apply_task_event_cancelled_sets_cancelled_status(db):
+    task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
+    db.apply_task_event(task_id, 1, "started")
+    result = db.apply_task_event(task_id, 2, "cancelled")
+    assert result is True
+    task = db.get_task(task_id)
+    assert task.status == TaskStatus.CANCELLED
     assert task.finished_at is not None
