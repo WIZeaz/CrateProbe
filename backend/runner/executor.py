@@ -10,6 +10,7 @@ from runner.client import RunnerControlClient
 from runner.config import RunnerConfig
 from runner.crates_api import CratesAPI
 from runner.docker_runner import DockerRunner
+from runner.reporter import TaskReporter
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,8 @@ class TaskExecutor:
         logs_dir = Path(self.config.workspace_dir) / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
         runner_log = logs_dir / f"{task_id}-runner.log"
+        stdout_log = logs_dir / f"{task_id}-stdout.log"
+        stderr_log = logs_dir / f"{task_id}-stderr.log"
 
         handler = logging.FileHandler(str(runner_log), mode="w")
         handler.setFormatter(
@@ -62,6 +65,21 @@ class TaskExecutor:
             "crate_name": crate_name,
             "version": crate_version,
         }
+
+        reporter = TaskReporter(
+            client=self.client,
+            task_id=task_id,
+            lease_token=lease_token,
+            log_paths={
+                "stdout": stdout_log,
+                "stderr": stderr_log,
+                "runner": runner_log,
+                "miri_report": workspace_dir / "testgen" / "miri_report.txt",
+                "stats-yaml": workspace_dir / "testgen" / "stats.yaml",
+            },
+            workspace_dir=workspace_dir,
+        )
+        reporter_task = asyncio.create_task(reporter.run())
 
         try:
             task_logger.info("task started", extra=task_ctx)
@@ -86,8 +104,6 @@ class TaskExecutor:
                 extra={**task_ctx, "command_summary": " ".join(cmd)},
             )
 
-            stdout_log = logs_dir / f"{task_id}-stdout.log"
-            stderr_log = logs_dir / f"{task_id}-stderr.log"
             result = await self.docker.run(
                 command=cmd,
                 workspace_dir=workspace_dir,
@@ -106,13 +122,14 @@ class TaskExecutor:
                 self._get_compile_failed_count, workspace_dir
             )
 
-            await self._upload_logs(task_id, lease_token, workspace_dir)
+            terminal_seq = reporter.stop()
+            await reporter_task
 
             await self.client.send_event(
                 task_id,
                 {
                     "lease_token": lease_token,
-                    "event_seq": 2,
+                    "event_seq": terminal_seq,
                     "event_type": result.state.value,
                     "exit_code": result.exit_code,
                     "message": result.message,
@@ -127,12 +144,13 @@ class TaskExecutor:
             )
         except asyncio.CancelledError:
             task_logger.info("task cancelled", extra=task_ctx)
-            await self._upload_logs(task_id, lease_token, workspace_dir)
+            terminal_seq = reporter.stop()
+            await reporter_task
             await self.client.send_event(
                 task_id,
                 {
                     "lease_token": lease_token,
-                    "event_seq": 2,
+                    "event_seq": terminal_seq,
                     "event_type": "failed",
                     "message": "Task interrupted by shutdown",
                 },
@@ -140,12 +158,13 @@ class TaskExecutor:
             raise
         except Exception as exc:
             task_logger.exception("task execution failed", extra=task_ctx)
-            await self._upload_logs(task_id, lease_token, workspace_dir)
+            terminal_seq = reporter.stop()
+            await reporter_task
             await self.client.send_event(
                 task_id,
                 {
                     "lease_token": lease_token,
-                    "event_seq": 2,
+                    "event_seq": terminal_seq,
                     "event_type": "failed",
                     "message": str(exc),
                 },
@@ -204,50 +223,6 @@ class TaskExecutor:
                 await asyncio.to_thread(shutil.rmtree, temp_extract_dir)
         if crate_file.exists():
             await asyncio.to_thread(crate_file.unlink)
-
-    async def _upload_logs(self, task_id: int, lease_token: str, workspace_dir: Path):
-        upload_logger = logging.getLogger(__name__)
-        logs_dir = Path(self.config.workspace_dir) / "logs"
-        log_paths = [
-            ("stdout", logs_dir / f"{task_id}-stdout.log"),
-            ("stderr", logs_dir / f"{task_id}-stderr.log"),
-            ("runner", logs_dir / f"{task_id}-runner.log"),
-            ("miri_report", workspace_dir / "testgen" / "miri_report.txt"),
-            ("stats-yaml", workspace_dir / "testgen" / "stats.yaml"),
-        ]
-        chunk_seq = 1
-        for log_type, path in log_paths:
-            if not path.exists():
-                upload_logger.info(
-                    "log upload missing",
-                    extra={"task_id": task_id, "log_type": log_type},
-                )
-                continue
-            content = await asyncio.to_thread(path.read_text, errors="replace")
-            if not content:
-                upload_logger.info(
-                    "log upload empty",
-                    extra={"task_id": task_id, "log_type": log_type},
-                )
-                continue
-            await self.client.send_log_chunk(
-                task_id,
-                log_type,
-                {
-                    "lease_token": lease_token,
-                    "chunk_seq": chunk_seq,
-                    "content": content,
-                },
-            )
-            upload_logger.info(
-                "log upload sent",
-                extra={
-                    "task_id": task_id,
-                    "log_type": log_type,
-                    "chunk_seq": chunk_seq,
-                },
-            )
-            chunk_seq += 1
 
     def _extract_and_move_crate(
         self,

@@ -7,6 +7,7 @@ import pytest
 
 from core.models import TaskStatus
 from runner.executor import TaskExecutor
+from runner.reporter import TaskReporter
 
 
 def test_count_generated_items(tmp_path):
@@ -25,44 +26,6 @@ def test_get_compile_failed_count(tmp_path):
     stats.write_text("CompileFailed: 5\n")
     executor = object.__new__(TaskExecutor)
     assert executor._get_compile_failed_count(tmp_path) == 5
-
-
-@pytest.mark.asyncio
-async def test_upload_logs_sends_all_log_types_with_chunk_seq(tmp_path):
-    workspace_root = tmp_path / "workspace"
-    task_workspace = workspace_root / "repos" / "test-crate-1.0.0"
-    logs_dir = workspace_root / "logs"
-    logs_dir.mkdir(parents=True)
-    (task_workspace / "testgen").mkdir(parents=True)
-
-    (logs_dir / "1-stdout.log").write_text("stdout content")
-    (logs_dir / "1-stderr.log").write_text("stderr content")
-    (logs_dir / "1-runner.log").write_text("runner content")
-    (task_workspace / "testgen" / "miri_report.txt").write_text("miri content")
-    (task_workspace / "testgen" / "stats.yaml").write_text("stats content")
-
-    sent_chunks = []
-
-    class FakeClient:
-        async def send_log_chunk(self, task_id, log_type, payload):
-            sent_chunks.append((task_id, log_type, payload))
-
-    executor = object.__new__(TaskExecutor)
-    executor.client = FakeClient()
-    executor.config = type("Cfg", (), {"workspace_dir": str(workspace_root)})()
-    await executor._upload_logs(1, "lease-abc", task_workspace)
-
-    log_types = [c[1] for c in sent_chunks]
-    assert "stdout" in log_types
-    assert "stderr" in log_types
-    assert "runner" in log_types
-    assert "miri_report" in log_types
-    assert "stats-yaml" in log_types
-
-    for idx, (_, _, payload) in enumerate(sent_chunks, start=1):
-        assert payload["chunk_seq"] == idx
-        assert "lease_token" in payload
-        assert "content" in payload
 
 
 @pytest.mark.asyncio
@@ -103,11 +66,7 @@ async def test_execute_claimed_task_does_not_block_event_loop_during_docker_prec
     async def noop_prepare_workspace(workspace_dir, crate_name, version, task_logger):
         return None
 
-    async def noop_upload_logs(task_id, lease_token, workspace_dir):
-        return None
-
     executor._prepare_workspace = noop_prepare_workspace
-    executor._upload_logs = noop_upload_logs
     executor._count_generated_items = lambda _workspace_dir: (0, 0)
     executor._get_compile_failed_count = lambda _workspace_dir: None
 
@@ -135,36 +94,6 @@ async def test_execute_claimed_task_does_not_block_event_loop_during_docker_prec
         await ticker_task
 
     assert ticks >= 5
-
-
-@pytest.mark.asyncio
-async def test_executor_upload_logs_include_decisions(tmp_path, caplog):
-    workspace_root = tmp_path / "workspace"
-    task_workspace = workspace_root / "repos" / "test-crate-1.0.0"
-    logs_dir = workspace_root / "logs"
-    logs_dir.mkdir(parents=True)
-    (task_workspace / "testgen").mkdir(parents=True)
-
-    (logs_dir / "7-stdout.log").write_text("stdout content")
-    (logs_dir / "7-stderr.log").write_text("")
-
-    sent_chunks = []
-
-    class FakeClient:
-        async def send_log_chunk(self, task_id, log_type, payload):
-            sent_chunks.append((task_id, log_type, payload))
-
-    executor = object.__new__(TaskExecutor)
-    executor.client = FakeClient()
-    executor.config = type("Cfg", (), {"workspace_dir": str(workspace_root)})()
-    caplog.set_level(logging.INFO, logger="runner.executor")
-
-    await executor._upload_logs(7, "lease-abc", task_workspace)
-
-    assert sent_chunks
-    assert any("log upload sent" in rec.message for rec in caplog.records)
-    assert any("log upload empty" in rec.message for rec in caplog.records)
-    assert any("log upload missing" in rec.message for rec in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -215,6 +144,16 @@ async def test_executor_logs_lifecycle_boundaries(tmp_path, monkeypatch):
         self, workspace_dir, _crate_name, _version, _logger
     ):
         workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    class FakeReporter:
+        def __init__(self, *args, **kwargs):
+            pass
+        async def run(self):
+            pass
+        def stop(self):
+            return 2
+
+    monkeypatch.setattr("runner.executor.TaskReporter", FakeReporter)
 
     executor = TaskExecutor(config=config, client=FakeClient())
     executor.docker = FakeDocker()
@@ -277,6 +216,16 @@ async def test_executor_failure_logs_traceback(tmp_path, monkeypatch):
         self, workspace_dir, _crate_name, _version, _logger
     ):
         workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    class FakeReporter:
+        def __init__(self, *args, **kwargs):
+            pass
+        async def run(self):
+            pass
+        def stop(self):
+            return 2
+
+    monkeypatch.setattr("runner.executor.TaskReporter", FakeReporter)
 
     executor = TaskExecutor(config=config, client=FakeClient())
     executor.docker = BrokenDocker()
