@@ -170,7 +170,7 @@ onUnmounted(() => {
       </div>
 
       <!-- Stats Grid -->
-      <div class="bento-grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+      <div class="bento-grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 mb-8">
         <div class="bento-card">
           <p class="text-sm font-medium text-gray-600">Status</p>
           <p class="mt-2 text-2xl font-bold text-gray-900">{{ task.status }}</p>
@@ -182,6 +182,10 @@ onUnmounted(() => {
         <div class="bento-card">
           <p class="text-sm font-medium text-gray-600">POCs</p>
           <p class="mt-2 text-2xl font-bold text-gray-900">{{ task.poc_count ?? 0 }}</p>
+        </div>
+        <div class="bento-card">
+          <p class="text-sm font-medium text-gray-600">Compile Failed</p>
+          <p class="mt-2 text-2xl font-bold text-gray-900">{{ task.compile_failed ?? '-' }}</p>
         </div>
         <div class="bento-card">
           <p class="text-sm font-medium text-gray-600">Runtime</p>
