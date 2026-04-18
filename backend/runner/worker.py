@@ -41,7 +41,7 @@ class RunnerWorker:
             "cpu_percent": psutil.cpu_percent(interval=0.0),
             "memory_percent": psutil.virtual_memory().percent,
             "disk_percent": psutil.disk_usage("/").percent,
-            "active_tasks": 1 if self._is_executing else 0,
+            "active_tasks": self._current_jobs(),
         }
         try:
             await self._client.send_metrics(payload)
@@ -73,6 +73,7 @@ class RunnerWorker:
         self._inflight_tasks = {
             task for task in self._inflight_tasks if not task.done()
         }
+        self._is_executing = self._current_jobs() > 0
 
         await self._send_metrics_if_due(force=True)
         try:
@@ -88,33 +89,53 @@ class RunnerWorker:
         if not self._has_capacity():
             return False
 
-        try:
-            claimed = await self._client.claim(
-                {
-                    "runner_id": self._runner_id,
-                    "jobs": self._current_jobs(),
-                    "max_jobs": self._max_jobs,
-                }
-            )
-        except Exception as exc:
-            logger.warning(
-                "runner claim request failed: %s",
-                exc,
-                extra={"runner_id": self._runner_id},
-            )
-            raise
-        if claimed is None:
-            return False
+        did_schedule = False
+        while self._has_capacity():
+            try:
+                claimed = await self._client.claim(
+                    {
+                        "runner_id": self._runner_id,
+                        "jobs": self._current_jobs(),
+                        "max_jobs": self._max_jobs,
+                    }
+                )
+            except Exception as exc:
+                logger.warning(
+                    "runner claim request failed: %s",
+                    exc,
+                    extra={"runner_id": self._runner_id},
+                )
+                raise
+            if claimed is None:
+                break
 
-        self._is_executing = True
-        stop_event = threading.Event()
-        heartbeat_thread = self._start_heartbeat_thread(stop_event)
-        execution_task = asyncio.create_task(
-            self._executor.execute_claimed_task(claimed)
-        )
-        self._inflight_tasks.add(execution_task)
+            stop_event = threading.Event()
+            heartbeat_thread = self._start_heartbeat_thread(stop_event)
+            execution_task = asyncio.create_task(
+                self._execute_claimed_task_safe(
+                    claimed, stop_event=stop_event, heartbeat_thread=heartbeat_thread
+                )
+            )
+            self._inflight_tasks.add(execution_task)
+            self._is_executing = True
+            execution_task.add_done_callback(self._on_execution_task_done)
+            did_schedule = True
+
+        return did_schedule
+
+    def _on_execution_task_done(self, task: asyncio.Task) -> None:
+        self._inflight_tasks.discard(task)
+        self._is_executing = self._current_jobs() > 0
+
+    async def _execute_claimed_task_safe(
+        self,
+        claimed,
+        *,
+        stop_event: threading.Event | None = None,
+        heartbeat_thread: threading.Thread | None = None,
+    ) -> None:
         try:
-            await execution_task
+            await self._executor.execute_claimed_task(claimed)
         except Exception:
             logger.exception(
                 "runner executor failed",
@@ -124,13 +145,11 @@ class RunnerWorker:
                     "crate_name": claimed.get("crate_name"),
                 },
             )
-            raise
         finally:
-            self._inflight_tasks.discard(execution_task)
-            self._is_executing = False
-            stop_event.set()
-            heartbeat_thread.join(timeout=5.0)
-        return True
+            if stop_event is not None:
+                stop_event.set()
+            if heartbeat_thread is not None:
+                heartbeat_thread.join(timeout=5.0)
 
     async def _heartbeat_loop_thread(
         self, interval: float, stop_event: threading.Event, client

@@ -102,7 +102,68 @@ async def test_worker_claims_and_executes_task():
 
 
 @pytest.mark.asyncio
-async def test_worker_reports_executor_exception():
+async def test_worker_fills_multiple_slots_via_repeated_single_claims():
+    tasks_to_claim = [
+        {
+            "id": 101,
+            "lease_token": "lease-101",
+            "crate_name": "foo",
+            "crate_version": "1.0.0",
+        },
+        {
+            "id": 102,
+            "lease_token": "lease-102",
+            "crate_name": "bar",
+            "crate_version": "2.0.0",
+        },
+    ]
+
+    class SequentialClaimClient(FakeClient):
+        async def claim(self, payload):
+            self.claims.append(payload)
+            if tasks_to_claim:
+                return tasks_to_claim.pop(0)
+            return None
+
+    client = SequentialClaimClient()
+    execution_started = []
+    release_tasks = asyncio.Event()
+
+    class BlockingExecutor:
+        async def execute_claimed_task(self, claimed_task):
+            execution_started.append(claimed_task["id"])
+            await release_tasks.wait()
+
+    worker = RunnerWorker(
+        client=client,
+        runner_id="runner-1",
+        executor=BlockingExecutor(),
+        max_jobs=2,
+    )
+
+    did_work = await asyncio.wait_for(worker.run_once(), timeout=0.2)
+
+    assert did_work is True
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 1.0
+    while len(execution_started) < 2 and loop.time() < deadline:
+        await asyncio.sleep(0)
+
+    assert execution_started == [101, 102]
+    assert client.claims == [
+        {"runner_id": "runner-1", "jobs": 0, "max_jobs": 2},
+        {"runner_id": "runner-1", "jobs": 1, "max_jobs": 2},
+    ]
+
+    release_tasks.set()
+    while worker._current_jobs() > 0 and loop.time() < deadline:
+        await asyncio.sleep(0)
+
+    assert worker._current_jobs() == 0
+
+
+@pytest.mark.asyncio
+async def test_worker_executor_failure_isolated_from_run_once():
     task = {
         "id": 9,
         "lease_token": "lease-9",
@@ -119,9 +180,15 @@ async def test_worker_reports_executor_exception():
         client=client, runner_id="runner-1", executor=BrokenExecutor()
     )
 
-    with pytest.raises(RuntimeError, match="boom"):
-        await worker.run_once()
+    did_work = await worker.run_once()
 
+    assert did_work is True
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 1.0
+    while worker._current_jobs() > 0 and loop.time() < deadline:
+        await asyncio.sleep(0)
+
+    assert worker._current_jobs() == 0
     assert len(client.metrics) == 1
     assert client.events == []
 
@@ -228,12 +295,26 @@ async def test_worker_executor_failure_logs_traceback(caplog):
         client=client, runner_id="runner-1", executor=BrokenExecutor()
     )
 
-    with pytest.raises(RuntimeError, match="executor boom"):
-        await worker.run_once()
+    did_work = await worker.run_once()
 
-    record = next(
-        r for r in caplog.records if "runner executor failed" in r.message.lower()
-    )
+    assert did_work is True
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 1.0
+    record = None
+    while loop.time() < deadline:
+        record = next(
+            (
+                r
+                for r in caplog.records
+                if "runner executor failed" in r.message.lower()
+            ),
+            None,
+        )
+        if record is not None:
+            break
+        await asyncio.sleep(0)
+
+    assert record is not None
     assert record.exc_info is not None
     assert record.runner_id == "runner-1"
     assert record.task_id == 22
