@@ -29,6 +29,8 @@ class RunnerWorker:
         self._inflight_tasks: set[asyncio.Task] = set()
         self._is_executing = False
         self._last_metrics_sent_at = 0.0
+        self._heartbeat_stop_event: threading.Event | None = None
+        self._heartbeat_thread: threading.Thread | None = None
 
     async def _send_metrics_if_due(self, *, force: bool = False) -> None:
         now = asyncio.get_running_loop().time()
@@ -109,12 +111,8 @@ class RunnerWorker:
             if claimed is None:
                 break
 
-            stop_event = threading.Event()
-            heartbeat_thread = self._start_heartbeat_thread(stop_event)
             execution_task = asyncio.create_task(
-                self._execute_claimed_task_safe(
-                    claimed, stop_event=stop_event, heartbeat_thread=heartbeat_thread
-                )
+                self._execute_claimed_task_safe(claimed)
             )
             self._inflight_tasks.add(execution_task)
             self._is_executing = True
@@ -127,13 +125,7 @@ class RunnerWorker:
         self._inflight_tasks.discard(task)
         self._is_executing = self._current_jobs() > 0
 
-    async def _execute_claimed_task_safe(
-        self,
-        claimed,
-        *,
-        stop_event: threading.Event | None = None,
-        heartbeat_thread: threading.Thread | None = None,
-    ) -> None:
+    async def _execute_claimed_task_safe(self, claimed) -> None:
         try:
             await self._executor.execute_claimed_task(claimed)
         except Exception:
@@ -145,11 +137,6 @@ class RunnerWorker:
                     "crate_name": claimed.get("crate_name"),
                 },
             )
-        finally:
-            if stop_event is not None:
-                stop_event.set()
-            if heartbeat_thread is not None:
-                heartbeat_thread.join(timeout=5.0)
 
     async def _heartbeat_loop_thread(
         self, interval: float, stop_event: threading.Event, client
@@ -182,6 +169,26 @@ class RunnerWorker:
         thread.start()
         return thread
 
+    def _start_heartbeat_background(self) -> None:
+        if self._heartbeat_thread is not None and self._heartbeat_thread.is_alive():
+            return
+
+        stop_event = threading.Event()
+        self._heartbeat_stop_event = stop_event
+        self._heartbeat_thread = self._start_heartbeat_thread(stop_event)
+
+    def _stop_heartbeat_background(self) -> None:
+        stop_event = self._heartbeat_stop_event
+        if stop_event is not None:
+            stop_event.set()
+
+        thread = self._heartbeat_thread
+        if thread is not None:
+            thread.join(timeout=5.0)
+
+        self._heartbeat_stop_event = None
+        self._heartbeat_thread = None
+
     def _create_heartbeat_client(self):
         if self._heartbeat_client_factory is not None:
             return self._heartbeat_client_factory()
@@ -198,7 +205,26 @@ class RunnerWorker:
         return self._current_jobs() < self._max_jobs
 
     async def run_forever(self, poll_interval_seconds: float) -> None:
-        while True:
-            did_work = await self.run_once()
-            if not did_work:
-                await asyncio.sleep(poll_interval_seconds)
+        self._start_heartbeat_background()
+        try:
+            while True:
+                did_work = await self.run_once()
+                if not did_work:
+                    await asyncio.sleep(poll_interval_seconds)
+        finally:
+            if self._inflight_tasks:
+                done, pending = await asyncio.shield(
+                    asyncio.wait(self._inflight_tasks, timeout=5.0)
+                )
+                if pending:
+                    for task in pending:
+                        task.cancel()
+                    await asyncio.shield(
+                        asyncio.gather(*pending, return_exceptions=True)
+                    )
+                self._inflight_tasks = {
+                    task for task in self._inflight_tasks if not task.done()
+                }
+                self._is_executing = self._current_jobs() > 0
+
+            self._stop_heartbeat_background()

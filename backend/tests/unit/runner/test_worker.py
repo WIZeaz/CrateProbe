@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import time
 
 import pytest
@@ -96,6 +97,11 @@ async def test_worker_claims_and_executes_task():
     did_work = await worker.run_once()
 
     assert did_work is True
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 1.0
+    while worker._current_jobs() > 0 and loop.time() < deadline:
+        await asyncio.sleep(0)
+
     assert executed == [42]
     assert len(client.metrics) == 1
     assert client.events == []
@@ -361,8 +367,46 @@ async def test_worker_metrics_payload_uses_disk_percent():
 
 
 @pytest.mark.asyncio
-async def test_worker_sends_heartbeats_during_task_execution():
-    """Regression test: heartbeats must continue while a task is executing to keep lease alive."""
+async def test_run_forever_uses_single_heartbeat_thread_lifecycle(monkeypatch):
+    client = FakeClient(claimed_task=None)
+    worker = RunnerWorker(client=client, runner_id="runner-1", executor=None)
+
+    started = []
+    stopped = []
+    run_once_calls = []
+
+    def fake_start_heartbeat_background():
+        started.append(True)
+
+    def fake_stop_heartbeat_background():
+        stopped.append(True)
+
+    async def fake_run_once():
+        run_once_calls.append(True)
+        return False
+
+    async def fake_sleep(_duration):
+        raise RuntimeError("stop-loop")
+
+    monkeypatch.setattr(
+        worker, "_start_heartbeat_background", fake_start_heartbeat_background
+    )
+    monkeypatch.setattr(
+        worker, "_stop_heartbeat_background", fake_stop_heartbeat_background
+    )
+    monkeypatch.setattr(worker, "run_once", fake_run_once)
+    monkeypatch.setattr("runner.worker.asyncio.sleep", fake_sleep)
+
+    with pytest.raises(RuntimeError, match="stop-loop"):
+        await worker.run_forever(1.0)
+
+    assert len(run_once_calls) == 1
+    assert len(started) == 1
+    assert len(stopped) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_once_does_not_start_task_scoped_heartbeat_thread(monkeypatch):
     task = {
         "id": 77,
         "lease_token": "lease-77",
@@ -370,46 +414,160 @@ async def test_worker_sends_heartbeats_during_task_execution():
         "crate_version": "1.0.0",
     }
     client = FakeClient(claimed_task=task)
+    executed = []
 
-    class SlowExecutor:
-        async def execute_claimed_task(self, _):
-            await asyncio.sleep(0.15)
+    class FakeExecutor:
+        async def execute_claimed_task(self, claimed_task):
+            executed.append(claimed_task["id"])
 
-    worker = RunnerWorker(client=client, runner_id="runner-1", executor=SlowExecutor())
+    worker = RunnerWorker(client=client, runner_id="runner-1", executor=FakeExecutor())
+
+    if hasattr(worker, "_start_heartbeat_thread"):
+        monkeypatch.setattr(
+            worker,
+            "_start_heartbeat_thread",
+            lambda _stop_event: (_ for _ in ()).throw(
+                AssertionError("task-scoped heartbeat should not be started")
+            ),
+        )
 
     did_work = await worker.run_once()
 
     assert did_work is True
-    # Should see at least 2 heartbeats: one before claim and one during execution
-    assert len(client.heartbeats) >= 2
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 1.0
+    while worker._current_jobs() > 0 and loop.time() < deadline:
+        await asyncio.sleep(0)
+
+    assert executed == [77]
 
 
 @pytest.mark.asyncio
-async def test_worker_keeps_heartbeating_when_executor_blocks_event_loop():
-    """Regression test: lease heartbeat must continue even if task execution blocks main loop."""
+async def test_heartbeat_continues_while_executor_blocks_main_event_loop():
     task = {
         "id": 88,
         "lease_token": "lease-88",
         "crate_name": "foo",
         "crate_version": "1.0.0",
     }
-    client = FakeClient(claimed_task=task)
-    heartbeat_client = FakeClient()
 
-    class BlockingExecutor:
+    class SingleTaskClient(FakeClient):
+        def __init__(self):
+            super().__init__(claimed_task=None)
+            self._claimed = False
+
+        async def claim(self, payload):
+            self.claims.append(payload)
+            if not self._claimed:
+                self._claimed = True
+                return task
+            return None
+
+    class ObservedHeartbeatClient(FakeClient):
+        def __init__(self, started_event, finished_event, seen_event):
+            super().__init__(claimed_task=None)
+            self._started_event = started_event
+            self._finished_event = finished_event
+            self._seen_event = seen_event
+            self._during_block_count = 0
+
+        async def heartbeat(self, payload):
+            self.heartbeats.append(payload)
+            if self._started_event.is_set() and not self._finished_event.is_set():
+                self._during_block_count += 1
+                if self._during_block_count >= 2:
+                    self._seen_event.set()
+            return {"ok": True}
+
+    started_event = threading.Event()
+    finished_event = threading.Event()
+    seen_event = threading.Event()
+    client = SingleTaskClient()
+    heartbeat_client = ObservedHeartbeatClient(
+        started_event, finished_event, seen_event
+    )
+
+    class SlowExecutor:
         async def execute_claimed_task(self, _):
+            started_event.set()
             time.sleep(0.35)
+            finished_event.set()
 
     worker = RunnerWorker(
         client=client,
         runner_id="runner-1",
-        executor=BlockingExecutor(),
-        heartbeat_interval_seconds=0.1,
+        executor=SlowExecutor(),
+        heartbeat_interval_seconds=0.05,
         heartbeat_client_factory=lambda: heartbeat_client,
     )
 
-    did_work = await worker.run_once()
+    run_task = asyncio.create_task(worker.run_forever(10.0))
 
-    assert did_work is True
-    assert len(client.heartbeats) == 1
+    observed = await asyncio.to_thread(seen_event.wait, 1.0)
+    run_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run_task
+
+    assert observed is True
     assert len(heartbeat_client.heartbeats) >= 2
+
+
+@pytest.mark.asyncio
+async def test_run_forever_shutdown_waits_for_inflight_tasks_before_exit(monkeypatch):
+    task = {
+        "id": 99,
+        "lease_token": "lease-99",
+        "crate_name": "foo",
+        "crate_version": "1.0.0",
+    }
+
+    class SingleTaskClient(FakeClient):
+        def __init__(self):
+            super().__init__(claimed_task=None)
+            self._claimed = False
+
+        async def claim(self, payload):
+            self.claims.append(payload)
+            if not self._claimed:
+                self._claimed = True
+                return task
+            return None
+
+    client = SingleTaskClient()
+    release_executor = asyncio.Event()
+
+    class BlockingExecutor:
+        async def execute_claimed_task(self, _):
+            await release_executor.wait()
+
+    worker = RunnerWorker(
+        client=client, runner_id="runner-1", executor=BlockingExecutor()
+    )
+
+    lifecycle = []
+    monkeypatch.setattr(
+        worker, "_start_heartbeat_background", lambda: lifecycle.append("start")
+    )
+    monkeypatch.setattr(
+        worker, "_stop_heartbeat_background", lambda: lifecycle.append("stop")
+    )
+
+    run_task = asyncio.create_task(worker.run_forever(10.0))
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 1.0
+    while worker._current_jobs() < 1 and loop.time() < deadline:
+        await asyncio.sleep(0)
+
+    assert worker._current_jobs() == 1
+
+    run_task.cancel()
+    await asyncio.sleep(0.05)
+    assert run_task.done() is False
+
+    release_executor.set()
+    with pytest.raises(asyncio.CancelledError):
+        await run_task
+
+    assert worker._current_jobs() == 0
+    assert lifecycle == ["start", "stop"]
