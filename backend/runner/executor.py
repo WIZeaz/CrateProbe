@@ -57,8 +57,14 @@ class TaskExecutor:
         task_logger.handlers.clear()
         task_logger.addHandler(handler)
 
+        task_ctx = {
+            "task_id": task_id,
+            "crate_name": crate_name,
+            "version": crate_version,
+        }
+
         try:
-            task_logger.info(f"Task #{task_id} started: {crate_name} {crate_version}")
+            task_logger.info("task started", extra=task_ctx)
 
             if not await asyncio.to_thread(self.docker.is_available):
                 raise RuntimeError("Docker is not available")
@@ -75,7 +81,10 @@ class TaskExecutor:
             )
 
             cmd = ["cargo", "rapx", f"--test-crate={crate_name}", "test"]
-            task_logger.info(f"Running command: {' '.join(cmd)}")
+            task_logger.info(
+                "command started",
+                extra={**task_ctx, "command_summary": " ".join(cmd)},
+            )
 
             stdout_log = logs_dir / f"{task_id}-stdout.log"
             stderr_log = logs_dir / f"{task_id}-stderr.log"
@@ -85,7 +94,10 @@ class TaskExecutor:
                 stdout_log=stdout_log,
                 stderr_log=stderr_log,
             )
-            task_logger.info(f"Process exited with code: {result.exit_code}")
+            task_logger.info(
+                "command finished",
+                extra={**task_ctx, "exit_code": result.exit_code},
+            )
 
             case_count, poc_count = await asyncio.to_thread(
                 self._count_generated_items, workspace_dir
@@ -109,8 +121,12 @@ class TaskExecutor:
                     "compile_failed": compile_failed,
                 },
             )
+            task_logger.info(
+                "task terminal event sent",
+                extra={**task_ctx, "terminal_status": result.state.value},
+            )
         except asyncio.CancelledError:
-            task_logger.info(f"Task #{task_id} cancelled")
+            task_logger.info("task cancelled", extra=task_ctx)
             await self._upload_logs(task_id, lease_token, workspace_dir)
             await self.client.send_event(
                 task_id,
@@ -122,8 +138,8 @@ class TaskExecutor:
                 },
             )
             raise
-        except Exception as e:
-            task_logger.error(f"Task failed with exception: {e}")
+        except Exception as exc:
+            task_logger.exception("task execution failed", extra=task_ctx)
             await self._upload_logs(task_id, lease_token, workspace_dir)
             await self.client.send_event(
                 task_id,
@@ -131,11 +147,11 @@ class TaskExecutor:
                     "lease_token": lease_token,
                     "event_seq": 2,
                     "event_type": "failed",
-                    "message": str(e),
+                    "message": str(exc),
                 },
             )
         finally:
-            task_logger.info(f"Task #{task_id} runner log closed.")
+            task_logger.info("task runner log closed", extra=task_ctx)
             task_logger.removeHandler(handler)
             handler.close()
 
@@ -154,16 +170,25 @@ class TaskExecutor:
         if crate_file.exists():
             crate_file.unlink()
 
-        task_logger.info(f"Downloading crate {crate_name} {version}...")
+        task_logger.info(
+            "crate download started",
+            extra={"crate_name": crate_name, "version": version},
+        )
         await self.crates_api.download_crate(crate_name, version, crate_file)
-        task_logger.info("Crate downloaded successfully")
+        task_logger.info(
+            "crate download completed",
+            extra={"crate_name": crate_name, "version": version},
+        )
 
         temp_extract_dir = (
             workspace_dir.parent / "repos" / f"_temp_{crate_name}-{version}"
         )
         temp_extract_dir.mkdir(parents=True, exist_ok=True)
         try:
-            task_logger.info("Extracting crate archive...")
+            task_logger.info(
+                "crate extraction started",
+                extra={"crate_name": crate_name, "version": version},
+            )
             await asyncio.to_thread(
                 self._extract_and_move_crate,
                 crate_file,
@@ -172,7 +197,10 @@ class TaskExecutor:
                 crate_name,
                 version,
             )
-            task_logger.info("Extraction complete")
+            task_logger.info(
+                "crate extraction completed",
+                extra={"crate_name": crate_name, "version": version},
+            )
         finally:
             if temp_extract_dir.exists():
                 await asyncio.to_thread(shutil.rmtree, temp_extract_dir)
@@ -180,6 +208,7 @@ class TaskExecutor:
             await asyncio.to_thread(crate_file.unlink)
 
     async def _upload_logs(self, task_id: int, lease_token: str, workspace_dir: Path):
+        upload_logger = logging.getLogger(__name__)
         logs_dir = workspace_dir.parent / "logs"
         log_paths = [
             ("stdout", logs_dir / f"{task_id}-stdout.log"),
@@ -191,9 +220,17 @@ class TaskExecutor:
         chunk_seq = 1
         for log_type, path in log_paths:
             if not path.exists():
+                upload_logger.info(
+                    "log upload missing",
+                    extra={"task_id": task_id, "log_type": log_type},
+                )
                 continue
             content = await asyncio.to_thread(path.read_text, errors="replace")
             if not content:
+                upload_logger.info(
+                    "log upload empty",
+                    extra={"task_id": task_id, "log_type": log_type},
+                )
                 continue
             await self.client.send_log_chunk(
                 task_id,
@@ -202,6 +239,14 @@ class TaskExecutor:
                     "lease_token": lease_token,
                     "chunk_seq": chunk_seq,
                     "content": content,
+                },
+            )
+            upload_logger.info(
+                "log upload sent",
+                extra={
+                    "task_id": task_id,
+                    "log_type": log_type,
+                    "chunk_seq": chunk_seq,
                 },
             )
             chunk_seq += 1

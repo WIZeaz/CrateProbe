@@ -6,6 +6,7 @@ from runner.docker_runner import DockerRunner
 from core.models import ExecutionResult
 from core.models import TaskStatus
 import asyncio
+import logging
 
 
 @pytest.fixture
@@ -259,3 +260,196 @@ async def test_run_reconciles_workspace_ownership_after_execution(
             )
 
         mock_fix.assert_called_once_with(workspace)
+
+
+@pytest.mark.asyncio
+async def test_docker_command_start_logs_info_with_workspace_context(
+    docker_runner, tmp_path, caplog
+):
+    caplog.set_level(logging.INFO, logger="runner.docker_runner")
+    stdout_log = tmp_path / "stdout.log"
+    stderr_log = tmp_path / "stderr.log"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    with patch("docker.from_env") as mock_docker:
+        mock_client = Mock()
+        mock_container = Mock()
+        mock_container.wait.return_value = {"StatusCode": 0}
+        mock_client.containers.run.return_value = mock_container
+        mock_docker.return_value = mock_client
+
+        await docker_runner.run(
+            command=["cargo", "rapx"],
+            workspace_dir=workspace,
+            stdout_log=stdout_log,
+            stderr_log=stderr_log,
+        )
+
+    record = next(
+        r for r in caplog.records if "container command starting" in r.message.lower()
+    )
+    assert record.command_summary == "cargo rapx"
+    assert record.workspace == str(workspace)
+
+
+@pytest.mark.asyncio
+async def test_docker_cancellation_logs_warning_with_command_summary(
+    docker_runner, tmp_path, caplog
+):
+    caplog.set_level(logging.WARNING, logger="runner.docker_runner")
+    stdout_log = tmp_path / "stdout.log"
+    stderr_log = tmp_path / "stderr.log"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    with patch("docker.from_env") as mock_docker:
+        mock_client = Mock()
+        mock_container = Mock()
+        mock_container.wait.side_effect = asyncio.CancelledError()
+        mock_client.containers.run.return_value = mock_container
+        mock_docker.return_value = mock_client
+
+        with pytest.raises(asyncio.CancelledError):
+            await docker_runner.run(
+                command=["cargo", "rapx"],
+                workspace_dir=workspace,
+                stdout_log=stdout_log,
+                stderr_log=stderr_log,
+            )
+
+    record = next(
+        r
+        for r in caplog.records
+        if "container execution cancelled" in r.message.lower()
+    )
+    assert record.command_summary == "cargo rapx"
+
+
+@pytest.mark.asyncio
+async def test_docker_timeout_logs_error_with_fields(docker_runner, tmp_path, caplog):
+    import threading
+
+    caplog.set_level(logging.ERROR, logger="runner.docker_runner")
+    stdout_log = tmp_path / "stdout.log"
+    stderr_log = tmp_path / "stderr.log"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    with patch("docker.from_env") as mock_docker:
+        mock_client = Mock()
+        mock_container = Mock()
+
+        wait_event = threading.Event()
+
+        def blocking_wait():
+            wait_event.wait()
+            return {"StatusCode": 0}
+
+        mock_container.wait.side_effect = blocking_wait
+        mock_client.containers.run.return_value = mock_container
+        mock_docker.return_value = mock_client
+
+        docker_runner.max_runtime_seconds = 1
+        result = await docker_runner.run(
+            command=["cargo", "rapx"],
+            workspace_dir=workspace,
+            stdout_log=stdout_log,
+            stderr_log=stderr_log,
+        )
+        wait_event.set()
+
+    assert result.state == TaskStatus.TIMEOUT
+    record = next(r for r in caplog.records if "timed out" in r.message.lower())
+    assert record.command_summary == "cargo rapx"
+    assert record.timeout_seconds == 1
+    assert record.duration_ms >= 0
+
+
+@pytest.mark.asyncio
+async def test_docker_nonzero_exit_logs_warning_with_fields(
+    docker_runner, tmp_path, caplog
+):
+    caplog.set_level(logging.WARNING, logger="runner.docker_runner")
+    stdout_log = tmp_path / "stdout.log"
+    stderr_log = tmp_path / "stderr.log"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    with patch("docker.from_env") as mock_docker:
+        mock_client = Mock()
+        mock_container = Mock()
+        mock_container.wait.return_value = {"StatusCode": 2}
+        mock_client.containers.run.return_value = mock_container
+        mock_docker.return_value = mock_client
+
+        result = await docker_runner.run(
+            command=["cargo", "rapx"],
+            workspace_dir=workspace,
+            stdout_log=stdout_log,
+            stderr_log=stderr_log,
+        )
+
+    assert result.state == TaskStatus.FAILED
+    record = next(r for r in caplog.records if "exited non-zero" in r.message.lower())
+    assert record.exit_code == 2
+    assert record.duration_ms >= 0
+    assert record.stdout_log == str(stdout_log)
+    assert record.stderr_log == str(stderr_log)
+
+
+@pytest.mark.asyncio
+async def test_docker_completion_logs_info_with_fields(docker_runner, tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="runner.docker_runner")
+    stdout_log = tmp_path / "stdout.log"
+    stderr_log = tmp_path / "stderr.log"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    with patch("docker.from_env") as mock_docker:
+        mock_client = Mock()
+        mock_container = Mock()
+        mock_container.wait.return_value = {"StatusCode": 0}
+        mock_client.containers.run.return_value = mock_container
+        mock_docker.return_value = mock_client
+
+        result = await docker_runner.run(
+            command=["cargo", "rapx"],
+            workspace_dir=workspace,
+            stdout_log=stdout_log,
+            stderr_log=stderr_log,
+        )
+
+    assert result.state == TaskStatus.COMPLETED
+    record = next(r for r in caplog.records if "command completed" in r.message.lower())
+    assert record.exit_code == 0
+    assert record.duration_ms >= 0
+    assert record.stdout_log == str(stdout_log)
+    assert record.stderr_log == str(stderr_log)
+
+
+@pytest.mark.asyncio
+async def test_docker_unexpected_error_logs_traceback(docker_runner, tmp_path, caplog):
+    caplog.set_level(logging.ERROR, logger="runner.docker_runner")
+    stdout_log = tmp_path / "stdout.log"
+    stderr_log = tmp_path / "stderr.log"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    with patch("docker.from_env") as mock_docker:
+        mock_client = Mock()
+        mock_client.containers.run.side_effect = RuntimeError("docker crash")
+        mock_docker.return_value = mock_client
+
+        result = await docker_runner.run(
+            command=["cargo", "rapx"],
+            workspace_dir=workspace,
+            stdout_log=stdout_log,
+            stderr_log=stderr_log,
+        )
+
+    assert result.state == TaskStatus.FAILED
+    record = next(
+        r for r in caplog.records if "container execution failed" in r.message.lower()
+    )
+    assert record.exc_info is not None

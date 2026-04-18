@@ -41,7 +41,13 @@ class TaskScheduler:
         self.db.conn.commit()
         if cursor.rowcount > 0:
             logger.warning(
-                "Requeued %s running task(s) with expired lease", cursor.rowcount
+                "requeued running tasks with expired lease",
+                extra={
+                    "requeued_count": cursor.rowcount,
+                    "from_status": TaskStatus.RUNNING.value,
+                    "to_status": TaskStatus.PENDING.value,
+                    "lease_cutoff_ts": now.isoformat(),
+                },
             )
 
     async def run(self):
@@ -69,7 +75,14 @@ class TaskScheduler:
                 error_message="Task interrupted by server shutdown",
             )
             logger.info(
-                f"Task {task.id} ({task.crate_name}) marked as FAILED due to shutdown"
+                "task marked as failed during shutdown cleanup",
+                extra={
+                    "task_id": task.id,
+                    "crate_name": task.crate_name,
+                    "reason": "server_shutdown",
+                    "from_status": TaskStatus.RUNNING.value,
+                    "to_status": TaskStatus.FAILED.value,
+                },
             )
 
     def recover_orphaned_tasks(self):
@@ -77,7 +90,12 @@ class TaskScheduler:
         if not running_tasks:
             return
         logger.warning(
-            f"Found {len(running_tasks)} orphaned RUNNING task(s) on startup, marking as FAILED"
+            "found orphaned running tasks on startup, marking as failed",
+            extra={
+                "orphaned_count": len(running_tasks),
+                "from_status": TaskStatus.RUNNING.value,
+                "to_status": TaskStatus.FAILED.value,
+            },
         )
         for task in running_tasks:
             self.db.update_task_status(
@@ -86,7 +104,16 @@ class TaskScheduler:
                 finished_at=datetime.now(),
                 error_message="Task interrupted by server restart",
             )
-            logger.info(f"Task {task.id} ({task.crate_name}) marked as FAILED")
+            logger.info(
+                "task marked as failed during orphan recovery",
+                extra={
+                    "task_id": task.id,
+                    "crate_name": task.crate_name,
+                    "from_status": TaskStatus.RUNNING.value,
+                    "to_status": TaskStatus.FAILED.value,
+                    "reason": "server_restart",
+                },
+            )
 
     async def cancel_task(self, task_id: int):
         task = self.db.get_task(task_id)

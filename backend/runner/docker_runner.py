@@ -4,10 +4,14 @@ import os
 import shutil
 from pathlib import Path
 from typing import List, Optional
+import time
 import docker
 from docker.errors import ImageNotFound, APIError
 from core.models import TaskStatus
 from core.models import ExecutionResult
+
+
+logger = logging.getLogger(__name__)
 
 
 def _sync_log_incremental(source: Path, target: Path) -> None:
@@ -207,6 +211,16 @@ class DockerRunner:
         container = None
         log_sync_task = None
         stop_sync_event = asyncio.Event()
+        command_summary = " ".join(command)
+        started_at = time.monotonic()
+
+        logger.info(
+            "container command starting",
+            extra={
+                "command_summary": command_summary,
+                "workspace": str(workspace_dir),
+            },
+        )
 
         # Source log paths (inside mounted workspace)
         source_stdout = workspace_dir / "stdout.log"
@@ -266,9 +280,12 @@ class DockerRunner:
                 exit_code = wait_result.get("StatusCode", -1)
             except asyncio.CancelledError:
                 # Server is shutting down - stop the container
-                logger = logging.getLogger(__name__)
-                logger.info(
-                    "Task cancelled due to server shutdown, stopping container..."
+                logger.warning(
+                    "container execution cancelled",
+                    extra={
+                        "command_summary": command_summary,
+                        "workspace": str(workspace_dir),
+                    },
                 )
                 try:
                     container.stop(timeout=5)
@@ -284,37 +301,88 @@ class DockerRunner:
                     container.stop(timeout=10)
                 except Exception:
                     container.kill()  # Force kill if it doesn't stop gracefully
+                duration_ms = int((time.monotonic() - started_at) * 1000)
+                logger.error(
+                    "container execution timed out",
+                    extra={
+                        "command_summary": command_summary,
+                        "workspace": str(workspace_dir),
+                        "timeout_seconds": timeout_seconds,
+                        "duration_ms": duration_ms,
+                    },
+                )
                 return ExecutionResult(
                     state=TaskStatus.TIMEOUT,
                     exit_code=-1,
                     message=f"Execution timed out after {timeout_seconds} seconds",
                 )
 
+            duration_ms = int((time.monotonic() - started_at) * 1000)
             if exit_code == 0:
+                logger.info(
+                    "container command completed",
+                    extra={
+                        "command_summary": command_summary,
+                        "workspace": str(workspace_dir),
+                        "exit_code": exit_code,
+                        "duration_ms": duration_ms,
+                        "stdout_log": str(stdout_log),
+                        "stderr_log": str(stderr_log),
+                    },
+                )
                 return ExecutionResult(
                     state=TaskStatus.COMPLETED,
                     exit_code=exit_code,
                     message="",
                 )
             if exit_code == 137:
+                logger.warning(
+                    "container command exited non-zero",
+                    extra={
+                        "command_summary": command_summary,
+                        "workspace": str(workspace_dir),
+                        "exit_code": exit_code,
+                        "duration_ms": duration_ms,
+                        "stdout_log": str(stdout_log),
+                        "stderr_log": str(stderr_log),
+                    },
+                )
                 return ExecutionResult(
                     state=TaskStatus.OOM,
                     exit_code=exit_code,
                     message="Process killed by OOM killer (out of memory)",
                 )
+            logger.warning(
+                "container command exited non-zero",
+                extra={
+                    "command_summary": command_summary,
+                    "workspace": str(workspace_dir),
+                    "exit_code": exit_code,
+                    "duration_ms": duration_ms,
+                    "stdout_log": str(stdout_log),
+                    "stderr_log": str(stderr_log),
+                },
+            )
             return ExecutionResult(
                 state=TaskStatus.FAILED,
                 exit_code=exit_code,
                 message=f"Process exited with code {exit_code}",
             )
 
-        except Exception as e:
+        except Exception as exc:
+            logger.exception(
+                "container execution failed",
+                extra={
+                    "command_summary": command_summary,
+                    "workspace": str(workspace_dir),
+                },
+            )
             # Write error to stderr log file for visibility
-            stderr_log.write_text(f"Unexpected error: {e}")
+            stderr_log.write_text(f"Unexpected error: {exc}")
             return ExecutionResult(
                 state=TaskStatus.FAILED,
                 exit_code=-1,
-                message=f"Unexpected error: {e}",
+                message=f"Unexpected error: {exc}",
             )
         finally:
             # Stop log sync task

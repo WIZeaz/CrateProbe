@@ -43,7 +43,11 @@ class RunnerWorker:
             await self._client.send_metrics(payload)
             self._last_metrics_sent_at = now
         except Exception as exc:
-            logger.warning("Failed to send runner metrics: %s", exc)
+            logger.warning(
+                "failed to send runner metrics: %s",
+                exc,
+                extra={"runner_id": self._runner_id},
+            )
 
     async def _heartbeat_loop(self, interval: float, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
@@ -51,7 +55,11 @@ class RunnerWorker:
                 await self._client.heartbeat({"runner_id": self._runner_id})
                 await self._send_metrics_if_due()
             except Exception as exc:
-                logger.warning("Background heartbeat failed: %s", exc)
+                logger.warning(
+                    "background heartbeat failed: %s",
+                    exc,
+                    extra={"runner_id": self._runner_id},
+                )
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=interval)
             except asyncio.TimeoutError:
@@ -59,8 +67,25 @@ class RunnerWorker:
 
     async def run_once(self) -> bool:
         await self._send_metrics_if_due(force=True)
-        await self._client.heartbeat({"runner_id": self._runner_id})
-        claimed = await self._client.claim({"runner_id": self._runner_id})
+        try:
+            await self._client.heartbeat({"runner_id": self._runner_id})
+        except Exception as exc:
+            logger.warning(
+                "runner heartbeat request failed: %s",
+                exc,
+                extra={"runner_id": self._runner_id},
+            )
+            raise
+
+        try:
+            claimed = await self._client.claim({"runner_id": self._runner_id})
+        except Exception as exc:
+            logger.warning(
+                "runner claim request failed: %s",
+                exc,
+                extra={"runner_id": self._runner_id},
+            )
+            raise
         if claimed is None:
             return False
 
@@ -69,6 +94,16 @@ class RunnerWorker:
         heartbeat_thread = self._start_heartbeat_thread(stop_event)
         try:
             await self._executor.execute_claimed_task(claimed)
+        except Exception:
+            logger.exception(
+                "runner executor failed",
+                extra={
+                    "runner_id": self._runner_id,
+                    "task_id": claimed.get("id"),
+                    "crate_name": claimed.get("crate_name"),
+                },
+            )
+            raise
         finally:
             self._is_executing = False
             stop_event.set()

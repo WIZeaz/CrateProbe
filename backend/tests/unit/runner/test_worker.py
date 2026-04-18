@@ -114,6 +114,105 @@ async def test_worker_metrics_failure_does_not_break_run_once():
 
 
 @pytest.mark.asyncio
+async def test_worker_metrics_warning_contains_runner_id(caplog):
+    caplog.set_level("WARNING")
+    client = FakeClient(claimed_task=None)
+
+    async def broken_send_metrics(_payload):
+        raise RuntimeError("metrics down")
+
+    client.send_metrics = broken_send_metrics
+    worker = RunnerWorker(client=client, runner_id="runner-1", executor=None)
+
+    did_work = await worker.run_once()
+
+    assert did_work is False
+    record = next(
+        r
+        for r in caplog.records
+        if "failed to send runner metrics" in r.message.lower()
+    )
+    assert record.runner_id == "runner-1"
+
+
+@pytest.mark.asyncio
+async def test_worker_claim_transport_failure_logs_warning_with_runner_id(caplog):
+    caplog.set_level("WARNING")
+
+    class BrokenClaimClient(FakeClient):
+        async def claim(self, payload):
+            self.claims.append(payload)
+            raise RuntimeError("claim down")
+
+    client = BrokenClaimClient(claimed_task=None)
+    worker = RunnerWorker(client=client, runner_id="runner-1", executor=None)
+
+    with pytest.raises(RuntimeError, match="claim down"):
+        await worker.run_once()
+
+    record = next(
+        r for r in caplog.records if "runner claim request failed" in r.message.lower()
+    )
+    assert record.runner_id == "runner-1"
+
+
+@pytest.mark.asyncio
+async def test_worker_heartbeat_transport_failure_logs_warning_with_runner_context(
+    caplog,
+):
+    caplog.set_level("WARNING")
+
+    class BrokenHeartbeatClient(FakeClient):
+        async def heartbeat(self, payload):
+            self.heartbeats.append(payload)
+            raise RuntimeError("heartbeat down")
+
+    client = BrokenHeartbeatClient(claimed_task=None)
+    worker = RunnerWorker(client=client, runner_id="runner-1", executor=None)
+
+    with pytest.raises(RuntimeError, match="heartbeat down"):
+        await worker.run_once()
+
+    record = next(
+        r
+        for r in caplog.records
+        if "runner heartbeat request failed" in r.message.lower()
+    )
+    assert record.runner_id == "runner-1"
+
+
+@pytest.mark.asyncio
+async def test_worker_executor_failure_logs_traceback(caplog):
+    caplog.set_level("ERROR")
+    task = {
+        "id": 22,
+        "lease_token": "lease-22",
+        "crate_name": "foo",
+        "crate_version": "1.0.0",
+    }
+    client = FakeClient(claimed_task=task)
+
+    class BrokenExecutor:
+        async def execute_claimed_task(self, _):
+            raise RuntimeError("executor boom")
+
+    worker = RunnerWorker(
+        client=client, runner_id="runner-1", executor=BrokenExecutor()
+    )
+
+    with pytest.raises(RuntimeError, match="executor boom"):
+        await worker.run_once()
+
+    record = next(
+        r for r in caplog.records if "runner executor failed" in r.message.lower()
+    )
+    assert record.exc_info is not None
+    assert record.runner_id == "runner-1"
+    assert record.task_id == 22
+    assert record.crate_name == "foo"
+
+
+@pytest.mark.asyncio
 async def test_worker_run_forever_uses_sleep_interval(monkeypatch):
     client = FakeClient(claimed_task=None)
     worker = RunnerWorker(
