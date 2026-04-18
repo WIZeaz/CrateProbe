@@ -73,6 +73,7 @@ def claim_task(client, runner_id, token):
     response = client.post(
         f"/api/runners/{runner_id}/claim",
         headers=auth_headers(token, request_id="req-claim"),
+        json={"jobs": 0, "max_jobs": 1},
     )
     assert response.status_code == 200
     body = response.json()

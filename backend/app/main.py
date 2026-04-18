@@ -99,6 +99,12 @@ class ClaimTaskResponse(BaseModel):
     lease_expires_at: Optional[str]
 
 
+class ClaimTaskRequest(BaseModel):
+    runner_id: Optional[str] = None
+    jobs: int
+    max_jobs: int
+
+
 class RunnerTaskEventRequest(BaseModel):
     lease_token: str
     event_seq: int
@@ -638,8 +644,12 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     )
     async def claim_task(
         runner_id: str,
+        request: ClaimTaskRequest,
         _auth: None = Depends(require_runner_auth),
     ):
+        if request.jobs >= request.max_jobs:
+            return PlainTextResponse(status_code=204, content="")
+
         task = db.claim_pending_task(runner_id, config.lease_ttl_seconds)
         if task is None:
             return PlainTextResponse(status_code=204, content="")

@@ -73,6 +73,7 @@ def _create_and_claim_task(
     claim_response = client.post(
         f"/api/runners/{runner_id}/claim",
         headers=_runner_headers(token),
+        json={"jobs": 0, "max_jobs": 1},
     )
     assert claim_response.status_code == 200
     lease_token = claim_response.json()["lease_token"]
@@ -116,6 +117,7 @@ def test_claim_returns_204_when_no_pending_tasks(client):
     response = client.post(
         "/api/runners/runner-claim-empty/claim",
         headers=_runner_headers(token),
+        json={"jobs": 0, "max_jobs": 1},
     )
 
     assert response.status_code == 204
@@ -133,6 +135,7 @@ def test_claim_assigns_pending_task_and_returns_lease_token(client):
     claim_response = client.post(
         "/api/runners/runner-claim-task/claim",
         headers=_runner_headers(token),
+        json={"jobs": 0, "max_jobs": 1},
     )
 
     assert claim_response.status_code == 200
@@ -147,6 +150,62 @@ def test_claim_assigns_pending_task_and_returns_lease_token(client):
     assert task_response.status_code == 200
     task_data = task_response.json()
     assert task_data["status"] == "running"
+
+
+def test_claim_requires_jobs_and_max_jobs_payload(client):
+    token = _create_runner(client, "runner-claim-payload-required")
+
+    response = client.post(
+        "/api/runners/runner-claim-payload-required/claim",
+        headers=_runner_headers(token),
+        json={"runner_id": "runner-claim-payload-required"},
+    )
+
+    assert response.status_code == 422
+    missing_fields = {tuple(item["loc"]) for item in response.json().get("detail", [])}
+    assert ("body", "jobs") in missing_fields
+    assert ("body", "max_jobs") in missing_fields
+
+
+def test_claim_returns_204_when_runner_reports_capacity_full(client):
+    token = _create_runner(client, "runner-claim-capacity-full")
+    create_task_response = client.post(
+        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
+    )
+    assert create_task_response.status_code == 200
+    task_id = create_task_response.json()["task_id"]
+
+    claim_response = client.post(
+        "/api/runners/runner-claim-capacity-full/claim",
+        headers=_runner_headers(token),
+        json={"jobs": 1, "max_jobs": 1},
+    )
+
+    assert claim_response.status_code == 204
+    assert claim_response.text == ""
+
+    task_response = client.get(f"/api/tasks/{task_id}")
+    assert task_response.status_code == 200
+    assert task_response.json()["status"] == "pending"
+
+
+def test_claim_ignores_body_runner_id_and_uses_path_runner_id(client):
+    token = _create_runner(client, "runner-claim-path-authoritative")
+    _create_runner(client, "runner-body-ignored")
+
+    create_task_response = client.post(
+        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
+    )
+    assert create_task_response.status_code == 200
+
+    claim_response = client.post(
+        "/api/runners/runner-claim-path-authoritative/claim",
+        headers=_runner_headers(token),
+        json={"runner_id": "runner-body-ignored", "jobs": 0, "max_jobs": 1},
+    )
+
+    assert claim_response.status_code == 200
+    assert claim_response.json()["runner_id"] == "runner-claim-path-authoritative"
 
 
 def test_events_endpoint_is_idempotent_for_duplicate_event_seq(client):
@@ -231,6 +290,7 @@ def test_retry_clears_old_logs_and_allows_chunk_seq_restart(client):
     second_claim = client.post(
         "/api/runners/runner-retry-logs/claim",
         headers=_runner_headers(token),
+        json={"jobs": 0, "max_jobs": 1},
     )
     assert second_claim.status_code == 200
     second_lease_token = second_claim.json()["lease_token"]
@@ -584,6 +644,7 @@ def test_disabled_runner_rejected_by_runner_endpoints(client):
     claim_response = client.post(
         "/api/runners/runner-disabled-auth/claim",
         headers=_runner_headers(token),
+        json={"jobs": 0, "max_jobs": 1},
     )
     assert claim_response.status_code == 403
 
@@ -606,6 +667,7 @@ def test_deleted_runner_rejected_by_runner_endpoints(client):
     claim_response = client.post(
         "/api/runners/runner-deleted-auth/claim",
         headers=_runner_headers(token),
+        json={"jobs": 0, "max_jobs": 1},
     )
     assert claim_response.status_code == 403
 
