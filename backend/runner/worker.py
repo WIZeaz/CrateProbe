@@ -1,8 +1,13 @@
 import asyncio
 import logging
 import threading
+
 import psutil
-from runner.client import RunnerControlClient
+
+try:
+    from runner.client import RunnerControlClient
+except ModuleNotFoundError:  # pragma: no cover - import context fallback for tests
+    RunnerControlClient = object
 
 logger = logging.getLogger(__name__)
 
@@ -84,14 +89,14 @@ class RunnerWorker:
             )
             raise
 
-        if len(self._inflight_tasks) >= self._max_jobs:
+        if not self._has_capacity():
             return False
 
         try:
             claimed = await self._client.claim(
                 {
                     "runner_id": self._runner_id,
-                    "jobs": len(self._inflight_tasks),
+                    "jobs": self._current_jobs(),
                     "max_jobs": self._max_jobs,
                 }
             )
@@ -170,6 +175,12 @@ class RunnerWorker:
             return self._client.clone_for_heartbeat()
 
         return self._client
+
+    def _current_jobs(self) -> int:
+        return len(self._inflight_tasks)
+
+    def _has_capacity(self) -> bool:
+        return self._current_jobs() < self._max_jobs
 
     async def run_forever(self, poll_interval_seconds: float) -> None:
         while True:

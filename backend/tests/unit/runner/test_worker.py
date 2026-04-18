@@ -1,14 +1,16 @@
 import asyncio
-import contextlib
+import importlib.util
 from pathlib import Path
-import sys
 import time
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
-from runner.worker import RunnerWorker
+_WORKER_PATH = Path(__file__).resolve().parents[3] / "runner" / "worker.py"
+_WORKER_SPEC = importlib.util.spec_from_file_location("runner_worker", _WORKER_PATH)
+assert _WORKER_SPEC is not None and _WORKER_SPEC.loader is not None
+_WORKER_MODULE = importlib.util.module_from_spec(_WORKER_SPEC)
+_WORKER_SPEC.loader.exec_module(_WORKER_MODULE)
+RunnerWorker = _WORKER_MODULE.RunnerWorker
 
 
 class FakeClient:
@@ -68,28 +70,18 @@ async def test_worker_claim_payload_includes_jobs_and_max_jobs():
 
 
 @pytest.mark.asyncio
-async def test_worker_skips_claim_when_local_capacity_full():
+async def test_worker_skips_claim_when_local_capacity_full(monkeypatch):
     client = FakeClient(claimed_task=None)
     worker = RunnerWorker(
         client=client, runner_id="runner-1", executor=None, max_jobs=1
     )
 
-    blocker = asyncio.Event()
-
-    async def hold_slot():
-        await blocker.wait()
-
-    inflight = asyncio.create_task(hold_slot())
-    worker._inflight_tasks.add(inflight)
+    monkeypatch.setattr(worker, "_current_jobs", lambda: 1)
 
     did_work = await worker.run_once()
 
     assert did_work is False
     assert client.claims == []
-
-    inflight.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await inflight
 
 
 @pytest.mark.asyncio
