@@ -345,3 +345,71 @@ def test_claim_max_jobs_overflow_warning_contains_runner_id(client, caplog):
     assert record.request_id == "req-claim-overflow-max-jobs"
     assert record.runner_id == runner_id
     assert record.max_jobs == 257
+
+
+def test_progress_event_updates_counts_and_broadcasts(client, monkeypatch):
+    runner_id, token = create_runner_and_token(client, "runner-progress")
+    task_id = create_pending_task(client, monkeypatch, crate_name="progress-crate")
+    claimed_task_id, lease_token = claim_task(client, runner_id, token)
+    assert claimed_task_id == task_id
+
+    response = client.post(
+        f"/api/runners/{runner_id}/tasks/{task_id}/events",
+        headers=auth_headers(token),
+        json={
+            "lease_token": lease_token,
+            "event_seq": 2,
+            "event_type": "progress",
+            "case_count": 5,
+            "poc_count": 2,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["applied"] is True
+
+    task_response = client.get(f"/api/tasks/{task_id}")
+    assert task_response.status_code == 200
+    task_data = task_response.json()
+    assert task_data["case_count"] == 5
+    assert task_data["poc_count"] == 2
+    assert task_data["status"] == "running"
+
+
+def test_terminal_event_type_generic_treats_unknown_as_failed(client, monkeypatch):
+    runner_id, token = create_runner_and_token(client, "runner-terminal-generic")
+    task_id = create_pending_task(client, monkeypatch, crate_name="generic-crate")
+    claimed_task_id, lease_token = claim_task(client, runner_id, token)
+    assert claimed_task_id == task_id
+
+    client.post(
+        f"/api/runners/{runner_id}/tasks/{task_id}/events",
+        headers=auth_headers(token),
+        json={
+            "lease_token": lease_token,
+            "event_seq": 1,
+            "event_type": "started",
+        },
+    )
+
+    response = client.post(
+        f"/api/runners/{runner_id}/tasks/{task_id}/events",
+        headers=auth_headers(token),
+        json={
+            "lease_token": lease_token,
+            "event_seq": 2,
+            "event_type": "timeout",
+            "exit_code": -1,
+            "message": "Execution timed out",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["applied"] is True
+
+    task_response = client.get(f"/api/tasks/{task_id}")
+    assert task_response.status_code == 200
+    task_data = task_response.json()
+    assert task_data["status"] == "failed"
+    assert task_data["finished_at"] is not None
+    assert task_data["message"] == "Execution timed out"

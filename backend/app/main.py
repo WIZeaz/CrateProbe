@@ -108,7 +108,7 @@ class ClaimTaskRequest(BaseModel):
 class RunnerTaskEventRequest(BaseModel):
     lease_token: str
     event_seq: int
-    event_type: Literal["started", "progress", "completed", "failed"]
+    event_type: str
     exit_code: Optional[int] = None
     message: Optional[str] = None
     case_count: Optional[int] = None
@@ -752,14 +752,15 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                 },
             )
 
-        if applied and request.event_type in ("completed", "failed"):
+        if applied and request.event_type not in ("started", "progress"):
+            terminal_status = (
+                TaskStatus.COMPLETED
+                if request.event_type == "completed"
+                else TaskStatus.FAILED
+            )
             db.update_task_status(
                 task_id,
-                (
-                    TaskStatus.COMPLETED
-                    if request.event_type == "completed"
-                    else TaskStatus.FAILED
-                ),
+                terminal_status,
                 exit_code=request.exit_code,
                 message=request.message,
             )
@@ -772,6 +773,14 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             if request.compile_failed is not None:
                 db.update_task_compile_failed(task_id, request.compile_failed)
 
+        if applied and request.event_type == "progress":
+            if request.case_count is not None or request.poc_count is not None:
+                db.update_task_counts(
+                    task_id,
+                    case_count=request.case_count,
+                    poc_count=request.poc_count,
+                )
+
         if applied:
             updated_task = db.get_task(task_id)
             if updated_task is not None:
@@ -782,7 +791,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                 dashboard_payload = _task_to_dict(updated_task)
                 dashboard_payload["type"] = (
                     "task_completed"
-                    if request.event_type in ("completed", "failed")
+                    if request.event_type not in ("started", "progress")
                     else "task_update"
                 )
                 await ws_manager.broadcast_dashboard_update(dashboard_payload)
