@@ -55,22 +55,6 @@ class RunnerWorker:
                 extra={"runner_id": self._runner_id},
             )
 
-    async def _heartbeat_loop(self, interval: float, stop_event: asyncio.Event) -> None:
-        while not stop_event.is_set():
-            try:
-                await self._client.heartbeat({"runner_id": self._runner_id})
-                await self._send_metrics_if_due()
-            except Exception as exc:
-                logger.warning(
-                    "background heartbeat failed: %s",
-                    exc,
-                    extra={"runner_id": self._runner_id},
-                )
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=interval)
-            except asyncio.TimeoutError:
-                pass
-
     async def run_once(self) -> bool:
         self._inflight_tasks = {
             task for task in self._inflight_tasks if not task.done()
@@ -145,7 +129,11 @@ class RunnerWorker:
             try:
                 await client.heartbeat({"runner_id": self._runner_id})
             except Exception as exc:
-                logger.warning("Background heartbeat failed: %s", exc)
+                logger.warning(
+                    "background heartbeat failed: %s",
+                    exc,
+                    extra={"runner_id": self._runner_id},
+                )
 
             if stop_event.wait(interval):
                 break

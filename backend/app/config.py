@@ -39,6 +39,10 @@ class Config:
         distributed = data.get("distributed", {})
         security = data.get("security", {})
 
+        claim_max_jobs_hard_limit = distributed.get("claim_max_jobs_hard_limit", 256)
+        if claim_max_jobs_hard_limit < 1:
+            raise ValueError("distributed.claim_max_jobs_hard_limit must be >= 1")
+
         return cls(
             server_port=server.get("port", 8000),
             server_host=server.get("host", "0.0.0.0"),
@@ -50,7 +54,7 @@ class Config:
             log_file_path=logging_cfg.get("file_path", "server.log"),
             lease_ttl_seconds=distributed.get("lease_ttl_seconds", 30),
             runner_offline_seconds=distributed.get("runner_offline_seconds", 30),
-            claim_max_jobs_hard_limit=distributed.get("claim_max_jobs_hard_limit", 256),
+            claim_max_jobs_hard_limit=claim_max_jobs_hard_limit,
             admin_token=security.get("admin_token", ""),
         )
 

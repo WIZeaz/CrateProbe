@@ -80,6 +80,19 @@ claim_max_jobs_hard_limit = 128
     assert config.claim_max_jobs_hard_limit == 128
 
 
+def test_config_rejects_claim_max_jobs_hard_limit_below_one(tmp_path):
+    config_file = tmp_path / "config.toml"
+    config_file.write_text("""
+[distributed]
+claim_max_jobs_hard_limit = 0
+""")
+
+    with pytest.raises(
+        ValueError, match="distributed.claim_max_jobs_hard_limit must be >= 1"
+    ):
+        Config.from_file(str(config_file))
+
+
 def test_config_creates_workspace_directory(tmp_path):
     """Test that workspace directory is created if missing"""
     workspace = tmp_path / "workspace"
@@ -183,3 +196,16 @@ def test_runner_config_reads_workspace_dir_from_env(monkeypatch):
 
     cfg = RunnerConfig.from_env()
     assert cfg.workspace_dir == "/tmp/custom-runner-workspace"
+
+
+@pytest.mark.parametrize("invalid_max_jobs", [0, -1])
+def test_runner_config_rejects_max_jobs_below_one(monkeypatch, invalid_max_jobs):
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://localhost:8080")
+    monkeypatch.setenv("RUNNER_ID", "runner-1")
+    monkeypatch.setenv("RUNNER_TOKEN", "token-1")
+    monkeypatch.setenv("RUNNER_MAX_JOBS", str(invalid_max_jobs))
+
+    from runner.config import RunnerConfig
+
+    with pytest.raises(ValueError, match="RUNNER_MAX_JOBS must be >= 1"):
+        RunnerConfig.from_env()

@@ -65,6 +65,10 @@ class RunnerConfig:
 
         docker_mounts = [m.strip() for m in mounts_raw.split(",") if m.strip()]
 
+        max_jobs = _int("RUNNER_MAX_JOBS", max_jobs_raw)
+        if max_jobs < 1:
+            raise ValueError("RUNNER_MAX_JOBS must be >= 1")
+
         return cls(
             server_url=server_url,
             runner_id=runner_id,
@@ -78,7 +82,7 @@ class RunnerConfig:
             request_timeout_seconds=_float(
                 "RUNNER_REQUEST_TIMEOUT_SECONDS", request_timeout_raw
             ),
-            max_jobs=_int("RUNNER_MAX_JOBS", max_jobs_raw),
+            max_jobs=max_jobs,
             max_memory_gb=_int("RUNNER_MAX_MEMORY_GB", max_memory_raw),
             max_runtime_seconds=_int("RUNNER_MAX_RUNTIME_SECONDS", max_runtime_raw),
             max_cpus=_int("RUNNER_MAX_CPUS", max_cpus_raw),
