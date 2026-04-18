@@ -12,11 +12,22 @@ class RunnerControlClient:
         token: str,
         timeout: float,
     ):
+        self.base_url = base_url
         self.runner_id = runner_id
+        self._token = token
+        self._timeout = timeout
         self._client = httpx.AsyncClient(
             base_url=base_url,
             headers={"Authorization": f"Bearer {token}"},
             timeout=timeout,
+        )
+
+    def clone_for_heartbeat(self) -> "RunnerControlClient":
+        return RunnerControlClient(
+            base_url=self.base_url,
+            runner_id=self.runner_id,
+            token=self._token,
+            timeout=self._timeout,
         )
 
     async def aclose(self) -> None:

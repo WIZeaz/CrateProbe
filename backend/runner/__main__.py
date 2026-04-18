@@ -19,6 +19,7 @@ async def _run() -> None:
         runner_id=config.runner_id,
         executor=executor,
         metrics_interval_seconds=config.metrics_interval_seconds,
+        heartbeat_client_factory=client.clone_for_heartbeat,
     )
     try:
         await worker.run_forever(config.poll_interval_seconds)

@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 import pytest
 
@@ -28,6 +29,9 @@ class FakeClient:
     async def send_metrics(self, payload):
         self.metrics.append(payload)
         return {"success": True}
+
+    async def aclose(self):
+        return None
 
 
 @pytest.mark.asyncio
@@ -170,3 +174,34 @@ async def test_worker_sends_heartbeats_during_task_execution():
     assert did_work is True
     # Should see at least 2 heartbeats: one before claim and one during execution
     assert len(client.heartbeats) >= 2
+
+
+@pytest.mark.asyncio
+async def test_worker_keeps_heartbeating_when_executor_blocks_event_loop():
+    """Regression test: lease heartbeat must continue even if task execution blocks main loop."""
+    task = {
+        "id": 88,
+        "lease_token": "lease-88",
+        "crate_name": "foo",
+        "crate_version": "1.0.0",
+    }
+    client = FakeClient(claimed_task=task)
+    heartbeat_client = FakeClient()
+
+    class BlockingExecutor:
+        async def execute_claimed_task(self, _):
+            time.sleep(0.35)
+
+    worker = RunnerWorker(
+        client=client,
+        runner_id="runner-1",
+        executor=BlockingExecutor(),
+        heartbeat_interval_seconds=0.1,
+        heartbeat_client_factory=lambda: heartbeat_client,
+    )
+
+    did_work = await worker.run_once()
+
+    assert did_work is True
+    assert len(client.heartbeats) == 1
+    assert len(heartbeat_client.heartbeats) >= 2

@@ -60,10 +60,12 @@ class TaskExecutor:
         try:
             task_logger.info(f"Task #{task_id} started: {crate_name} {crate_version}")
 
-            if not self.docker.is_available():
+            if not await asyncio.to_thread(self.docker.is_available):
                 raise RuntimeError("Docker is not available")
 
-            if not self.docker.ensure_image(self.config.docker_pull_policy):
+            if not await asyncio.to_thread(
+                self.docker.ensure_image, self.config.docker_pull_policy
+            ):
                 raise RuntimeError(
                     f"Docker image {self.config.docker_image} is not available"
                 )
@@ -85,8 +87,12 @@ class TaskExecutor:
             )
             task_logger.info(f"Process exited with code: {result.exit_code}")
 
-            case_count, poc_count = self._count_generated_items(workspace_dir)
-            compile_failed = self._get_compile_failed_count(workspace_dir)
+            case_count, poc_count = await asyncio.to_thread(
+                self._count_generated_items, workspace_dir
+            )
+            compile_failed = await asyncio.to_thread(
+                self._get_compile_failed_count, workspace_dir
+            )
 
             await self._upload_logs(task_id, lease_token, workspace_dir)
 
@@ -137,8 +143,10 @@ class TaskExecutor:
         self, workspace_dir: Path, crate_name: str, version: str, task_logger
     ):
         if workspace_dir.exists():
-            self.docker.ensure_workspace_ownership(workspace_dir)
-            shutil.rmtree(workspace_dir)
+            await asyncio.to_thread(
+                self.docker.ensure_workspace_ownership, workspace_dir
+            )
+            await asyncio.to_thread(shutil.rmtree, workspace_dir)
         workspace_dir.mkdir(parents=True, exist_ok=True)
 
         crate_file = workspace_dir.parent / "repos" / f"{crate_name}-{version}.crate"
@@ -156,21 +164,20 @@ class TaskExecutor:
         temp_extract_dir.mkdir(parents=True, exist_ok=True)
         try:
             task_logger.info("Extracting crate archive...")
-            with tarfile.open(crate_file, "r:gz") as tar:
-                tar.extractall(temp_extract_dir)
-            inner_dir = temp_extract_dir / f"{crate_name}-{version}"
-            if inner_dir.exists():
-                for item in inner_dir.iterdir():
-                    shutil.move(str(item), str(workspace_dir))
-            else:
-                for item in temp_extract_dir.iterdir():
-                    shutil.move(str(item), str(workspace_dir))
+            await asyncio.to_thread(
+                self._extract_and_move_crate,
+                crate_file,
+                temp_extract_dir,
+                workspace_dir,
+                crate_name,
+                version,
+            )
             task_logger.info("Extraction complete")
         finally:
             if temp_extract_dir.exists():
-                shutil.rmtree(temp_extract_dir)
+                await asyncio.to_thread(shutil.rmtree, temp_extract_dir)
         if crate_file.exists():
-            crate_file.unlink()
+            await asyncio.to_thread(crate_file.unlink)
 
     async def _upload_logs(self, task_id: int, lease_token: str, workspace_dir: Path):
         logs_dir = workspace_dir.parent / "logs"
@@ -185,7 +192,7 @@ class TaskExecutor:
         for log_type, path in log_paths:
             if not path.exists():
                 continue
-            content = path.read_text(errors="replace")
+            content = await asyncio.to_thread(path.read_text, errors="replace")
             if not content:
                 continue
             await self.client.send_log_chunk(
@@ -198,6 +205,22 @@ class TaskExecutor:
                 },
             )
             chunk_seq += 1
+
+    def _extract_and_move_crate(
+        self,
+        crate_file: Path,
+        temp_extract_dir: Path,
+        workspace_dir: Path,
+        crate_name: str,
+        version: str,
+    ) -> None:
+        with tarfile.open(crate_file, "r:gz") as tar:
+            tar.extractall(temp_extract_dir)
+
+        inner_dir = temp_extract_dir / f"{crate_name}-{version}"
+        source_dir = inner_dir if inner_dir.exists() else temp_extract_dir
+        for item in source_dir.iterdir():
+            shutil.move(str(item), str(workspace_dir))
 
     def _count_generated_items(self, workspace_dir: Path) -> Tuple[int, int]:
         testgen_dir = workspace_dir / "testgen"
