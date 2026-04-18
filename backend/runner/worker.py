@@ -62,15 +62,6 @@ class RunnerWorker:
         self._is_executing = self._current_jobs() > 0
 
         await self._send_metrics_if_due(force=True)
-        try:
-            await self._client.heartbeat({"runner_id": self._runner_id})
-        except Exception as exc:
-            logger.warning(
-                "runner heartbeat request failed: %s",
-                exc,
-                extra={"runner_id": self._runner_id},
-            )
-            raise
 
         if not self._has_capacity():
             return False

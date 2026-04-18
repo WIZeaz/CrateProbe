@@ -35,14 +35,14 @@ class FakeClient:
 
 
 @pytest.mark.asyncio
-async def test_worker_heartbeats_when_idle():
+async def test_worker_sends_metrics_and_claims_when_idle():
     client = FakeClient(claimed_task=None)
     worker = RunnerWorker(client=client, runner_id="runner-1", executor=None)
 
     did_work = await worker.run_once()
 
     assert did_work is False
-    assert len(client.heartbeats) == 1
+    assert len(client.heartbeats) == 0
     assert len(client.claims) == 1
     assert len(client.metrics) == 1
     assert client.events == []
@@ -253,31 +253,6 @@ async def test_worker_claim_transport_failure_logs_warning_with_runner_id(caplog
 
     record = next(
         r for r in caplog.records if "runner claim request failed" in r.message.lower()
-    )
-    assert record.runner_id == "runner-1"
-
-
-@pytest.mark.asyncio
-async def test_worker_heartbeat_transport_failure_logs_warning_with_runner_context(
-    caplog,
-):
-    caplog.set_level("WARNING")
-
-    class BrokenHeartbeatClient(FakeClient):
-        async def heartbeat(self, payload):
-            self.heartbeats.append(payload)
-            raise RuntimeError("heartbeat down")
-
-    client = BrokenHeartbeatClient(claimed_task=None)
-    worker = RunnerWorker(client=client, runner_id="runner-1", executor=None)
-
-    with pytest.raises(RuntimeError, match="heartbeat down"):
-        await worker.run_once()
-
-    record = next(
-        r
-        for r in caplog.records
-        if "runner heartbeat request failed" in r.message.lower()
     )
     assert record.runner_id == "runner-1"
 
