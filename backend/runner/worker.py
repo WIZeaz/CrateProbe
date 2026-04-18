@@ -16,6 +16,7 @@ class RunnerWorker:
         metrics_interval_seconds: float = 10.0,
         heartbeat_interval_seconds: float = 5.0,
         heartbeat_client_factory=None,
+        max_jobs: int = 1,
     ):
         self._client = client
         self._runner_id = runner_id
@@ -23,6 +24,8 @@ class RunnerWorker:
         self._metrics_interval_seconds = metrics_interval_seconds
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
         self._heartbeat_client_factory = heartbeat_client_factory
+        self._max_jobs = max_jobs
+        self._inflight_tasks: set[asyncio.Task] = set()
         self._is_executing = False
         self._last_metrics_sent_at = 0.0
 
@@ -66,6 +69,10 @@ class RunnerWorker:
                 pass
 
     async def run_once(self) -> bool:
+        self._inflight_tasks = {
+            task for task in self._inflight_tasks if not task.done()
+        }
+
         await self._send_metrics_if_due(force=True)
         try:
             await self._client.heartbeat({"runner_id": self._runner_id})
@@ -77,8 +84,17 @@ class RunnerWorker:
             )
             raise
 
+        if len(self._inflight_tasks) >= self._max_jobs:
+            return False
+
         try:
-            claimed = await self._client.claim({"runner_id": self._runner_id})
+            claimed = await self._client.claim(
+                {
+                    "runner_id": self._runner_id,
+                    "jobs": len(self._inflight_tasks),
+                    "max_jobs": self._max_jobs,
+                }
+            )
         except Exception as exc:
             logger.warning(
                 "runner claim request failed: %s",
@@ -92,8 +108,12 @@ class RunnerWorker:
         self._is_executing = True
         stop_event = threading.Event()
         heartbeat_thread = self._start_heartbeat_thread(stop_event)
+        execution_task = asyncio.create_task(
+            self._executor.execute_claimed_task(claimed)
+        )
+        self._inflight_tasks.add(execution_task)
         try:
-            await self._executor.execute_claimed_task(claimed)
+            await execution_task
         except Exception:
             logger.exception(
                 "runner executor failed",
@@ -105,6 +125,7 @@ class RunnerWorker:
             )
             raise
         finally:
+            self._inflight_tasks.discard(execution_task)
             self._is_executing = False
             stop_event.set()
             heartbeat_thread.join(timeout=5.0)

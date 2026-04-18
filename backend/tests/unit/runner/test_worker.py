@@ -1,7 +1,12 @@
 import asyncio
+import contextlib
+from pathlib import Path
+import sys
 import time
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from runner.worker import RunnerWorker
 
@@ -46,6 +51,45 @@ async def test_worker_heartbeats_when_idle():
     assert len(client.claims) == 1
     assert len(client.metrics) == 1
     assert client.events == []
+
+
+@pytest.mark.asyncio
+async def test_worker_claim_payload_includes_jobs_and_max_jobs():
+    client = FakeClient(claimed_task=None)
+    worker = RunnerWorker(
+        client=client, runner_id="runner-1", executor=None, max_jobs=3
+    )
+
+    did_work = await worker.run_once()
+
+    assert did_work is False
+    assert len(client.claims) == 1
+    assert client.claims[0] == {"runner_id": "runner-1", "jobs": 0, "max_jobs": 3}
+
+
+@pytest.mark.asyncio
+async def test_worker_skips_claim_when_local_capacity_full():
+    client = FakeClient(claimed_task=None)
+    worker = RunnerWorker(
+        client=client, runner_id="runner-1", executor=None, max_jobs=1
+    )
+
+    blocker = asyncio.Event()
+
+    async def hold_slot():
+        await blocker.wait()
+
+    inflight = asyncio.create_task(hold_slot())
+    worker._inflight_tasks.add(inflight)
+
+    did_work = await worker.run_once()
+
+    assert did_work is False
+    assert client.claims == []
+
+    inflight.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await inflight
 
 
 @pytest.mark.asyncio
