@@ -58,7 +58,26 @@ def test_config_uses_defaults_when_file_missing():
     assert config.log_file is True
     assert config.lease_ttl_seconds == 30
     assert config.runner_offline_seconds == 30
+    assert config.claim_max_jobs_hard_limit == 256
     assert config.admin_token == ""
+
+
+def test_config_defaults_claim_max_jobs_hard_limit_to_256():
+    config = Config.from_file("nonexistent.toml")
+
+    assert config.claim_max_jobs_hard_limit == 256
+
+
+def test_config_loads_claim_max_jobs_hard_limit_from_file(tmp_path):
+    config_file = tmp_path / "config.toml"
+    config_file.write_text("""
+[distributed]
+claim_max_jobs_hard_limit = 128
+""")
+
+    config = Config.from_file(str(config_file))
+
+    assert config.claim_max_jobs_hard_limit == 128
 
 
 def test_config_creates_workspace_directory(tmp_path):

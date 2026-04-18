@@ -20,6 +20,7 @@ file_path = "server.log"
 [distributed]
 lease_ttl_seconds = 30
 runner_offline_seconds = 30
+claim_max_jobs_hard_limit = 256
 
 [security]
 admin_token = ""

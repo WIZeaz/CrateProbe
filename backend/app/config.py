@@ -20,6 +20,7 @@ class Config:
     log_file_path: str = "server.log"
     lease_ttl_seconds: int = 30
     runner_offline_seconds: int = 30
+    claim_max_jobs_hard_limit: int = 256
     admin_token: str = ""
 
     @classmethod
@@ -49,6 +50,7 @@ class Config:
             log_file_path=logging_cfg.get("file_path", "server.log"),
             lease_ttl_seconds=distributed.get("lease_ttl_seconds", 30),
             runner_offline_seconds=distributed.get("runner_offline_seconds", 30),
+            claim_max_jobs_hard_limit=distributed.get("claim_max_jobs_hard_limit", 256),
             admin_token=security.get("admin_token", ""),
         )
 
