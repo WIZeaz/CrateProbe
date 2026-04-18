@@ -57,7 +57,7 @@ async function retryTask() {
 }
 
 async function handleTaskUpdate(data) {
-  if (data.task_id === parseInt(taskId.value)) {
+  if (data.id === parseInt(taskId.value)) {
     // Only update task metadata (status, counts, timestamps, etc.)
     // LogViewer component handles its own log updates independently via auto-refresh
     try {
