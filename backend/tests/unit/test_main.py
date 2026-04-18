@@ -306,3 +306,40 @@ def test_log_ingest_missing_task_logs_warning_with_fields(client, caplog):
     assert record.task_id == 999999
     assert record.log_type == "stdout"
     assert record.chunk_seq == 1
+
+
+def test_claim_invalid_jobs_warning_contains_runner_id(client, caplog):
+    caplog.set_level("WARNING")
+    runner_id, token = create_runner_and_token(client, "runner-claim-invalid-warning")
+
+    response = client.post(
+        f"/api/runners/{runner_id}/claim",
+        headers=auth_headers(token, request_id="req-claim-invalid-jobs"),
+        json={"jobs": 3, "max_jobs": 2},
+    )
+
+    assert response.status_code == 422
+    record = next(
+        r for r in caplog.records if "invalid claim payload" in r.message.lower()
+    )
+    assert record.runner_id == runner_id
+    assert record.jobs == 3
+    assert record.max_jobs == 2
+
+
+def test_claim_max_jobs_overflow_warning_contains_runner_id(client, caplog):
+    caplog.set_level("WARNING")
+    runner_id, token = create_runner_and_token(client, "runner-claim-overflow-warning")
+
+    response = client.post(
+        f"/api/runners/{runner_id}/claim",
+        headers=auth_headers(token, request_id="req-claim-overflow-max-jobs"),
+        json={"jobs": 0, "max_jobs": 257},
+    )
+
+    assert response.status_code == 422
+    record = next(
+        r for r in caplog.records if "max_jobs exceeds hard limit" in r.message.lower()
+    )
+    assert record.runner_id == runner_id
+    assert record.max_jobs == 257

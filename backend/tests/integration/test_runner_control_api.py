@@ -189,6 +189,62 @@ def test_claim_returns_204_when_runner_reports_capacity_full(client):
     assert task_response.json()["status"] == "pending"
 
 
+def test_claim_rejects_jobs_greater_than_max_jobs(client):
+    token = _create_runner(client, "runner-claim-invalid-jobs")
+
+    response = client.post(
+        "/api/runners/runner-claim-invalid-jobs/claim",
+        headers=_runner_headers(token),
+        json={"jobs": 2, "max_jobs": 1},
+    )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["detail"]
+        == "Invalid claim payload: jobs cannot exceed max_jobs"
+    )
+
+
+def test_claim_rejects_max_jobs_over_hard_limit(client):
+    token = _create_runner(client, "runner-claim-overflow-max-jobs")
+
+    response = client.post(
+        "/api/runners/runner-claim-overflow-max-jobs/claim",
+        headers=_runner_headers(token),
+        json={"jobs": 0, "max_jobs": 257},
+    )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["detail"]
+        == "Invalid claim payload: max_jobs exceeds hard limit"
+    )
+
+
+def test_claim_rejects_negative_jobs(client):
+    token = _create_runner(client, "runner-claim-negative-jobs")
+
+    response = client.post(
+        "/api/runners/runner-claim-negative-jobs/claim",
+        headers=_runner_headers(token),
+        json={"jobs": -1, "max_jobs": 1},
+    )
+
+    assert response.status_code == 422
+
+
+def test_claim_rejects_zero_max_jobs(client):
+    token = _create_runner(client, "runner-claim-zero-max-jobs")
+
+    response = client.post(
+        "/api/runners/runner-claim-zero-max-jobs/claim",
+        headers=_runner_headers(token),
+        json={"jobs": 0, "max_jobs": 0},
+    )
+
+    assert response.status_code == 422
+
+
 def test_claim_ignores_body_runner_id_and_uses_path_runner_id(client):
     token = _create_runner(client, "runner-claim-path-authoritative")
     _create_runner(client, "runner-body-ignored")

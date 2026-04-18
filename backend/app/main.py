@@ -101,8 +101,8 @@ class ClaimTaskResponse(BaseModel):
 
 class ClaimTaskRequest(BaseModel):
     runner_id: Optional[str] = None
-    jobs: int
-    max_jobs: int
+    jobs: int = Field(ge=0)
+    max_jobs: int = Field(ge=1)
 
 
 class RunnerTaskEventRequest(BaseModel):
@@ -647,6 +647,33 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         request: ClaimTaskRequest,
         _auth: None = Depends(require_runner_auth),
     ):
+        if request.max_jobs > config.claim_max_jobs_hard_limit:
+            logger.warning(
+                "invalid claim payload: max_jobs exceeds hard limit",
+                extra={
+                    "runner_id": runner_id,
+                    "max_jobs": request.max_jobs,
+                },
+            )
+            raise HTTPException(
+                status_code=422,
+                detail="Invalid claim payload: max_jobs exceeds hard limit",
+            )
+
+        if request.jobs > request.max_jobs:
+            logger.warning(
+                "invalid claim payload: jobs cannot exceed max_jobs",
+                extra={
+                    "runner_id": runner_id,
+                    "jobs": request.jobs,
+                    "max_jobs": request.max_jobs,
+                },
+            )
+            raise HTTPException(
+                status_code=422,
+                detail="Invalid claim payload: jobs cannot exceed max_jobs",
+            )
+
         if request.jobs >= request.max_jobs:
             return PlainTextResponse(status_code=204, content="")
 
