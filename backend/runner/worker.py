@@ -185,6 +185,12 @@ class RunnerWorker:
         thread = self._heartbeat_thread
         if thread is not None:
             thread.join(timeout=5.0)
+            if thread.is_alive():
+                logger.warning(
+                    "heartbeat thread did not stop within timeout",
+                    extra={"runner_id": self._runner_id},
+                )
+                return
 
         self._heartbeat_stop_event = None
         self._heartbeat_thread = None
@@ -219,9 +225,17 @@ class RunnerWorker:
                 if pending:
                     for task in pending:
                         task.cancel()
-                    await asyncio.shield(
-                        asyncio.gather(*pending, return_exceptions=True)
+                    _, still_pending = await asyncio.shield(
+                        asyncio.wait(pending, timeout=5.0)
                     )
+                    if still_pending:
+                        logger.warning(
+                            "shutdown timed out waiting for cancelled inflight tasks",
+                            extra={
+                                "runner_id": self._runner_id,
+                                "pending_tasks": len(still_pending),
+                            },
+                        )
                 self._inflight_tasks = {
                     task for task in self._inflight_tasks if not task.done()
                 }

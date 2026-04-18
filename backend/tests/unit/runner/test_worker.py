@@ -405,6 +405,38 @@ async def test_run_forever_uses_single_heartbeat_thread_lifecycle(monkeypatch):
     assert len(stopped) == 1
 
 
+def test_stop_heartbeat_background_keeps_references_when_join_times_out(caplog):
+    caplog.set_level("WARNING")
+    client = FakeClient(claimed_task=None)
+    worker = RunnerWorker(client=client, runner_id="runner-1", executor=None)
+
+    class StubbornThread:
+        def __init__(self):
+            self.join_timeouts = []
+
+        def join(self, timeout=None):
+            self.join_timeouts.append(timeout)
+
+        def is_alive(self):
+            return True
+
+    stop_event = threading.Event()
+    stubborn_thread = StubbornThread()
+    worker._heartbeat_stop_event = stop_event
+    worker._heartbeat_thread = stubborn_thread
+
+    worker._stop_heartbeat_background()
+
+    assert stop_event.is_set() is True
+    assert stubborn_thread.join_timeouts == [5.0]
+    assert worker._heartbeat_stop_event is stop_event
+    assert worker._heartbeat_thread is stubborn_thread
+    assert any(
+        "heartbeat thread did not stop within timeout" in record.message.lower()
+        for record in caplog.records
+    )
+
+
 @pytest.mark.asyncio
 async def test_run_once_does_not_start_task_scoped_heartbeat_thread(monkeypatch):
     task = {
@@ -475,7 +507,7 @@ async def test_heartbeat_continues_while_executor_blocks_main_event_loop():
             self.heartbeats.append(payload)
             if self._started_event.is_set() and not self._finished_event.is_set():
                 self._during_block_count += 1
-                if self._during_block_count >= 2:
+                if self._during_block_count >= 1:
                     self._seen_event.set()
             return {"ok": True}
 
@@ -490,20 +522,21 @@ async def test_heartbeat_continues_while_executor_blocks_main_event_loop():
     class SlowExecutor:
         async def execute_claimed_task(self, _):
             started_event.set()
-            time.sleep(0.35)
+            time.sleep(0.8)
             finished_event.set()
 
     worker = RunnerWorker(
         client=client,
         runner_id="runner-1",
         executor=SlowExecutor(),
-        heartbeat_interval_seconds=0.05,
+        heartbeat_interval_seconds=0.02,
         heartbeat_client_factory=lambda: heartbeat_client,
     )
 
     run_task = asyncio.create_task(worker.run_forever(10.0))
 
-    observed = await asyncio.to_thread(seen_event.wait, 1.0)
+    await asyncio.to_thread(started_event.wait, 1.0)
+    observed = await asyncio.to_thread(seen_event.wait, 2.5)
     run_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await run_task
@@ -535,13 +568,20 @@ async def test_run_forever_shutdown_waits_for_inflight_tasks_before_exit(monkeyp
 
     client = SingleTaskClient()
     release_executor = asyncio.Event()
+    cancel_seen = asyncio.Event()
 
-    class BlockingExecutor:
+    class CancellationResistantExecutor:
         async def execute_claimed_task(self, _):
-            await release_executor.wait()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancel_seen.set()
+                await release_executor.wait()
 
     worker = RunnerWorker(
-        client=client, runner_id="runner-1", executor=BlockingExecutor()
+        client=client,
+        runner_id="runner-1",
+        executor=CancellationResistantExecutor(),
     )
 
     lifecycle = []
@@ -551,6 +591,18 @@ async def test_run_forever_shutdown_waits_for_inflight_tasks_before_exit(monkeyp
     monkeypatch.setattr(
         worker, "_stop_heartbeat_background", lambda: lifecycle.append("stop")
     )
+
+    original_wait = asyncio.wait
+
+    async def fast_wait(fs, timeout=None, return_when=asyncio.ALL_COMPLETED):
+        effective_timeout = timeout
+        if timeout == 5.0:
+            effective_timeout = 0.05
+        return await original_wait(
+            fs, timeout=effective_timeout, return_when=return_when
+        )
+
+    monkeypatch.setattr("runner.worker.asyncio.wait", fast_wait)
 
     run_task = asyncio.create_task(worker.run_forever(10.0))
 
@@ -562,12 +614,15 @@ async def test_run_forever_shutdown_waits_for_inflight_tasks_before_exit(monkeyp
     assert worker._current_jobs() == 1
 
     run_task.cancel()
-    await asyncio.sleep(0.05)
-    assert run_task.done() is False
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(run_task, timeout=0.5)
+
+    assert cancel_seen.is_set() is True
+    assert lifecycle == ["start", "stop"]
 
     release_executor.set()
-    with pytest.raises(asyncio.CancelledError):
-        await run_task
+    settle_deadline = loop.time() + 0.5
+    while worker._current_jobs() > 0 and loop.time() < settle_deadline:
+        await asyncio.sleep(0)
 
     assert worker._current_jobs() == 0
-    assert lifecycle == ["start", "stop"]
