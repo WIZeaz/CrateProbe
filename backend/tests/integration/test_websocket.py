@@ -91,7 +91,9 @@ def test_websocket_task_update_event_contains_runner_id(client):
     )
     task_id = response.json()["task_id"]
     claim_resp = client.post(
-        f"/api/runners/{runner_id}/claim", headers=_runner_headers(token)
+        f"/api/runners/{runner_id}/claim",
+        headers=_runner_headers(token),
+        json={"jobs": 0, "max_jobs": 1},
     )
     lease_token = claim_resp.json()["lease_token"]
 
@@ -125,7 +127,9 @@ def test_websocket_dashboard_task_created_and_completed_events_include_runner_id
         assert "runner_id" in created_payload
 
         claim_resp = client.post(
-            f"/api/runners/{runner_id}/claim", headers=_runner_headers(token)
+            f"/api/runners/{runner_id}/claim",
+            headers=_runner_headers(token),
+            json={"jobs": 0, "max_jobs": 1},
         )
         assert claim_resp.status_code == 200
         lease_token = claim_resp.json()["lease_token"]
