@@ -85,11 +85,6 @@ export default {
     return response.data
   },
 
-  async getTaskRealtimeStats(taskId) {
-    const response = await api.get(`/tasks/${taskId}/stats`)
-    return response.data
-  },
-
   // Dashboard endpoints
   async getDashboardStats() {
     const response = await api.get('/dashboard/stats')

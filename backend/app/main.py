@@ -109,6 +109,11 @@ class RunnerTaskEventRequest(BaseModel):
     lease_token: str
     event_seq: int
     event_type: Literal["started", "progress", "completed", "failed"]
+    exit_code: Optional[int] = None
+    message: Optional[str] = None
+    case_count: Optional[int] = None
+    poc_count: Optional[int] = None
+    compile_failed: Optional[int] = None
 
 
 class RunnerTaskLogChunkRequest(BaseModel):
@@ -174,6 +179,16 @@ def _clear_task_logs(task: TaskRecord, config: Config) -> None:
         logger.info(
             "task log cleared for retry",
             extra={"task_id": task.id, "log_type": log_name, "path": str(log_path)},
+        )
+    # Also remove the testgen directory so stale counts do not persist
+    testgen_dir = Path(task.workspace_path) / "testgen"
+    if testgen_dir.exists():
+        import shutil
+
+        shutil.rmtree(testgen_dir)
+        logger.info(
+            "task testgen directory cleared for retry",
+            extra={"task_id": task.id, "path": str(testgen_dir)},
         )
 
 
@@ -737,6 +752,26 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                 },
             )
 
+        if applied and request.event_type in ("completed", "failed"):
+            db.update_task_status(
+                task_id,
+                (
+                    TaskStatus.COMPLETED
+                    if request.event_type == "completed"
+                    else TaskStatus.FAILED
+                ),
+                exit_code=request.exit_code,
+                message=request.message,
+            )
+            if request.case_count is not None or request.poc_count is not None:
+                db.update_task_counts(
+                    task_id,
+                    case_count=request.case_count,
+                    poc_count=request.poc_count,
+                )
+            if request.compile_failed is not None:
+                db.update_task_compile_failed(task_id, request.compile_failed)
+
         if applied:
             updated_task = db.get_task(task_id)
             if updated_task is not None:
@@ -815,32 +850,6 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
         await scheduler.cancel_task(task_id)
         return {"message": "Task cancelled"}
-
-    @app.get("/api/tasks/{task_id}/stats")
-    async def get_task_realtime_stats(task_id: int):
-        """Get real-time test case and POC counts from testgen directory"""
-        task = db.get_task(task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail="Task not found")
-
-        # Build testgen directory path
-        workspace_path = Path(task.workspace_path)
-        testgen_dir = workspace_path / "testgen"
-
-        case_count = 0
-        poc_count = 0
-
-        # Count test cases
-        tests_dir = testgen_dir / "tests"
-        if tests_dir.exists():
-            case_count = len([d for d in tests_dir.iterdir() if d.is_dir()])
-
-        # Count POCs
-        poc_dir = testgen_dir / "poc"
-        if poc_dir.exists():
-            poc_count = len([d for d in poc_dir.iterdir() if d.is_dir()])
-
-        return {"case_count": case_count, "poc_count": poc_count}
 
     @app.post("/api/tasks/{task_id}/retry", response_model=TaskResponse)
     async def retry_task(task_id: int):

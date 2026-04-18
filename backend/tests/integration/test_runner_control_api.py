@@ -264,6 +264,36 @@ def test_claim_ignores_body_runner_id_and_uses_path_runner_id(client):
     assert claim_response.json()["runner_id"] == "runner-claim-path-authoritative"
 
 
+def test_events_endpoint_persists_runner_counts_and_message(client):
+    task_id, token, lease_token = _create_and_claim_task(client, "runner-counts-1")
+
+    response = client.post(
+        f"/api/runners/runner-counts-1/tasks/{task_id}/events",
+        headers=_runner_headers(token),
+        json={
+            "lease_token": lease_token,
+            "event_seq": 1,
+            "event_type": "completed",
+            "exit_code": 0,
+            "message": "All tests passed",
+            "case_count": 42,
+            "poc_count": 7,
+            "compile_failed": 3,
+        },
+    )
+    assert response.status_code == 200
+
+    task_response = client.get(f"/api/tasks/{task_id}")
+    assert task_response.status_code == 200
+    data = task_response.json()
+    assert data["status"] == "completed"
+    assert data["exit_code"] == 0
+    assert data["message"] == "All tests passed"
+    assert data["case_count"] == 42
+    assert data["poc_count"] == 7
+    assert data["compile_failed"] == 3
+
+
 def test_events_endpoint_is_idempotent_for_duplicate_event_seq(client):
     task_id, token, lease_token = _create_and_claim_task(client, "runner-events-1")
 
@@ -277,7 +307,13 @@ def test_events_endpoint_is_idempotent_for_duplicate_event_seq(client):
     completed_response = client.post(
         f"/api/runners/runner-events-1/tasks/{task_id}/events",
         headers=_runner_headers(token),
-        json={"lease_token": lease_token, "event_seq": 2, "event_type": "completed"},
+        json={
+            "lease_token": lease_token,
+            "event_seq": 2,
+            "event_type": "completed",
+            "case_count": 10,
+            "poc_count": 2,
+        },
     )
     assert completed_response.status_code == 200
 
@@ -286,11 +322,17 @@ def test_events_endpoint_is_idempotent_for_duplicate_event_seq(client):
     before_data = before_duplicate.json()
     assert before_data["status"] == "completed"
     assert before_data["finished_at"] is not None
+    assert before_data["case_count"] == 10
 
     duplicate_response = client.post(
         f"/api/runners/runner-events-1/tasks/{task_id}/events",
         headers=_runner_headers(token),
-        json={"lease_token": lease_token, "event_seq": 2, "event_type": "failed"},
+        json={
+            "lease_token": lease_token,
+            "event_seq": 2,
+            "event_type": "failed",
+            "case_count": 99,
+        },
     )
     assert duplicate_response.status_code == 200
 
@@ -299,6 +341,7 @@ def test_events_endpoint_is_idempotent_for_duplicate_event_seq(client):
     after_data = after_duplicate.json()
     assert after_data["status"] == "completed"
     assert after_data["finished_at"] == before_data["finished_at"]
+    assert after_data["case_count"] == 10
 
 
 def test_logs_endpoint_ignores_duplicate_chunk_seq_and_writes_once(client):

@@ -12,11 +12,6 @@ const task = ref(null)
 const loading = ref(true)
 const error = ref(null)
 const cancelling = ref(false)
-const realtimeStats = ref({
-  case_count: 0,
-  poc_count: 0
-})
-let statsRefreshInterval = null
 
 const taskId = computed(() => route.params.id)
 
@@ -27,30 +22,6 @@ async function fetchTask() {
   } catch (err) {
     error.value = err.response?.data?.detail || err.message
     loading.value = false
-  }
-}
-
-async function fetchRealtimeStats() {
-  try {
-    const stats = await api.getTaskRealtimeStats(taskId.value)
-    realtimeStats.value = stats
-  } catch (err) {
-    // Silently fail if stats fetch fails
-    console.error('Failed to fetch realtime stats:', err)
-  }
-}
-
-function startStatsRefresh() {
-  // Refresh stats every 3 seconds
-  statsRefreshInterval = setInterval(() => {
-    fetchRealtimeStats()
-  }, 3000)
-}
-
-function stopStatsRefresh() {
-  if (statsRefreshInterval) {
-    clearInterval(statsRefreshInterval)
-    statsRefreshInterval = null
   }
 }
 
@@ -80,7 +51,6 @@ async function retryTask() {
     await api.retryTask(taskId.value)
     // Refresh task data to show reset state
     await fetchTask()
-    await fetchRealtimeStats()
   } catch (err) {
     alert('Failed to retry task: ' + (err.response?.data?.detail || err.message))
   }
@@ -131,15 +101,12 @@ function formatDuration(startStr, endStr) {
 
 onMounted(() => {
   fetchTask()
-  fetchRealtimeStats()
-  startStatsRefresh()
   websocket.connect(`/ws/tasks/${taskId.value}`)
   websocket.on('task_update', handleTaskUpdate)
   websocket.on('task_completed', handleTaskUpdate)
 })
 
 onUnmounted(() => {
-  stopStatsRefresh()
   websocket.off('task_update', handleTaskUpdate)
   websocket.off('task_completed', handleTaskUpdate)
 })
@@ -210,11 +177,11 @@ onUnmounted(() => {
         </div>
         <div class="bento-card">
           <p class="text-sm font-medium text-gray-600">Test Cases</p>
-          <p class="mt-2 text-2xl font-bold text-gray-900">{{ realtimeStats.case_count }}</p>
+          <p class="mt-2 text-2xl font-bold text-gray-900">{{ task.case_count ?? 0 }}</p>
         </div>
         <div class="bento-card">
           <p class="text-sm font-medium text-gray-600">POCs</p>
-          <p class="mt-2 text-2xl font-bold text-gray-900">{{ realtimeStats.poc_count }}</p>
+          <p class="mt-2 text-2xl font-bold text-gray-900">{{ task.poc_count ?? 0 }}</p>
         </div>
         <div class="bento-card">
           <p class="text-sm font-medium text-gray-600">Runtime</p>
