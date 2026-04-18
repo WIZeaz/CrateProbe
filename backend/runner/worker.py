@@ -3,11 +3,7 @@ import logging
 import threading
 
 import psutil
-
-try:
-    from runner.client import RunnerControlClient
-except ModuleNotFoundError:  # pragma: no cover - import context fallback for tests
-    RunnerControlClient = object
+from runner.client import RunnerControlClient
 
 logger = logging.getLogger(__name__)
 

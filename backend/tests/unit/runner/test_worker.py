@@ -1,16 +1,8 @@
 import asyncio
-import importlib.util
-from pathlib import Path
 import time
 
 import pytest
-
-_WORKER_PATH = Path(__file__).resolve().parents[3] / "runner" / "worker.py"
-_WORKER_SPEC = importlib.util.spec_from_file_location("runner_worker", _WORKER_PATH)
-assert _WORKER_SPEC is not None and _WORKER_SPEC.loader is not None
-_WORKER_MODULE = importlib.util.module_from_spec(_WORKER_SPEC)
-_WORKER_SPEC.loader.exec_module(_WORKER_MODULE)
-RunnerWorker = _WORKER_MODULE.RunnerWorker
+from runner.worker import RunnerWorker
 
 
 class FakeClient:
