@@ -10,7 +10,6 @@ from docker.errors import ImageNotFound, APIError
 from core.models import TaskStatus
 from core.models import ExecutionResult
 
-
 logger = logging.getLogger(__name__)
 
 

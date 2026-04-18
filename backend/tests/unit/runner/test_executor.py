@@ -148,8 +148,10 @@ async def test_executor_logs_lifecycle_boundaries(tmp_path, monkeypatch):
     class FakeReporter:
         def __init__(self, *args, **kwargs):
             pass
+
         async def run(self):
             pass
+
         def stop(self):
             return 2
 
@@ -220,8 +222,10 @@ async def test_executor_failure_logs_traceback(tmp_path, monkeypatch):
     class FakeReporter:
         def __init__(self, *args, **kwargs):
             pass
+
         async def run(self):
             pass
+
         def stop(self):
             return 2
 
