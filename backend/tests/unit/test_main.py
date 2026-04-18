@@ -322,6 +322,7 @@ def test_claim_invalid_jobs_warning_contains_runner_id(client, caplog):
     record = next(
         r for r in caplog.records if "invalid claim payload" in r.message.lower()
     )
+    assert record.request_id == "req-claim-invalid-jobs"
     assert record.runner_id == runner_id
     assert record.jobs == 3
     assert record.max_jobs == 2
@@ -341,5 +342,6 @@ def test_claim_max_jobs_overflow_warning_contains_runner_id(client, caplog):
     record = next(
         r for r in caplog.records if "max_jobs exceeds hard limit" in r.message.lower()
     )
+    assert record.request_id == "req-claim-overflow-max-jobs"
     assert record.runner_id == runner_id
     assert record.max_jobs == 257

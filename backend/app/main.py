@@ -645,12 +645,15 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     async def claim_task(
         runner_id: str,
         request: ClaimTaskRequest,
+        x_request_id: Optional[str] = Header(default=None, alias="X-Request-ID"),
         _auth: None = Depends(require_runner_auth),
     ):
+        request_id = _request_id_from_header(x_request_id)
         if request.max_jobs > config.claim_max_jobs_hard_limit:
             logger.warning(
                 "invalid claim payload: max_jobs exceeds hard limit",
                 extra={
+                    "request_id": request_id,
                     "runner_id": runner_id,
                     "max_jobs": request.max_jobs,
                 },
@@ -664,6 +667,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             logger.warning(
                 "invalid claim payload: jobs cannot exceed max_jobs",
                 extra={
+                    "request_id": request_id,
                     "runner_id": runner_id,
                     "jobs": request.jobs,
                     "max_jobs": request.max_jobs,
