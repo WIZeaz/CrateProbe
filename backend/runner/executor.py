@@ -42,7 +42,7 @@ class TaskExecutor:
         )
 
         workspace_dir = (
-            Path(self.config.workspace_dir) / f"{crate_name}-{crate_version}"
+            Path(self.config.workspace_dir) / "repos" / f"{crate_name}-{crate_version}"
         )
         logs_dir = Path(self.config.workspace_dir) / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
@@ -165,7 +165,7 @@ class TaskExecutor:
             await asyncio.to_thread(shutil.rmtree, workspace_dir)
         workspace_dir.mkdir(parents=True, exist_ok=True)
 
-        crate_file = workspace_dir.parent / "repos" / f"{crate_name}-{version}.crate"
+        crate_file = workspace_dir.parent / f"{crate_name}-{version}.crate"
         crate_file.parent.mkdir(parents=True, exist_ok=True)
         if crate_file.exists():
             crate_file.unlink()
@@ -180,9 +180,7 @@ class TaskExecutor:
             extra={"crate_name": crate_name, "version": version},
         )
 
-        temp_extract_dir = (
-            workspace_dir.parent / "repos" / f"_temp_{crate_name}-{version}"
-        )
+        temp_extract_dir = workspace_dir.parent / f"_temp_{crate_name}-{version}"
         temp_extract_dir.mkdir(parents=True, exist_ok=True)
         try:
             task_logger.info(
@@ -209,7 +207,7 @@ class TaskExecutor:
 
     async def _upload_logs(self, task_id: int, lease_token: str, workspace_dir: Path):
         upload_logger = logging.getLogger(__name__)
-        logs_dir = workspace_dir.parent / "logs"
+        logs_dir = Path(self.config.workspace_dir) / "logs"
         log_paths = [
             ("stdout", logs_dir / f"{task_id}-stdout.log"),
             ("stderr", logs_dir / f"{task_id}-stderr.log"),

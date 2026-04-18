@@ -29,16 +29,17 @@ def test_get_compile_failed_count(tmp_path):
 
 @pytest.mark.asyncio
 async def test_upload_logs_sends_all_log_types_with_chunk_seq(tmp_path):
-    workspace = tmp_path / "workspace"
-    logs_dir = workspace.parent / "logs"
+    workspace_root = tmp_path / "workspace"
+    task_workspace = workspace_root / "repos" / "test-crate-1.0.0"
+    logs_dir = workspace_root / "logs"
     logs_dir.mkdir(parents=True)
-    (workspace / "testgen").mkdir(parents=True)
+    (task_workspace / "testgen").mkdir(parents=True)
 
     (logs_dir / "1-stdout.log").write_text("stdout content")
     (logs_dir / "1-stderr.log").write_text("stderr content")
     (logs_dir / "1-runner.log").write_text("runner content")
-    (workspace / "testgen" / "miri_report.txt").write_text("miri content")
-    (workspace / "testgen" / "stats.yaml").write_text("stats content")
+    (task_workspace / "testgen" / "miri_report.txt").write_text("miri content")
+    (task_workspace / "testgen" / "stats.yaml").write_text("stats content")
 
     sent_chunks = []
 
@@ -48,7 +49,8 @@ async def test_upload_logs_sends_all_log_types_with_chunk_seq(tmp_path):
 
     executor = object.__new__(TaskExecutor)
     executor.client = FakeClient()
-    await executor._upload_logs(1, "lease-abc", workspace)
+    executor.config = type("Cfg", (), {"workspace_dir": str(workspace_root)})()
+    await executor._upload_logs(1, "lease-abc", task_workspace)
 
     log_types = [c[1] for c in sent_chunks]
     assert "stdout" in log_types
@@ -137,10 +139,11 @@ async def test_execute_claimed_task_does_not_block_event_loop_during_docker_prec
 
 @pytest.mark.asyncio
 async def test_executor_upload_logs_include_decisions(tmp_path, caplog):
-    workspace = tmp_path / "workspace"
-    logs_dir = workspace.parent / "logs"
+    workspace_root = tmp_path / "workspace"
+    task_workspace = workspace_root / "repos" / "test-crate-1.0.0"
+    logs_dir = workspace_root / "logs"
     logs_dir.mkdir(parents=True)
-    (workspace / "testgen").mkdir(parents=True)
+    (task_workspace / "testgen").mkdir(parents=True)
 
     (logs_dir / "7-stdout.log").write_text("stdout content")
     (logs_dir / "7-stderr.log").write_text("")
@@ -153,9 +156,10 @@ async def test_executor_upload_logs_include_decisions(tmp_path, caplog):
 
     executor = object.__new__(TaskExecutor)
     executor.client = FakeClient()
+    executor.config = type("Cfg", (), {"workspace_dir": str(workspace_root)})()
     caplog.set_level(logging.INFO, logger="runner.executor")
 
-    await executor._upload_logs(7, "lease-abc", workspace)
+    await executor._upload_logs(7, "lease-abc", task_workspace)
 
     assert sent_chunks
     assert any("log upload sent" in rec.message for rec in caplog.records)
