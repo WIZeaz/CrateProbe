@@ -322,9 +322,10 @@ onUnmounted(() => {
     </div>
 
     <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
-      <section class="bento-card xl:col-span-1">
+      <!-- Left: Create Runner -->
+      <section class="bento-card xl:col-span-1 flex flex-col">
         <h2 class="text-lg font-semibold text-gray-900 mb-4">Create Runner</h2>
-        <form @submit.prevent="createRunner" class="space-y-4">
+        <form @submit.prevent="createRunner" class="space-y-4 flex-1">
           <div>
             <label for="runner_id" class="block text-sm font-medium text-gray-700 mb-1">Runner ID *</label>
             <input
@@ -388,141 +389,139 @@ onUnmounted(() => {
             {{ creating ? 'Creating...' : 'Create Runner' }}
           </button>
         </form>
+
+        <section class="mt-4 pt-4 border-t border-gray-200" v-if="createdToken">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <h3 class="text-sm font-semibold text-gray-900">Runner token</h3>
+              <p class="text-xs text-gray-600 mt-0.5">Copy and save this now.</p>
+            </div>
+            <button
+              @click="createdToken = null"
+              type="button"
+              class="px-2 py-1 text-xs font-medium text-gray-700 bg-gray-100 rounded hover:bg-gray-200 transition-colors"
+            >
+              Dismiss
+            </button>
+          </div>
+
+          <div class="mt-2 p-2 rounded-lg border border-gray-200 bg-gray-50 font-mono text-xs break-all">
+            {{ createdToken }}
+          </div>
+
+          <div class="mt-2 flex items-center gap-2">
+            <button
+              @click="copyToken"
+              type="button"
+              class="px-3 py-1 text-xs font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors"
+            >
+              Copy Token
+            </button>
+            <span v-if="copySuccess" class="text-xs text-green-700">Copied</span>
+            <span v-else-if="copyError" class="text-xs text-red-700">{{ copyError }}</span>
+          </div>
+        </section>
       </section>
 
-      <section class="bento-card xl:col-span-2" v-if="createdToken">
-        <div class="flex items-start justify-between gap-4">
-          <div>
-            <h2 class="text-lg font-semibold text-gray-900">Runner token (one-time view)</h2>
-            <p class="text-sm text-gray-600 mt-1">
-              Copy and save this now. You will not be able to view it again.
-            </p>
-          </div>
-          <button
-            @click="createdToken = null"
-            type="button"
-            class="px-3 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
-          >
-            Dismiss
-          </button>
+      <!-- Right: Runner List -->
+      <section class="bento-card overflow-x-auto xl:col-span-2">
+        <h2 class="text-lg font-semibold text-gray-900 mb-4">Runner List</h2>
+
+        <div v-if="loading" class="flex justify-center py-10">
+          <div class="spinner border-blue-500"></div>
         </div>
 
-        <div class="mt-4 p-3 rounded-lg border border-gray-200 bg-gray-50 font-mono text-sm break-all">
-          {{ createdToken }}
+        <div v-else-if="error" class="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg text-sm">
+          {{ error }}
         </div>
 
-        <div class="mt-3 flex items-center gap-3">
-          <button
-            @click="copyToken"
-            type="button"
-            class="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors"
-          >
-            Copy Token
-          </button>
-          <span v-if="copySuccess" class="text-sm text-green-700">Copied to clipboard</span>
-          <span v-else-if="copyError" class="text-sm text-red-700">{{ copyError }}</span>
-          <span v-else class="text-sm text-gray-500">Use this token as `RUNNER_TOKEN`.</span>
+        <div v-else-if="runners.length === 0" class="text-center py-8 text-gray-500">
+          No runners yet. Create your first runner.
         </div>
+
+        <table v-else class="min-w-full divide-y divide-gray-200">
+          <thead class="bg-gray-50">
+            <tr>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Runner ID</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Seen</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Capacity</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tags</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Enabled</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-200">
+            <tr
+              v-for="runner in runners"
+              :key="runner.runner_id"
+              class="hover:bg-gray-50 transition-colors cursor-pointer"
+              @click="selectRunner(runner)"
+            >
+              <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">{{ runner.runner_id }}</td>
+              <td class="px-4 py-3 whitespace-nowrap">
+                <span
+                  class="status-badge"
+                  :class="{
+                    'status-running': runnerStatus(runner) === 'online',
+                    'status-failed': runnerStatus(runner) === 'offline',
+                    'status-cancelled': runnerStatus(runner) === 'disabled'
+                  }"
+                >
+                  {{ runnerStatus(runner) }}
+                </span>
+              </td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-600">{{ formatDate(runner.last_seen_at || runner.last_seen) }}</td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">{{ normalizeCapacity(runner.capacity_total) }}</td>
+              <td class="px-4 py-3 text-sm text-gray-700">
+                <div v-if="parseTags(runner.tags).length > 0" class="flex flex-wrap gap-1">
+                  <span
+                    v-for="tag in parseTags(runner.tags)"
+                    :key="`${runner.runner_id}-${tag}`"
+                    class="inline-flex items-center px-2 py-0.5 text-xs bg-blue-50 text-blue-700 rounded-full"
+                  >
+                    {{ tag }}
+                  </span>
+                </div>
+                <span v-else class="text-gray-400">-</span>
+              </td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm">
+                <span :class="runner.enabled ? 'text-green-700' : 'text-gray-500'">
+                  {{ runner.enabled ? 'yes' : 'no' }}
+                </span>
+              </td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm">
+                <div class="flex items-center gap-2">
+                  <button
+                    v-if="runner.enabled"
+                    @click.stop="disableRunner(runner)"
+                    :disabled="disablingRunnerId === runner.runner_id"
+                    class="px-3 py-1.5 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {{ disablingRunnerId === runner.runner_id ? 'Disabling...' : 'Disable' }}
+                  </button>
+                  <button
+                    v-else
+                    @click.stop="enableRunner(runner)"
+                    :disabled="enablingRunnerId === runner.runner_id"
+                    class="px-3 py-1.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {{ enablingRunnerId === runner.runner_id ? 'Enabling...' : 'Enable' }}
+                  </button>
+                  <button
+                    @click.stop="deleteRunner(runner)"
+                    :disabled="deletingRunnerId === runner.runner_id"
+                    class="px-3 py-1.5 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {{ deletingRunnerId === runner.runner_id ? 'Deleting...' : 'Delete' }}
+                  </button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </section>
     </div>
-
-    <section class="bento-card overflow-x-auto mt-6">
-      <h2 class="text-lg font-semibold text-gray-900 mb-4">Runner List</h2>
-
-      <div v-if="loading" class="flex justify-center py-10">
-        <div class="spinner border-blue-500"></div>
-      </div>
-
-      <div v-else-if="error" class="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg text-sm">
-        {{ error }}
-      </div>
-
-      <div v-else-if="runners.length === 0" class="text-center py-8 text-gray-500">
-        No runners yet. Create your first runner.
-      </div>
-
-      <table v-else class="min-w-full divide-y divide-gray-200">
-        <thead class="bg-gray-50">
-          <tr>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Runner ID</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Seen</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Capacity</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tags</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Enabled</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-gray-200">
-          <tr
-            v-for="runner in runners"
-            :key="runner.runner_id"
-            class="hover:bg-gray-50 transition-colors cursor-pointer"
-            @click="selectRunner(runner)"
-          >
-            <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">{{ runner.runner_id }}</td>
-            <td class="px-4 py-3 whitespace-nowrap">
-              <span
-                class="status-badge"
-                :class="{
-                  'status-running': runnerStatus(runner) === 'online',
-                  'status-failed': runnerStatus(runner) === 'offline',
-                  'status-cancelled': runnerStatus(runner) === 'disabled'
-                }"
-              >
-                {{ runnerStatus(runner) }}
-              </span>
-            </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-600">{{ formatDate(runner.last_seen_at || runner.last_seen) }}</td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">{{ normalizeCapacity(runner.capacity_total) }}</td>
-            <td class="px-4 py-3 text-sm text-gray-700">
-              <div v-if="parseTags(runner.tags).length > 0" class="flex flex-wrap gap-1">
-                <span
-                  v-for="tag in parseTags(runner.tags)"
-                  :key="`${runner.runner_id}-${tag}`"
-                  class="inline-flex items-center px-2 py-0.5 text-xs bg-blue-50 text-blue-700 rounded-full"
-                >
-                  {{ tag }}
-                </span>
-              </div>
-              <span v-else class="text-gray-400">-</span>
-            </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm">
-              <span :class="runner.enabled ? 'text-green-700' : 'text-gray-500'">
-                {{ runner.enabled ? 'yes' : 'no' }}
-              </span>
-            </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm">
-              <div class="flex items-center gap-2">
-                <button
-                  v-if="runner.enabled"
-                  @click.stop="disableRunner(runner)"
-                  :disabled="disablingRunnerId === runner.runner_id"
-                  class="px-3 py-1.5 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-                >
-                  {{ disablingRunnerId === runner.runner_id ? 'Disabling...' : 'Disable' }}
-                </button>
-                <button
-                  v-else
-                  @click.stop="enableRunner(runner)"
-                  :disabled="enablingRunnerId === runner.runner_id"
-                  class="px-3 py-1.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-                >
-                  {{ enablingRunnerId === runner.runner_id ? 'Enabling...' : 'Enable' }}
-                </button>
-                <button
-                  @click.stop="deleteRunner(runner)"
-                  :disabled="deletingRunnerId === runner.runner_id"
-                  class="px-3 py-1.5 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-                >
-                  {{ deletingRunnerId === runner.runner_id ? 'Deleting...' : 'Delete' }}
-                </button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </section>
 
     <section v-if="selectedRunner" class="bento-card mt-6">
       <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
@@ -583,21 +582,29 @@ onUnmounted(() => {
         No monitoring data yet
       </div>
 
-      <div v-else class="grid grid-cols-1 gap-4">
-        <div class="rounded-lg border border-gray-200 p-3">
-          <p class="text-sm font-medium text-gray-700 mb-2">CPU %</p>
+      <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div class="bg-gray-50 rounded-lg overflow-hidden">
+          <div class="px-3 pt-2">
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wider">CPU %</p>
+          </div>
           <RunnerMetricsChart :points="metricsSeries" field="cpu_percent" :max-y="100" stroke="#2563eb" />
         </div>
-        <div class="rounded-lg border border-gray-200 p-3">
-          <p class="text-sm font-medium text-gray-700 mb-2">Memory %</p>
+        <div class="bg-gray-50 rounded-lg overflow-hidden">
+          <div class="px-3 pt-2">
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wider">Memory %</p>
+          </div>
           <RunnerMetricsChart :points="metricsSeries" field="memory_percent" :max-y="100" stroke="#16a34a" />
         </div>
-        <div class="rounded-lg border border-gray-200 p-3">
-          <p class="text-sm font-medium text-gray-700 mb-2">Disk %</p>
+        <div class="bg-gray-50 rounded-lg overflow-hidden">
+          <div class="px-3 pt-2">
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wider">Disk %</p>
+          </div>
           <RunnerMetricsChart :points="metricsSeries" field="disk_percent" :max-y="100" stroke="#d97706" />
         </div>
-        <div class="rounded-lg border border-gray-200 p-3">
-          <p class="text-sm font-medium text-gray-700 mb-2">Active Tasks</p>
+        <div class="bg-gray-50 rounded-lg overflow-hidden">
+          <div class="px-3 pt-2">
+            <p class="text-xs font-medium text-gray-500 uppercase tracking-wider">Active Tasks</p>
+          </div>
           <RunnerMetricsChart :points="metricsSeries" field="active_tasks" :max-y="activeTasksMaxY" stroke="#7c3aed" />
         </div>
       </div>

@@ -41,10 +41,10 @@ const hoverPointer = ref(null)
 let resizeObserver = null
 
 const plot = {
-  left: 40,
-  right: width - 8,
-  top: 8,
-  bottom: height - 28,
+  left: 32,
+  right: width - 4,
+  top: 4,
+  bottom: height - 20,
 }
 
 plot.width = plot.right - plot.left
@@ -172,14 +172,21 @@ const hoverData = computed(() => {
 })
 
 function pointerToChartCoordinates(event) {
-  const rect = svgRef.value?.getBoundingClientRect()
-  if (!rect || rect.width <= 0 || rect.height <= 0) {
+  if (!svgRef.value) {
     return null
   }
 
-  const x = ((event.clientX - rect.left) / rect.width) * width
-  const y = ((event.clientY - rect.top) / rect.height) * height
-  return { x, y }
+  const pt = svgRef.value.createSVGPoint()
+  pt.x = event.clientX
+  pt.y = event.clientY
+
+  const ctm = svgRef.value.getScreenCTM()
+  if (!ctm) {
+    return null
+  }
+
+  const svgPt = pt.matrixTransform(ctm.inverse())
+  return { x: svgPt.x, y: svgPt.y }
 }
 
 function handleHoverMove(event) {
@@ -215,8 +222,6 @@ function clearHover() {
 
 <template>
   <svg ref="svgRef" :viewBox="`0 0 ${width} ${height}`" class="w-full h-32">
-    <rect x="0" y="0" :width="width" :height="height" fill="#f8fafc" rx="8" />
-
     <g v-for="tick in yTicks" :key="`y-${tick}`">
       <line
         :x1="plot.left"

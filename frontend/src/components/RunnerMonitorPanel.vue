@@ -25,6 +25,14 @@ function statusClass(status) {
   if (status === 'disabled') return 'status-cancelled'
   return 'status-pending'
 }
+
+function barColorClass(value) {
+  const num = Number(value)
+  if (Number.isNaN(num)) return 'bg-gray-300'
+  if (num >= 80) return 'bg-red-500'
+  if (num >= 50) return 'bg-yellow-500'
+  return 'bg-emerald-500'
+}
 </script>
 
 <template>
@@ -53,11 +61,50 @@ function statusClass(status) {
           <p class="text-sm font-semibold text-gray-900">{{ runner.runner_id }}</p>
           <span :class="['status-badge', statusClass(runner.health_status)]">{{ runner.health_status }}</span>
         </div>
-        <div class="grid grid-cols-2 gap-2 text-xs text-gray-700">
-          <div>CPU: {{ formatNumber(runner.latest_metrics?.cpu_percent) }}%</div>
-          <div>MEM: {{ formatNumber(runner.latest_metrics?.memory_percent) }}%</div>
-          <div>DISK: {{ formatNumber(runner.latest_metrics?.disk_percent) }}%</div>
-          <div>ACTIVE: {{ runner.latest_metrics?.active_tasks ?? '--' }}</div>
+        <div class="space-y-2 text-xs text-gray-700">
+          <div>
+            <div class="flex justify-between mb-0.5">
+              <span>CPU</span>
+              <span>{{ formatNumber(runner.latest_metrics?.cpu_percent) }}%</span>
+            </div>
+            <div class="w-full bg-gray-200 rounded-full h-1.5">
+              <div
+                class="h-1.5 rounded-full transition-all duration-500 ease-out"
+                :class="barColorClass(runner.latest_metrics?.cpu_percent)"
+                :style="{ width: Math.min(Number(runner.latest_metrics?.cpu_percent) || 0, 100) + '%' }"
+              ></div>
+            </div>
+          </div>
+          <div>
+            <div class="flex justify-between mb-0.5">
+              <span>MEM</span>
+              <span>{{ formatNumber(runner.latest_metrics?.memory_percent) }}%</span>
+            </div>
+            <div class="w-full bg-gray-200 rounded-full h-1.5">
+              <div
+                class="h-1.5 rounded-full transition-all duration-500 ease-out"
+                :class="barColorClass(runner.latest_metrics?.memory_percent)"
+                :style="{ width: Math.min(Number(runner.latest_metrics?.memory_percent) || 0, 100) + '%' }"
+              ></div>
+            </div>
+          </div>
+          <div>
+            <div class="flex justify-between mb-0.5">
+              <span>DISK</span>
+              <span>{{ formatNumber(runner.latest_metrics?.disk_percent) }}%</span>
+            </div>
+            <div class="w-full bg-gray-200 rounded-full h-1.5">
+              <div
+                class="h-1.5 rounded-full transition-all duration-500 ease-out"
+                :class="barColorClass(runner.latest_metrics?.disk_percent)"
+                :style="{ width: Math.min(Number(runner.latest_metrics?.disk_percent) || 0, 100) + '%' }"
+              ></div>
+            </div>
+          </div>
+          <div class="flex justify-between pt-0.5">
+            <span>ACTIVE</span>
+            <span class="font-medium">{{ runner.latest_metrics?.active_tasks ?? '--' }}</span>
+          </div>
         </div>
       </div>
     </div>
