@@ -75,19 +75,27 @@ async function createBatchTasks() {
   loading.value = true
   progress.value = { current: 0, total: parsed.length }
 
-  // Create tasks sequentially
-  for (let i = 0; i < parsed.length; i++) {
-    const { crate_name, version } = parsed[i]
-    try {
-      await api.createTask(crate_name, version)
-    } catch (err) {
-      // Log error but continue with remaining tasks
-      console.error(`Failed to create task for ${crate_name}:`, err)
-    }
-    progress.value.current = i + 1
+  const CONCURRENCY = 16
+
+  async function runBatch(batch) {
+    await Promise.all(
+      batch.map(async ({ crate_name, version }) => {
+        try {
+          await api.createTask(crate_name, version)
+        } catch (err) {
+          console.error(`Failed to create task for ${crate_name}:`, err)
+        }
+      })
+    )
   }
 
-  // Navigate to task list after completion
+  for (let i = 0; i < parsed.length; i += CONCURRENCY) {
+    const batch = parsed.slice(i, i + CONCURRENCY)
+    await runBatch(batch)
+    progress.value.current = Math.min(i + CONCURRENCY, parsed.length)
+  }
+
+  loading.value = false
   router.push('/tasks')
 }
 </script>
