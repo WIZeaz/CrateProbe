@@ -39,7 +39,7 @@ async def test_worker_sends_metrics_and_claims_when_idle():
     client = FakeClient(claimed_task=None)
     worker = RunnerWorker(client=client, runner_id="runner-1", executor=None)
 
-    did_work = await worker.run_once()
+    did_work = await worker.poll_and_schedule_one()
 
     assert did_work is False
     assert len(client.heartbeats) == 0
@@ -55,7 +55,7 @@ async def test_worker_claim_payload_includes_jobs_and_max_jobs():
         client=client, runner_id="runner-1", executor=None, max_jobs=3
     )
 
-    did_work = await worker.run_once()
+    did_work = await worker.poll_and_schedule_one()
 
     assert did_work is False
     assert len(client.claims) == 1
@@ -71,7 +71,7 @@ async def test_worker_skips_claim_when_local_capacity_full(monkeypatch):
 
     monkeypatch.setattr(worker, "_current_jobs", lambda: 1)
 
-    did_work = await worker.run_once()
+    did_work = await worker.poll_and_schedule_one()
 
     assert did_work is False
     assert client.claims == []
@@ -94,7 +94,7 @@ async def test_worker_claims_and_executes_task():
 
     worker = RunnerWorker(client=client, runner_id="runner-1", executor=FakeExecutor())
 
-    did_work = await worker.run_once()
+    did_work = await worker.poll_and_schedule_one()
 
     assert did_work is True
     loop = asyncio.get_running_loop()
@@ -147,9 +147,12 @@ async def test_worker_fills_multiple_slots_via_repeated_single_claims():
         max_jobs=2,
     )
 
-    did_work = await asyncio.wait_for(worker.run_once(), timeout=0.2)
+    did_work_1 = await asyncio.wait_for(worker.poll_and_schedule_one(), timeout=0.2)
+    assert did_work_1 is True
 
-    assert did_work is True
+    did_work_2 = await asyncio.wait_for(worker.poll_and_schedule_one(), timeout=0.2)
+    assert did_work_2 is True
+
     loop = asyncio.get_running_loop()
     deadline = loop.time() + 1.0
     while len(execution_started) < 2 and loop.time() < deadline:
@@ -169,7 +172,7 @@ async def test_worker_fills_multiple_slots_via_repeated_single_claims():
 
 
 @pytest.mark.asyncio
-async def test_worker_executor_failure_isolated_from_run_once():
+async def test_worker_executor_failure_isolated_from_poll_and_schedule_one():
     task = {
         "id": 9,
         "lease_token": "lease-9",
@@ -186,7 +189,7 @@ async def test_worker_executor_failure_isolated_from_run_once():
         client=client, runner_id="runner-1", executor=BrokenExecutor()
     )
 
-    did_work = await worker.run_once()
+    did_work = await worker.poll_and_schedule_one()
 
     assert did_work is True
     loop = asyncio.get_running_loop()
@@ -200,7 +203,7 @@ async def test_worker_executor_failure_isolated_from_run_once():
 
 
 @pytest.mark.asyncio
-async def test_worker_metrics_failure_does_not_break_run_once():
+async def test_worker_metrics_failure_does_not_break_poll_and_schedule_one():
     client = FakeClient(claimed_task=None)
 
     async def broken_send_metrics(_payload):
@@ -209,7 +212,7 @@ async def test_worker_metrics_failure_does_not_break_run_once():
     client.send_metrics = broken_send_metrics
     worker = RunnerWorker(client=client, runner_id="runner-1", executor=None)
 
-    did_work = await worker.run_once()
+    did_work = await worker.poll_and_schedule_one()
 
     assert did_work is False
 
@@ -225,7 +228,7 @@ async def test_worker_metrics_warning_contains_runner_id(caplog):
     client.send_metrics = broken_send_metrics
     worker = RunnerWorker(client=client, runner_id="runner-1", executor=None)
 
-    did_work = await worker.run_once()
+    did_work = await worker.poll_and_schedule_one()
 
     assert did_work is False
     record = next(
@@ -249,7 +252,7 @@ async def test_worker_claim_transport_failure_logs_warning_with_runner_id(caplog
     worker = RunnerWorker(client=client, runner_id="runner-1", executor=None)
 
     with pytest.raises(RuntimeError, match="claim down"):
-        await worker.run_once()
+        await worker.poll_and_schedule_one()
 
     record = next(
         r for r in caplog.records if "runner claim request failed" in r.message.lower()
@@ -276,7 +279,7 @@ async def test_worker_executor_failure_logs_traceback(caplog):
         client=client, runner_id="runner-1", executor=BrokenExecutor()
     )
 
-    did_work = await worker.run_once()
+    did_work = await worker.poll_and_schedule_one()
 
     assert did_work is True
     loop = asyncio.get_running_loop()
@@ -329,7 +332,7 @@ async def test_worker_metrics_payload_uses_disk_percent():
     client = FakeClient(claimed_task=None)
     worker = RunnerWorker(client=client, runner_id="runner-1", executor=None)
 
-    await worker.run_once()
+    await worker.poll_and_schedule_one()
 
     assert len(client.metrics) == 1
     payload = client.metrics[0]
@@ -348,7 +351,7 @@ async def test_run_forever_uses_single_heartbeat_thread_lifecycle(monkeypatch):
 
     started = []
     stopped = []
-    run_once_calls = []
+    poll_and_schedule_one_calls = []
 
     def fake_start_heartbeat_background():
         started.append(True)
@@ -356,8 +359,8 @@ async def test_run_forever_uses_single_heartbeat_thread_lifecycle(monkeypatch):
     def fake_stop_heartbeat_background():
         stopped.append(True)
 
-    async def fake_run_once():
-        run_once_calls.append(True)
+    async def fake_poll_and_schedule_one():
+        poll_and_schedule_one_calls.append(True)
         return False
 
     async def fake_sleep(_duration):
@@ -369,13 +372,13 @@ async def test_run_forever_uses_single_heartbeat_thread_lifecycle(monkeypatch):
     monkeypatch.setattr(
         worker, "_stop_heartbeat_background", fake_stop_heartbeat_background
     )
-    monkeypatch.setattr(worker, "run_once", fake_run_once)
+    monkeypatch.setattr(worker, "poll_and_schedule_one", fake_poll_and_schedule_one)
     monkeypatch.setattr("runner.worker.asyncio.sleep", fake_sleep)
 
     with pytest.raises(RuntimeError, match="stop-loop"):
         await worker.run_forever(1.0)
 
-    assert len(run_once_calls) == 1
+    assert len(poll_and_schedule_one_calls) == 1
     assert len(started) == 1
     assert len(stopped) == 1
 
@@ -413,7 +416,9 @@ def test_stop_heartbeat_background_keeps_references_when_join_times_out(caplog):
 
 
 @pytest.mark.asyncio
-async def test_run_once_does_not_start_task_scoped_heartbeat_thread(monkeypatch):
+async def test_poll_and_schedule_one_does_not_start_task_scoped_heartbeat_thread(
+    monkeypatch,
+):
     task = {
         "id": 77,
         "lease_token": "lease-77",
@@ -438,7 +443,7 @@ async def test_run_once_does_not_start_task_scoped_heartbeat_thread(monkeypatch)
             ),
         )
 
-    did_work = await worker.run_once()
+    did_work = await worker.poll_and_schedule_one()
 
     assert did_work is True
     loop = asyncio.get_running_loop()

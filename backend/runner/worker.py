@@ -55,7 +55,7 @@ class RunnerWorker:
                 extra={"runner_id": self._runner_id},
             )
 
-    async def run_once(self) -> bool:
+    async def poll_and_schedule_one(self) -> bool:
         self._inflight_tasks = {
             task for task in self._inflight_tasks if not task.done()
         }
@@ -66,35 +66,30 @@ class RunnerWorker:
         if not self._has_capacity():
             return False
 
-        did_schedule = False
-        while self._has_capacity():
-            try:
-                claimed = await self._client.claim(
-                    {
-                        "runner_id": self._runner_id,
-                        "jobs": self._current_jobs(),
-                        "max_jobs": self._max_jobs,
-                    }
-                )
-            except Exception as exc:
-                logger.warning(
-                    "runner claim request failed: %s",
-                    exc,
-                    extra={"runner_id": self._runner_id},
-                )
-                raise
-            if claimed is None:
-                break
-
-            execution_task = asyncio.create_task(
-                self._execute_claimed_task_safe(claimed)
+        try:
+            claimed = await self._client.claim(
+                {
+                    "runner_id": self._runner_id,
+                    "jobs": self._current_jobs(),
+                    "max_jobs": self._max_jobs,
+                }
             )
-            self._inflight_tasks.add(execution_task)
-            self._is_executing = True
-            execution_task.add_done_callback(self._on_execution_task_done)
-            did_schedule = True
+        except Exception as exc:
+            logger.warning(
+                "runner claim request failed: %s",
+                exc,
+                extra={"runner_id": self._runner_id},
+            )
+            raise
+        if claimed is None:
+            return False
 
-        return did_schedule
+        execution_task = asyncio.create_task(self._execute_claimed_task_safe(claimed))
+        self._inflight_tasks.add(execution_task)
+        self._is_executing = True
+        execution_task.add_done_callback(self._on_execution_task_done)
+
+        return True
 
     def _on_execution_task_done(self, task: asyncio.Task) -> None:
         self._inflight_tasks.discard(task)
@@ -193,7 +188,7 @@ class RunnerWorker:
         self._start_heartbeat_background()
         try:
             while True:
-                did_work = await self.run_once()
+                did_work = await self.poll_and_schedule_one()
                 if not did_work:
                     await asyncio.sleep(poll_interval_seconds)
         finally:
