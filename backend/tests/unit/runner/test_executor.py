@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.models import TaskStatus
+from runner.crates_api import CratesAPI
 from runner.executor import TaskExecutor
 from runner.reporter import TaskReporter
 
@@ -30,7 +31,7 @@ def test_get_compile_failed_count(tmp_path):
 
 @pytest.mark.asyncio
 async def test_execute_claimed_task_does_not_block_event_loop_during_docker_prechecks(
-    tmp_path,
+    tmp_path, monkeypatch
 ):
     class FakeClient:
         async def send_event(self, task_id, payload):
@@ -40,30 +41,46 @@ async def test_execute_claimed_task_does_not_block_event_loop_during_docker_prec
             return {"appended": True}
 
     class FakeDocker:
-        def is_available(self):
-            time.sleep(0.4)
+        async def is_available(self):
+            await asyncio.sleep(0.4)
             return True
 
-        def ensure_image(self, _pull_policy):
-            time.sleep(0.4)
+        async def ensure_image(self, _pull_policy):
+            await asyncio.sleep(0.4)
             return True
+
+        async def ensure_workspace_ownership(self, _workspace):
+            return None
 
         async def run(self, command, workspace_dir, stdout_log, stderr_log):
             return SimpleNamespace(
                 state=SimpleNamespace(value="completed"), exit_code=0, message=""
             )
 
+        async def close(self):
+            pass
+
     class FakeConfig:
         workspace_dir = str(tmp_path / "workspace")
         docker_pull_policy = "if-not-present"
         docker_image = "rust:test"
+        log_flush_interval_seconds = 3.0
+        log_sync_interval_seconds = 2.0
+        max_memory_gb = 8
+        max_runtime_seconds = 10
+        max_cpus = 2
+        docker_mounts = []
+
+    monkeypatch.setattr("runner.executor.DockerRunner", lambda **kwargs: FakeDocker())
 
     executor = object.__new__(TaskExecutor)
     executor.config = FakeConfig()
     executor.client = FakeClient()
-    executor.docker = FakeDocker()
+    executor.crates_api = object.__new__(CratesAPI)
 
-    async def noop_prepare_workspace(workspace_dir, crate_name, version, task_logger):
+    async def noop_prepare_workspace(
+        workspace_dir, crate_name, version, task_logger, docker
+    ):
         return None
 
     executor._prepare_workspace = noop_prepare_workspace
@@ -110,6 +127,8 @@ async def test_executor_logs_lifecycle_boundaries(tmp_path, monkeypatch):
             "max_cpus": 2,
             "docker_mounts": [],
             "docker_pull_policy": "if-not-present",
+            "log_flush_interval_seconds": 3.0,
+            "log_sync_interval_seconds": 2.0,
         },
     )()
 
@@ -124,13 +143,13 @@ async def test_executor_logs_lifecycle_boundaries(tmp_path, monkeypatch):
             return None
 
     class FakeDocker:
-        def is_available(self):
+        async def is_available(self):
             return True
 
-        def ensure_image(self, _policy):
+        async def ensure_image(self, _policy):
             return True
 
-        def ensure_workspace_ownership(self, _workspace):
+        async def ensure_workspace_ownership(self, _workspace):
             return None
 
         async def run(self, *_args, **_kwargs):
@@ -140,8 +159,11 @@ async def test_executor_logs_lifecycle_boundaries(tmp_path, monkeypatch):
                 {"state": TaskStatus.COMPLETED, "exit_code": 0, "message": ""},
             )()
 
+        async def close(self):
+            pass
+
     async def fake_prepare_workspace(
-        self, workspace_dir, _crate_name, _version, _logger
+        self, workspace_dir, _crate_name, _version, _logger, _docker
     ):
         workspace_dir.mkdir(parents=True, exist_ok=True)
 
@@ -156,9 +178,9 @@ async def test_executor_logs_lifecycle_boundaries(tmp_path, monkeypatch):
             return 2
 
     monkeypatch.setattr("runner.executor.TaskReporter", FakeReporter)
+    monkeypatch.setattr("runner.executor.DockerRunner", lambda **kwargs: FakeDocker())
 
     executor = TaskExecutor(config=config, client=FakeClient())
-    executor.docker = FakeDocker()
     monkeypatch.setattr(TaskExecutor, "_prepare_workspace", fake_prepare_workspace)
 
     claimed = {
@@ -191,6 +213,8 @@ async def test_executor_failure_logs_traceback(tmp_path, monkeypatch):
             "max_cpus": 2,
             "docker_mounts": [],
             "docker_pull_policy": "if-not-present",
+            "log_flush_interval_seconds": 3.0,
+            "log_sync_interval_seconds": 2.0,
         },
     )()
 
@@ -202,20 +226,23 @@ async def test_executor_failure_logs_traceback(tmp_path, monkeypatch):
             return None
 
     class BrokenDocker:
-        def is_available(self):
+        async def is_available(self):
             return True
 
-        def ensure_image(self, _policy):
+        async def ensure_image(self, _policy):
             return True
 
-        def ensure_workspace_ownership(self, _workspace):
+        async def ensure_workspace_ownership(self, _workspace):
             return None
 
         async def run(self, *_args, **_kwargs):
             raise RuntimeError("docker boom")
 
+        async def close(self):
+            pass
+
     async def fake_prepare_workspace(
-        self, workspace_dir, _crate_name, _version, _logger
+        self, workspace_dir, _crate_name, _version, _logger, _docker
     ):
         workspace_dir.mkdir(parents=True, exist_ok=True)
 
@@ -230,9 +257,9 @@ async def test_executor_failure_logs_traceback(tmp_path, monkeypatch):
             return 2
 
     monkeypatch.setattr("runner.executor.TaskReporter", FakeReporter)
+    monkeypatch.setattr("runner.executor.DockerRunner", lambda **kwargs: BrokenDocker())
 
     executor = TaskExecutor(config=config, client=FakeClient())
-    executor.docker = BrokenDocker()
     monkeypatch.setattr(TaskExecutor, "_prepare_workspace", fake_prepare_workspace)
 
     claimed = {
@@ -248,3 +275,107 @@ async def test_executor_failure_logs_traceback(tmp_path, monkeypatch):
     content = runner_log.read_text()
     assert "task execution failed" in content
     assert "Traceback" in content
+
+
+@pytest.mark.asyncio
+async def test_multiple_tasks_run_containers_concurrently(tmp_path, monkeypatch):
+    """When max_jobs > 1, containers should run in parallel without a global lock."""
+    config = type(
+        "Cfg",
+        (),
+        {
+            "workspace_dir": str(tmp_path),
+            "docker_image": "rust:test",
+            "max_memory_gb": 8,
+            "max_runtime_seconds": 10,
+            "max_cpus": 2,
+            "docker_mounts": [],
+            "docker_pull_policy": "if-not-present",
+            "log_flush_interval_seconds": 3.0,
+            "log_sync_interval_seconds": 2.0,
+        },
+    )()
+
+    class FakeClient:
+        async def send_event(self, *_args, **_kwargs):
+            return None
+
+        async def send_log_chunk(self, *_args, **_kwargs):
+            return None
+
+    active_runs = 0
+    max_active_runs = 0
+    run_lock = asyncio.Lock()
+
+    class ConcurrentTrackingDocker:
+        async def is_available(self):
+            return True
+
+        async def ensure_image(self, _policy):
+            return True
+
+        async def ensure_workspace_ownership(self, _workspace):
+            return None
+
+        async def run(self, *_args, **_kwargs):
+            nonlocal active_runs, max_active_runs
+            async with run_lock:
+                active_runs += 1
+                max_active_runs = max(max_active_runs, active_runs)
+            await asyncio.sleep(0.2)
+            async with run_lock:
+                active_runs -= 1
+            return type(
+                "Result",
+                (),
+                {"state": TaskStatus.COMPLETED, "exit_code": 0, "message": ""},
+            )()
+
+        async def close(self):
+            pass
+
+    async def fake_prepare_workspace(
+        self, workspace_dir, _crate_name, _version, _logger, _docker
+    ):
+        workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    class FakeReporter:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def run(self):
+            pass
+
+        def stop(self):
+            return 2
+
+    monkeypatch.setattr("runner.executor.TaskReporter", FakeReporter)
+    monkeypatch.setattr(
+        "runner.executor.DockerRunner", lambda **kwargs: ConcurrentTrackingDocker()
+    )
+
+    executor = TaskExecutor(config=config, client=FakeClient())
+    monkeypatch.setattr(TaskExecutor, "_prepare_workspace", fake_prepare_workspace)
+
+    claimed_a = {
+        "id": 20,
+        "lease_token": "lease-20",
+        "crate_name": "serde",
+        "version": "1.0.0",
+    }
+    claimed_b = {
+        "id": 21,
+        "lease_token": "lease-21",
+        "crate_name": "tokio",
+        "version": "1.0.0",
+    }
+
+    await asyncio.gather(
+        executor.execute_claimed_task(claimed_a),
+        executor.execute_claimed_task(claimed_b),
+    )
+
+    assert max_active_runs == 2, (
+        f"Expected 2 concurrent container runs, but max was {max_active_runs}. "
+        "Docker calls may be serialized by a global lock."
+    )

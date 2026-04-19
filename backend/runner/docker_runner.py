@@ -74,7 +74,11 @@ async def _sync_logs_periodically(
 
 
 class DockerRunner:
-    """Execute tasks in Docker containers with resource limits"""
+    """Execute tasks in Docker containers with resource limits.
+
+    Each task should create its own DockerRunner instance to avoid
+    shared-state issues when running multiple containers concurrently.
+    """
 
     def __init__(
         self,
@@ -100,7 +104,26 @@ class DockerRunner:
             self._client = docker.from_env()
         return self._client
 
-    def ensure_image(self, pull_policy: str = "if-not-present") -> bool:
+    async def close(self) -> None:
+        """Close the underlying Docker client and release connections."""
+        if self._client is not None:
+            await asyncio.to_thread(self._client.close)
+            self._client = None
+
+    async def is_available(self) -> bool:
+        """Check if Docker is available on this system"""
+        return await asyncio.to_thread(self._is_available_sync)
+
+    def _is_available_sync(self) -> bool:
+        if not shutil.which("docker"):
+            return False
+        try:
+            self.client.ping()
+            return True
+        except Exception:
+            return False
+
+    async def ensure_image(self, pull_policy: str = "if-not-present") -> bool:
         """
         Ensure the Docker image is available locally.
 
@@ -110,6 +133,9 @@ class DockerRunner:
         Returns:
             True if image is available, False otherwise
         """
+        return await asyncio.to_thread(self._ensure_image_sync, pull_policy)
+
+    def _ensure_image_sync(self, pull_policy: str) -> bool:
         if pull_policy == "always":
             self.client.images.pull(self.image)
             return True
@@ -144,8 +170,11 @@ class DockerRunner:
             "cpu_period": 100000,
         }
 
-    def _ensure_workspace_ownership(self, workspace_dir: Path) -> None:
+    async def ensure_workspace_ownership(self, workspace_dir: Path) -> None:
         """Normalize bind-mounted workspace ownership back to host user."""
+        await asyncio.to_thread(self._ensure_workspace_ownership_sync, workspace_dir)
+
+    def _ensure_workspace_ownership_sync(self, workspace_dir: Path) -> None:
         uid_gid = f"{os.getuid()}:{os.getgid()}"
         self.client.containers.run(
             image=self.image,
@@ -157,10 +186,6 @@ class DockerRunner:
             stdout=True,
             stderr=True,
         )
-
-    def ensure_workspace_ownership(self, workspace_dir: Path) -> None:
-        """Normalize bind-mounted workspace ownership back to host user."""
-        self._ensure_workspace_ownership(workspace_dir)
 
     async def run(
         self,
@@ -234,7 +259,8 @@ class DockerRunner:
             stderr_log.unlink()
 
         try:
-            container = self.client.containers.run(
+            container = await asyncio.to_thread(
+                self._run_container_sync,
                 image=self.image,
                 command=wrapped_command,
                 working_dir="/workspace",
@@ -288,20 +314,13 @@ class DockerRunner:
                         "workspace": str(workspace_dir),
                     },
                 )
-                try:
-                    container.stop(timeout=5)
-                except Exception:
-                    try:
-                        container.kill()
-                    except Exception:
-                        pass
+                await asyncio.to_thread(self._stop_container_sync, container)
                 raise  # Re-raise to propagate cancellation
             except asyncio.TimeoutError:
                 # Execution time limit reached - stop the container
-                try:
-                    container.stop(timeout=10)
-                except Exception:
-                    container.kill()  # Force kill if it doesn't stop gracefully
+                await asyncio.to_thread(
+                    self._stop_container_sync, container, timeout=10
+                )
                 duration_ms = int((time.monotonic() - started_at) * 1000)
                 logger.error(
                     "container execution timed out",
@@ -403,22 +422,28 @@ class DockerRunner:
             _sync_log_incremental(source_stderr, stderr_log)
 
             if container is not None:
-                try:
-                    container.remove(force=True)
-                except Exception:
-                    pass
+                await asyncio.to_thread(self._remove_container_sync, container)
             try:
-                self._ensure_workspace_ownership(workspace_dir)
+                await asyncio.to_thread(
+                    self._ensure_workspace_ownership_sync, workspace_dir
+                )
             except Exception:
                 pass
 
-    def is_available(self) -> bool:
-        """Check if Docker is available on this system"""
-        if not shutil.which("docker"):
-            return False
+    def _run_container_sync(self, **kwargs):
+        return self.client.containers.run(**kwargs)
 
+    def _stop_container_sync(self, container, timeout: int = 5) -> None:
         try:
-            self.client.ping()
-            return True
+            container.stop(timeout=timeout)
         except Exception:
-            return False
+            try:
+                container.kill()
+            except Exception:
+                pass
+
+    def _remove_container_sync(self, container) -> None:
+        try:
+            container.remove(force=True)
+        except Exception:
+            pass

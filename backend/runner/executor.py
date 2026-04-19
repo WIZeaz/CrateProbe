@@ -20,14 +20,6 @@ class TaskExecutor:
         self.config = config
         self.client = client
         self.crates_api = CratesAPI()
-        self.docker = DockerRunner(
-            image=config.docker_image,
-            max_memory_gb=config.max_memory_gb,
-            max_runtime_seconds=config.max_runtime_seconds,
-            max_cpus=config.max_cpus,
-            mounts=config.docker_mounts,
-            log_sync_interval_seconds=config.log_sync_interval_seconds,
-        )
 
     async def close(self):
         await self.crates_api.close()
@@ -37,6 +29,17 @@ class TaskExecutor:
         lease_token = claimed["lease_token"]
         crate_name = claimed["crate_name"]
         crate_version = claimed["version"]
+
+        # Each task gets its own DockerRunner to avoid shared-state issues
+        # when running multiple containers concurrently.
+        docker = DockerRunner(
+            image=self.config.docker_image,
+            max_memory_gb=self.config.max_memory_gb,
+            max_runtime_seconds=self.config.max_runtime_seconds,
+            max_cpus=self.config.max_cpus,
+            mounts=self.config.docker_mounts,
+            log_sync_interval_seconds=self.config.log_sync_interval_seconds,
+        )
 
         await self.client.send_event(
             task_id,
@@ -86,18 +89,16 @@ class TaskExecutor:
         try:
             task_logger.info("task started", extra=task_ctx)
 
-            if not await asyncio.to_thread(self.docker.is_available):
+            if not await docker.is_available():
                 raise RuntimeError("Docker is not available")
 
-            if not await asyncio.to_thread(
-                self.docker.ensure_image, self.config.docker_pull_policy
-            ):
+            if not await docker.ensure_image(self.config.docker_pull_policy):
                 raise RuntimeError(
                     f"Docker image {self.config.docker_image} is not available"
                 )
 
             await self._prepare_workspace(
-                workspace_dir, crate_name, crate_version, task_logger
+                workspace_dir, crate_name, crate_version, task_logger, docker
             )
 
             cmd = ["cargo", "rapx", f"--test-crate={crate_name}", "test"]
@@ -106,7 +107,7 @@ class TaskExecutor:
                 extra={**task_ctx, "command_summary": " ".join(cmd)},
             )
 
-            result = await self.docker.run(
+            result = await docker.run(
                 command=cmd,
                 workspace_dir=workspace_dir,
                 stdout_log=stdout_log,
@@ -175,14 +176,18 @@ class TaskExecutor:
             task_logger.info("task runner log closed", extra=task_ctx)
             task_logger.removeHandler(handler)
             handler.close()
+            await docker.close()
 
     async def _prepare_workspace(
-        self, workspace_dir: Path, crate_name: str, version: str, task_logger
+        self,
+        workspace_dir: Path,
+        crate_name: str,
+        version: str,
+        task_logger,
+        docker: DockerRunner,
     ):
         if workspace_dir.exists():
-            await asyncio.to_thread(
-                self.docker.ensure_workspace_ownership, workspace_dir
-            )
+            await docker.ensure_workspace_ownership(workspace_dir)
             await asyncio.to_thread(shutil.rmtree, workspace_dir)
         workspace_dir.mkdir(parents=True, exist_ok=True)
 

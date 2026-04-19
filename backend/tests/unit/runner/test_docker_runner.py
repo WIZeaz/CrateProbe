@@ -108,18 +108,20 @@ async def test_run_includes_workspace_and_configured_mounts(tmp_path):
         assert result.state == TaskStatus.COMPLETED
 
 
-def test_ensure_image_with_if_not_present_policy(docker_runner):
+@pytest.mark.asyncio
+async def test_ensure_image_with_if_not_present_policy(docker_runner):
     """Test image check with if-not-present policy"""
     with patch("docker.from_env") as mock_docker:
         mock_client = Mock()
         mock_client.images.get.return_value = Mock(tags=["rust:test"])
         mock_docker.return_value = mock_client
 
-        result = docker_runner.ensure_image("if-not-present")
+        result = await docker_runner.ensure_image("if-not-present")
         assert result is True
 
 
-def test_ensure_image_pulls_when_missing(docker_runner):
+@pytest.mark.asyncio
+async def test_ensure_image_pulls_when_missing(docker_runner):
     """Test image is pulled when not present"""
     with patch("docker.from_env") as mock_docker:
         mock_client = Mock()
@@ -127,7 +129,7 @@ def test_ensure_image_pulls_when_missing(docker_runner):
         mock_client.images.pull.return_value = Mock()
         mock_docker.return_value = mock_client
 
-        result = docker_runner.ensure_image("if-not-present")
+        result = await docker_runner.ensure_image("if-not-present")
         assert result is True
         mock_client.images.pull.assert_called_once_with("rust:test")
 
@@ -251,7 +253,9 @@ async def test_run_reconciles_workspace_ownership_after_execution(
         stdout_log = tmp_path / "stdout.log"
         stderr_log = tmp_path / "stderr.log"
 
-        with patch.object(docker_runner, "_ensure_workspace_ownership") as mock_fix:
+        with patch.object(
+            docker_runner, "_ensure_workspace_ownership_sync"
+        ) as mock_fix:
             await docker_runner.run(
                 command=["cargo", "rapx"],
                 workspace_dir=workspace,
