@@ -6,6 +6,7 @@ import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
 import api from '../services/api'
 import websocket from '../services/websocket'
 import RunnerIdBadge from '../components/RunnerIdBadge.vue'
+import { filterTasksByCrateName } from './taskListFilters'
 
 const router = useRouter()
 const route = useRoute()
@@ -13,6 +14,7 @@ const tasks = ref([])
 const loading = ref(true)
 const error = ref(null)
 const filterStatus = ref('all')
+const searchCrateName = ref('')
 const sortColumn = ref('created_at')
 const sortDirection = ref('desc')
 const selectedIds = ref(new Set())
@@ -36,6 +38,8 @@ const filteredAndSortedTasks = computed(() => {
   if (filterStatus.value !== 'all') {
     result = result.filter(task => task.status === filterStatus.value)
   }
+
+  result = filterTasksByCrateName(result, searchCrateName.value)
 
   // Sort
   result = [...result].sort((a, b) => {
@@ -262,7 +266,7 @@ onUnmounted(() => {
 
     <!-- Filter + Batch Actions -->
     <div class="mb-6 flex items-center justify-between">
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-4">
         <label for="filter" class="text-sm font-medium text-gray-700">Filter by status:</label>
         <select
           id="filter"
@@ -273,6 +277,15 @@ onUnmounted(() => {
             {{ option.label }}
           </option>
         </select>
+
+        <label for="crate-search" class="text-sm font-medium text-gray-700">Search crate:</label>
+        <input
+          id="crate-search"
+          v-model="searchCrateName"
+          type="text"
+          placeholder="e.g. serde"
+          class="w-56 px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+        />
       </div>
 
       <!-- Batch action toolbar -->
