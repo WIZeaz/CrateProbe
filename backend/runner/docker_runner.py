@@ -97,6 +97,9 @@ class DockerRunner:
         self.mounts = mounts or []
         self.log_sync_interval_seconds = log_sync_interval_seconds
         self._client: Optional[docker.DockerClient] = None
+        self._run_command_summary: Optional[str] = None
+        self._run_workspace: Optional[Path] = None
+        self._run_started_at: Optional[float] = None
 
     @property
     def client(self) -> docker.DockerClient:

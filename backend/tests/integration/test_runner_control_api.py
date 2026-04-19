@@ -485,6 +485,48 @@ def test_heartbeat_extends_task_lease(short_lease_client):
     assert chunk_response.status_code == 200
 
 
+def test_reclaimed_task_accepts_chunk_seq_restart(short_lease_client):
+    app, client = short_lease_client
+    task_id, token, lease_token = _create_and_claim_task(
+        client, "runner-reclaim-log-seq"
+    )
+
+    first_chunk = client.post(
+        f"/api/runners/runner-reclaim-log-seq/tasks/{task_id}/logs/stdout/chunks",
+        headers=_runner_headers(token),
+        json={"lease_token": lease_token, "chunk_seq": 1, "content": "first-attempt\n"},
+    )
+    assert first_chunk.status_code == 200
+
+    _reconcile_until_pending(app, client, task_id)
+
+    second_claim = client.post(
+        "/api/runners/runner-reclaim-log-seq/claim",
+        headers=_runner_headers(token),
+        json={"jobs": 0, "max_jobs": 1},
+    )
+    assert second_claim.status_code == 200
+    second_lease_token = second_claim.json()["lease_token"]
+
+    second_chunk = client.post(
+        f"/api/runners/runner-reclaim-log-seq/tasks/{task_id}/logs/stdout/chunks",
+        headers=_runner_headers(token),
+        json={
+            "lease_token": second_lease_token,
+            "chunk_seq": 1,
+            "content": "second-attempt\n",
+        },
+    )
+    assert second_chunk.status_code == 200
+
+    chunk_result = second_chunk.json()
+    assert chunk_result["appended"] is True
+
+    raw_log = client.get(f"/api/tasks/{task_id}/logs/stdout/raw")
+    assert raw_log.status_code == 200
+    assert raw_log.text == "second-attempt\n"
+
+
 def test_runner_metrics_endpoint_accepts_valid_payload(client):
     token = _create_runner(client, "runner-metrics-1")
     response = client.post(

@@ -519,6 +519,15 @@ class Database:
         )
         self.conn.commit()
 
+    def reset_task_log_chunk_sequences(self, task_id: int):
+        """Clear per-log chunk sequence tracking for a task."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "DELETE FROM task_log_chunk_sequences WHERE task_id = ?",
+            (task_id,),
+        )
+        self.conn.commit()
+
     def get_tasks_by_status(self, status: TaskStatus) -> List[TaskRecord]:
         """Get tasks filtered by status
 

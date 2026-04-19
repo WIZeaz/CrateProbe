@@ -154,41 +154,21 @@ class RunnerMetricsQueryResponse(BaseModel):
     series: List[RunnerLatestMetricsResponse]
 
 
-RUNNER_CHUNK_LOG_TYPES = {"stdout", "stderr", "runner", "miri_report", "stats-yaml"}
+RUNNER_LOG_TYPES = {"stdout", "stderr", "runner", "miri_report", "stats-yaml"}
 
+def resolve_log_path(task: TaskRecord, log_type: str, config: Config) -> Path:
+    return Path(config.workspace_path) / "logs" / f"{task.id}-{log_type}.log"
 
-LOG_PATH_RESOLVERS = {
-    "stdout": lambda task, _cfg: Path(task.stdout_log),
-    "stderr": lambda task, _cfg: Path(task.stderr_log),
-    "runner": lambda task, cfg: cfg.workspace_path / "logs" / f"{task.id}-runner.log",
-    "miri_report": lambda task, _cfg: Path(task.workspace_path)
-    / "testgen"
-    / "miri_report.txt",
-    "stats-yaml": lambda task, _cfg: Path(task.workspace_path)
-    / "testgen"
-    / "stats.yaml",
-}
-
-
-def _clear_task_logs(task: TaskRecord, config: Config) -> None:
-    for log_name, resolver in LOG_PATH_RESOLVERS.items():
-        log_path = resolver(task, config)
+def _clear_task_logs(task: TaskRecord, db: Database, config: Config) -> None:
+    db.reset_task_log_chunk_sequences(task.id)
+    for log_name in RUNNER_LOG_TYPES:
+        log_path = resolve_log_path(task, log_name, config)
         if not log_path.exists() or not log_path.is_file():
             continue
         log_path.unlink()
         logger.info(
             "task log cleared for retry",
             extra={"task_id": task.id, "log_type": log_name, "path": str(log_path)},
-        )
-    # Also remove the testgen directory so stale counts do not persist
-    testgen_dir = Path(task.workspace_path) / "testgen"
-    if testgen_dir.exists():
-        import shutil
-
-        shutil.rmtree(testgen_dir)
-        logger.info(
-            "task testgen directory cleared for retry",
-            extra={"task_id": task.id, "path": str(testgen_dir)},
         )
 
 
@@ -700,7 +680,8 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         if task is None:
             return PlainTextResponse(status_code=204, content="")
 
-        _clear_task_logs(task, config)
+        _clear_task_logs(task, db, config)
+        
 
         return ClaimTaskResponse(
             id=task.id,
@@ -812,19 +793,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         _auth: None = Depends(require_runner_auth),
     ):
         request_id = _request_id_from_header(x_request_id)
-        if log_type not in RUNNER_CHUNK_LOG_TYPES:
-            logger.warning(
-                "unknown log type on runner log ingest",
-                extra={
-                    "request_id": request_id,
-                    "runner_id": runner_id,
-                    "task_id": task_id,
-                    "log_type": log_type,
-                    "chunk_seq": request.chunk_seq,
-                },
-            )
-            raise HTTPException(status_code=404, detail="Unknown log type")
-
+        
         task = require_task_lease(
             task_id,
             runner_id,
@@ -836,8 +805,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
         should_append = db.record_task_log_chunk(task_id, log_type, request.chunk_seq)
         if should_append:
-            log_path = LOG_PATH_RESOLVERS[log_type](task, config)
-            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path = resolve_log_path(task, log_type, config)
             with log_path.open("a", encoding="utf-8") as handle:
                 handle.write(request.content)
 
@@ -874,8 +842,6 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         # Cannot retry a task that's currently running
         if task.status == TaskStatus.RUNNING:
             raise HTTPException(status_code=400, detail="Cannot retry a running task")
-
-        _clear_task_logs(task, config)
 
         # Reset task to pending state
         db.reset_task_for_retry(task_id)
@@ -917,7 +883,6 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             elif task.status == TaskStatus.RUNNING:
                 results["skipped"].append(task_id)
             else:
-                _clear_task_logs(task, config)
                 db.reset_task_for_retry(task_id)
                 results["retried"].append(task_id)
 
@@ -1013,14 +978,12 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         task_id: int, log_name: str, lines: int = Query(default=1000, ge=0)
     ):
         """Get last N lines of any task log by name"""
-        if log_name not in LOG_PATH_RESOLVERS:
-            raise HTTPException(status_code=404, detail="Unknown log type")
 
         task = db.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
 
-        log_path = LOG_PATH_RESOLVERS[log_name](task, config)
+        log_path = resolve_log_path(task, log_name, config)
 
         try:
             log_lines = read_last_n_lines(str(log_path), lines)
@@ -1034,14 +997,12 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     )
     async def get_task_log_raw(task_id: int, log_name: str):
         """Download full content of any task log by name"""
-        if log_name not in LOG_PATH_RESOLVERS:
-            raise HTTPException(status_code=404, detail="Unknown log type")
 
         task = db.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
 
-        log_path = LOG_PATH_RESOLVERS[log_name](task, config)
+        log_path = resolve_log_path(task, log_name, config)
 
         if not log_path.exists():
             raise HTTPException(status_code=404, detail="Log file not found")
