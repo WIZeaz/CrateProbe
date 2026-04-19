@@ -32,7 +32,7 @@ RUNNER_SERVER_URL=http://localhost:8080 \
 | `RUNNER_LOG_FLUSH_INTERVAL_SECONDS` | `3.0` | Seconds between uploading log chunks to the server |
 | `RUNNER_LOG_SYNC_INTERVAL_SECONDS` | `2.0` | Seconds between syncing Docker container logs to the host |
 | `RUNNER_REQUEST_TIMEOUT_SECONDS` | `10.0` | HTTP request timeout when talking to the backend |
-| `RUNNER_MAX_JOBS` | `3` | *(Reserved)* Max concurrent jobs configured locally |
+| `RUNNER_MAX_JOBS` | `3` | Max concurrent tasks this runner executes in parallel (must be `>= 1`) |
 | `RUNNER_MAX_MEMORY_GB` | `20` | Docker container memory limit in GB |
 | `RUNNER_MAX_RUNTIME_SECONDS` | `86400` | Docker container max runtime before force stop |
 | `RUNNER_MAX_CPUS` | `4` | CPU limit for Docker containers |

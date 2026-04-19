@@ -7,6 +7,8 @@ from core.models import ExecutionResult
 from core.models import TaskStatus
 import asyncio
 import logging
+import threading
+import time
 
 
 @pytest.fixture
@@ -469,3 +471,62 @@ def test_docker_runner_uses_custom_log_sync_interval():
     )
 
     assert runner.log_sync_interval_seconds == 5.0
+
+
+@pytest.mark.asyncio
+async def test_docker_cancellation_skips_workspace_ownership_reconciliation(
+    docker_runner, tmp_path, monkeypatch
+):
+    """When run() is cancelled, _ensure_workspace_ownership_sync must be skipped
+    to avoid blocking shutdown with a slow sync Docker operation."""
+    stdout_log = tmp_path / "stdout.log"
+    stderr_log = tmp_path / "stderr.log"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    with patch("docker.from_env") as mock_docker:
+        mock_client = Mock()
+        mock_container = Mock()
+
+        # Simulate container.wait() blocking until cancelled
+        wait_started = threading.Event()
+
+        def blocking_wait():
+            wait_started.set()
+            # Block indefinitely (simulating long-running container)
+            time.sleep(60)
+            return {"StatusCode": 0}
+
+        mock_container.wait.side_effect = blocking_wait
+        mock_client.containers.run.return_value = mock_container
+        mock_docker.return_value = mock_client
+
+        ownership_called = []
+
+        def track_ownership(workspace_dir):
+            ownership_called.append(True)
+
+        monkeypatch.setattr(
+            docker_runner, "_ensure_workspace_ownership_sync", track_ownership
+        )
+
+        run_task = asyncio.create_task(
+            docker_runner.run(
+                command=["cargo", "rapx"],
+                workspace_dir=workspace,
+                stdout_log=stdout_log,
+                stderr_log=stderr_log,
+            )
+        )
+
+        # Wait for container.wait() to start
+        await asyncio.to_thread(wait_started.wait, timeout=2.0)
+
+        # Cancel the task (simulating shutdown)
+        run_task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(run_task, timeout=2.0)
+
+        # _ensure_workspace_ownership_sync should NOT have been called
+        assert len(ownership_called) == 0

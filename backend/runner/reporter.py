@@ -88,17 +88,40 @@ class TaskReporter:
             new_content = new_bytes.decode("utf-8", errors="replace")
 
             try:
-                await self.client.send_log_chunk(
-                    self.task_id,
-                    log_type,
-                    {
-                        "lease_token": self.lease_token,
-                        "chunk_seq": chunk_seq,
-                        "content": new_content,
-                    },
-                )
+                if self._stop_event.is_set():
+                    await asyncio.wait_for(
+                        self.client.send_log_chunk(
+                            self.task_id,
+                            log_type,
+                            {
+                                "lease_token": self.lease_token,
+                                "chunk_seq": chunk_seq,
+                                "content": new_content,
+                            },
+                        ),
+                        timeout=2.0,
+                    )
+                else:
+                    await self.client.send_log_chunk(
+                        self.task_id,
+                        log_type,
+                        {
+                            "lease_token": self.lease_token,
+                            "chunk_seq": chunk_seq,
+                            "content": new_content,
+                        },
+                    )
                 self._sent_offsets[log_type] = current_size
                 self._next_chunk_seq[log_type] = chunk_seq + 1
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "log chunk send timed out during shutdown",
+                    extra={
+                        "task_id": self.task_id,
+                        "log_type": log_type,
+                        "chunk_seq": chunk_seq,
+                    },
+                )
             except Exception as exc:
                 logger.warning(
                     "log chunk send failed: %s",

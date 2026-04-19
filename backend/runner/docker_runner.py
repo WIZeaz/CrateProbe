@@ -239,6 +239,7 @@ class DockerRunner:
         stop_sync_event = asyncio.Event()
         command_summary = " ".join(command)
         started_at = time.monotonic()
+        cancelled = False
 
         logger.info(
             "container command starting",
@@ -307,6 +308,7 @@ class DockerRunner:
                 exit_code = wait_result.get("StatusCode", -1)
             except asyncio.CancelledError:
                 # Server is shutting down - stop the container
+                cancelled = True
                 logger.warning(
                     "container execution cancelled",
                     extra={
@@ -389,6 +391,9 @@ class DockerRunner:
                 message=f"Process exited with code {exit_code}",
             )
 
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
         except Exception as exc:
             logger.exception(
                 "container execution failed",
@@ -423,12 +428,14 @@ class DockerRunner:
 
             if container is not None:
                 await asyncio.to_thread(self._remove_container_sync, container)
-            try:
-                await asyncio.to_thread(
-                    self._ensure_workspace_ownership_sync, workspace_dir
-                )
-            except Exception:
-                pass
+            # Skip expensive chown on cancellation to avoid blocking shutdown.
+            if not cancelled:
+                try:
+                    await asyncio.to_thread(
+                        self._ensure_workspace_ownership_sync, workspace_dir
+                    )
+                except Exception:
+                    pass
 
     def _run_container_sync(self, **kwargs):
         return self.client.containers.run(**kwargs)

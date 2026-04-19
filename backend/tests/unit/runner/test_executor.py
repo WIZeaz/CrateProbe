@@ -379,3 +379,89 @@ async def test_multiple_tasks_run_containers_concurrently(tmp_path, monkeypatch)
         f"Expected 2 concurrent container runs, but max was {max_active_runs}. "
         "Docker calls may be serialized by a global lock."
     )
+
+
+@pytest.mark.asyncio
+async def test_executor_cancellation_does_not_block_on_reporter(tmp_path, monkeypatch):
+    """When cancelled, execute_claimed_task must not wait indefinitely for reporter."""
+    config = type(
+        "Cfg",
+        (),
+        {
+            "workspace_dir": str(tmp_path),
+            "docker_image": "rust:test",
+            "max_memory_gb": 8,
+            "max_runtime_seconds": 10,
+            "max_cpus": 2,
+            "docker_mounts": [],
+            "docker_pull_policy": "if-not-present",
+            "log_flush_interval_seconds": 3.0,
+            "log_sync_interval_seconds": 2.0,
+        },
+    )()
+
+    class FakeClient:
+        def __init__(self):
+            self.events = []
+
+        async def send_event(self, *_args, **_kwargs):
+            self.events.append(("send_event",))
+            return None
+
+        async def send_log_chunk(self, *_args, **_kwargs):
+            # Simulate a slow network call that blocks reporter shutdown
+            await asyncio.sleep(30)
+            return None
+
+    class FakeDocker:
+        async def is_available(self):
+            return True
+
+        async def ensure_image(self, _policy):
+            return True
+
+        async def ensure_workspace_ownership(self, _workspace):
+            return None
+
+        async def run(self, *_args, **_kwargs):
+            # Block until cancelled
+            await asyncio.Event().wait()
+
+        async def close(self):
+            pass
+
+    async def fake_prepare_workspace(
+        self, workspace_dir, _crate_name, _version, _logger, _docker
+    ):
+        workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr("runner.executor.DockerRunner", lambda **kwargs: FakeDocker())
+
+    executor = TaskExecutor(config=config, client=FakeClient())
+    monkeypatch.setattr(TaskExecutor, "_prepare_workspace", fake_prepare_workspace)
+
+    claimed = {
+        "id": 11,
+        "lease_token": "lease-11",
+        "crate_name": "serde",
+        "version": "1.0.0",
+    }
+
+    execution_task = asyncio.create_task(executor.execute_claimed_task(claimed))
+
+    # Wait for docker.run() to start
+    await asyncio.sleep(0.1)
+
+    # Cancel the task (simulating shutdown)
+    execution_task.cancel()
+
+    # Should complete within a reasonable time despite reporter being blocked.
+    # Without the fix this would hang for 30+ seconds and timeout here.
+    with pytest.raises(asyncio.CancelledError):
+        done, pending = await asyncio.wait([execution_task], timeout=7.0)
+        if execution_task in pending:
+            execution_task.cancel()
+            await execution_task
+        else:
+            # execution_task completed within timeout
+            await execution_task

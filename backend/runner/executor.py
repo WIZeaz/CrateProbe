@@ -148,7 +148,13 @@ class TaskExecutor:
         except asyncio.CancelledError:
             task_logger.info("task cancelled", extra=task_ctx)
             terminal_seq = reporter.stop()
-            await reporter_task
+            done, pending = await asyncio.wait([reporter_task], timeout=5.0)
+            if reporter_task in pending:
+                reporter_task.cancel()
+                try:
+                    await reporter_task
+                except asyncio.CancelledError:
+                    pass
             await self.client.send_event(
                 task_id,
                 {
