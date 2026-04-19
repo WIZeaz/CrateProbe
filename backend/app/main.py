@@ -122,6 +122,11 @@ class RunnerTaskLogChunkRequest(BaseModel):
     content: str
 
 
+class RunnerTaskLogRequest(BaseModel):
+    lease_token: str
+    content: str
+
+
 class RunnerMetricsRequest(BaseModel):
     timestamp: Optional[str] = None
     cpu_percent: float = Field(ge=0.0, le=100.0)
@@ -156,8 +161,10 @@ class RunnerMetricsQueryResponse(BaseModel):
 
 RUNNER_LOG_TYPES = {"stdout", "stderr", "runner", "miri_report", "stats-yaml"}
 
+
 def resolve_log_path(task: TaskRecord, log_type: str, config: Config) -> Path:
     return Path(config.workspace_path) / "logs" / f"{task.id}-{log_type}.log"
+
 
 def _clear_task_logs(task: TaskRecord, db: Database, config: Config) -> None:
     db.reset_task_log_chunk_sequences(task.id)
@@ -681,7 +688,6 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             return PlainTextResponse(status_code=204, content="")
 
         _clear_task_logs(task, db, config)
-        
 
         return ClaimTaskResponse(
             id=task.id,
@@ -793,7 +799,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         _auth: None = Depends(require_runner_auth),
     ):
         request_id = _request_id_from_header(x_request_id)
-        
+
         task = require_task_lease(
             task_id,
             runner_id,
@@ -810,6 +816,31 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                 handle.write(request.content)
 
         return {"appended": should_append}
+
+    @app.post("/api/runners/{runner_id}/tasks/{task_id}/logs/{log_type}")
+    async def ingest_runner_task_log(
+        runner_id: str,
+        task_id: int,
+        log_type: str,
+        request: RunnerTaskLogRequest,
+        x_request_id: Optional[str] = Header(default=None, alias="X-Request-ID"),
+        _auth: None = Depends(require_runner_auth),
+    ):
+        request_id = _request_id_from_header(x_request_id)
+
+        task = require_task_lease(
+            task_id,
+            runner_id,
+            request.lease_token,
+            request_id=request_id,
+            log_type=log_type,
+        )
+
+        log_path = resolve_log_path(task, log_type, config)
+        with log_path.open("w", encoding="utf-8") as handle:
+            handle.write(request.content)
+
+        return {"written": True}
 
     @app.get("/api/tasks/{task_id}", response_model=TaskDetailResponse)
     async def get_task(task_id: int):

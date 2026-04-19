@@ -69,6 +69,14 @@ class RunnerControlClient:
             payload,
         )
 
+    async def send_log(
+        self, task_id: int, log_type: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        return await self._post_with_retry(
+            f"/api/runners/{self.runner_id}/tasks/{task_id}/logs/{log_type}",
+            payload,
+        )
+
     async def _post_with_retry(
         self, path: str, payload: dict[str, Any], max_attempts: int = 3
     ) -> dict[str, Any]:

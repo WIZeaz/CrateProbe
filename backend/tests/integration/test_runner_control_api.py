@@ -366,6 +366,28 @@ def test_logs_endpoint_ignores_duplicate_chunk_seq_and_writes_once(client):
     assert raw_log.text == "hello\n"
 
 
+def test_logs_endpoint_full_upload_overwrites_previous_content(client):
+    task_id, token, lease_token = _create_and_claim_task(client, "runner-logs-full-1")
+
+    first_upload = client.post(
+        f"/api/runners/runner-logs-full-1/tasks/{task_id}/logs/stats-yaml",
+        headers=_runner_headers(token),
+        json={"lease_token": lease_token, "content": "CompileFailed: 1\n"},
+    )
+    assert first_upload.status_code == 200
+
+    second_upload = client.post(
+        f"/api/runners/runner-logs-full-1/tasks/{task_id}/logs/stats-yaml",
+        headers=_runner_headers(token),
+        json={"lease_token": lease_token, "content": "CompileFailed: 2\n"},
+    )
+    assert second_upload.status_code == 200
+
+    raw_log = client.get(f"/api/tasks/{task_id}/logs/stats-yaml/raw")
+    assert raw_log.status_code == 200
+    assert raw_log.text == "CompileFailed: 2\n"
+
+
 def test_retry_clears_old_logs_and_allows_chunk_seq_restart(client):
     task_id, token, lease_token = _create_and_claim_task(client, "runner-retry-logs")
 

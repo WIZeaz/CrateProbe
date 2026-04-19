@@ -15,6 +15,15 @@ from runner.reporter import TaskReporter
 logger = logging.getLogger(__name__)
 
 
+LOG_UPLOAD_CONFIG = {
+    "stdout": "chunk",
+    "stderr": "chunk",
+    "runner": "chunk",
+    "miri_report": "chunk",
+    "stats-yaml": "full",
+}
+
+
 class TaskExecutor:
     def __init__(self, config: RunnerConfig, client: RunnerControlClient):
         self.config = config
@@ -83,6 +92,7 @@ class TaskExecutor:
             },
             workspace_dir=workspace_dir,
             log_flush_interval=self.config.log_flush_interval_seconds,
+            upload_config=LOG_UPLOAD_CONFIG,
         )
         reporter_task = asyncio.create_task(reporter.run())
 

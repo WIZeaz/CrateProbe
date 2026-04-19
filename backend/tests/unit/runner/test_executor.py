@@ -40,6 +40,9 @@ async def test_execute_claimed_task_does_not_block_event_loop_during_docker_prec
         async def send_log_chunk(self, task_id, log_type, payload):
             return {"appended": True}
 
+        async def send_log(self, task_id, log_type, payload):
+            return {"written": True}
+
     class FakeDocker:
         async def is_available(self):
             await asyncio.sleep(0.4)
@@ -142,6 +145,9 @@ async def test_executor_logs_lifecycle_boundaries(tmp_path, monkeypatch):
         async def send_log_chunk(self, *_args, **_kwargs):
             return None
 
+        async def send_log(self, *_args, **_kwargs):
+            return None
+
     class FakeDocker:
         async def is_available(self):
             return True
@@ -225,6 +231,9 @@ async def test_executor_failure_logs_traceback(tmp_path, monkeypatch):
         async def send_log_chunk(self, *_args, **_kwargs):
             return None
 
+        async def send_log(self, *_args, **_kwargs):
+            return None
+
     class BrokenDocker:
         async def is_available(self):
             return True
@@ -301,6 +310,9 @@ async def test_multiple_tasks_run_containers_concurrently(tmp_path, monkeypatch)
             return None
 
         async def send_log_chunk(self, *_args, **_kwargs):
+            return None
+
+        async def send_log(self, *_args, **_kwargs):
             return None
 
     active_runs = 0
@@ -410,6 +422,10 @@ async def test_executor_cancellation_does_not_block_on_reporter(tmp_path, monkey
 
         async def send_log_chunk(self, *_args, **_kwargs):
             # Simulate a slow network call that blocks reporter shutdown
+            await asyncio.sleep(30)
+            return None
+
+        async def send_log(self, *_args, **_kwargs):
             await asyncio.sleep(30)
             return None
 

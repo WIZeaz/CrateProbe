@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from pathlib import Path
-from typing import Tuple
+from typing import Dict, Tuple
 
 from runner.client import RunnerControlClient
 
@@ -19,6 +19,7 @@ class TaskReporter:
         log_paths: dict[str, Path],
         workspace_dir: Path,
         log_flush_interval: float = 3.0,
+        upload_config: Dict[str, str] | None = None,
     ):
         self.client = client
         self.task_id = task_id
@@ -26,6 +27,7 @@ class TaskReporter:
         self.log_paths = log_paths
         self.workspace_dir = workspace_dir
         self.log_flush_interval = log_flush_interval
+        self.upload_config = upload_config or {}
         self._stop_event = asyncio.Event()
         self._next_chunk_seq: dict[str, int] = {}
         self._sent_offsets: dict[str, int] = {}
@@ -73,6 +75,7 @@ class TaskReporter:
                 sent_offset = 0
                 self._next_chunk_seq[log_type] = 1
 
+            upload_mode = self._resolve_upload_mode(log_type)
             chunk_seq = self._next_chunk_seq.get(log_type, 1)
 
             try:
@@ -88,9 +91,22 @@ class TaskReporter:
             new_content = new_bytes.decode("utf-8", errors="replace")
 
             try:
-                if self._stop_event.is_set():
-                    await asyncio.wait_for(
-                        self.client.send_log_chunk(
+                if upload_mode == "chunk":
+                    if self._stop_event.is_set():
+                        await asyncio.wait_for(
+                            self.client.send_log_chunk(
+                                self.task_id,
+                                log_type,
+                                {
+                                    "lease_token": self.lease_token,
+                                    "chunk_seq": chunk_seq,
+                                    "content": new_content,
+                                },
+                            ),
+                            timeout=2.0,
+                        )
+                    else:
+                        await self.client.send_log_chunk(
                             self.task_id,
                             log_type,
                             {
@@ -98,40 +114,68 @@ class TaskReporter:
                                 "chunk_seq": chunk_seq,
                                 "content": new_content,
                             },
-                        ),
-                        timeout=2.0,
-                    )
+                        )
+                    self._next_chunk_seq[log_type] = chunk_seq + 1
                 else:
-                    await self.client.send_log_chunk(
-                        self.task_id,
-                        log_type,
-                        {
-                            "lease_token": self.lease_token,
-                            "chunk_seq": chunk_seq,
-                            "content": new_content,
-                        },
-                    )
+                    if self._stop_event.is_set():
+                        await asyncio.wait_for(
+                            self.client.send_log(
+                                self.task_id,
+                                log_type,
+                                {
+                                    "lease_token": self.lease_token,
+                                    "content": path.read_text(
+                                        encoding="utf-8", errors="replace"
+                                    ),
+                                },
+                            ),
+                            timeout=2.0,
+                        )
+                    else:
+                        await self.client.send_log(
+                            self.task_id,
+                            log_type,
+                            {
+                                "lease_token": self.lease_token,
+                                "content": path.read_text(
+                                    encoding="utf-8", errors="replace"
+                                ),
+                            },
+                        )
                 self._sent_offsets[log_type] = current_size
-                self._next_chunk_seq[log_type] = chunk_seq + 1
             except asyncio.TimeoutError:
                 logger.warning(
-                    "log chunk send timed out during shutdown",
+                    "log send timed out during shutdown",
                     extra={
                         "task_id": self.task_id,
                         "log_type": log_type,
-                        "chunk_seq": chunk_seq,
+                        "upload_mode": upload_mode,
                     },
                 )
             except Exception as exc:
                 logger.warning(
-                    "log chunk send failed: %s",
+                    "log send failed: %s",
                     exc,
                     extra={
                         "task_id": self.task_id,
                         "log_type": log_type,
-                        "chunk_seq": chunk_seq,
+                        "upload_mode": upload_mode,
                     },
                 )
+
+    def _resolve_upload_mode(self, log_type: str) -> str:
+        mode = self.upload_config.get(log_type, "full")
+        if mode in ("chunk", "full"):
+            return mode
+        logger.warning(
+            "invalid log upload mode configured, falling back to full",
+            extra={
+                "task_id": self.task_id,
+                "log_type": log_type,
+                "upload_mode": mode,
+            },
+        )
+        return "full"
 
     async def _maybe_send_progress(self) -> None:
         now = asyncio.get_running_loop().time()

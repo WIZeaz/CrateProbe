@@ -21,6 +21,7 @@ async def test_reporter_flush_logs_sends_incremental_chunks(tmp_path):
         lease_token="lease-1",
         log_paths={"stdout": log_file},
         workspace_dir=tmp_path,
+        upload_config={"stdout": "chunk"},
     )
 
     await reporter._flush_logs()
@@ -55,6 +56,7 @@ async def test_reporter_flush_logs_skips_unchanged_file(tmp_path):
         lease_token="lease-1",
         log_paths={"stdout": log_file},
         workspace_dir=tmp_path,
+        upload_config={"stdout": "chunk"},
     )
 
     await reporter._flush_logs()
@@ -80,6 +82,7 @@ async def test_reporter_flush_logs_retries_on_failure(tmp_path):
         lease_token="lease-1",
         log_paths={"stdout": log_file},
         workspace_dir=tmp_path,
+        upload_config={"stdout": "chunk"},
     )
 
     await reporter._flush_logs()
@@ -106,6 +109,7 @@ async def test_reporter_flush_logs_handles_truncation(tmp_path):
         lease_token="lease-1",
         log_paths={"stdout": log_file},
         workspace_dir=tmp_path,
+        upload_config={"stdout": "chunk"},
     )
 
     await reporter._flush_logs()
@@ -212,6 +216,7 @@ async def test_reporter_run_loop_stops_on_event(tmp_path):
         lease_token="lease-1",
         log_paths={"stdout": log_file},
         workspace_dir=tmp_path,
+        upload_config={"stdout": "chunk"},
     )
 
     run_task = asyncio.create_task(reporter.run())
@@ -259,3 +264,61 @@ def test_reporter_count_generated_items(tmp_path):
     reporter.workspace_dir = tmp_path
 
     assert reporter._count_generated_items() == (2, 3)
+
+
+@pytest.mark.asyncio
+async def test_reporter_flush_logs_defaults_to_full_upload(tmp_path):
+    log_file = tmp_path / "stats.yaml"
+    log_file.write_text("CompileFailed: 1\n")
+
+    sent_logs = []
+
+    class FakeClient:
+        async def send_log(self, task_id, log_type, payload):
+            sent_logs.append((task_id, log_type, payload))
+
+        async def send_log_chunk(self, *_args, **_kwargs):
+            raise AssertionError("chunk upload should not be called")
+
+    reporter = TaskReporter(
+        client=FakeClient(),
+        task_id=1,
+        lease_token="lease-1",
+        log_paths={"stats-yaml": log_file},
+        workspace_dir=tmp_path,
+        upload_config={},
+    )
+
+    await reporter._flush_logs()
+    assert len(sent_logs) == 1
+    assert sent_logs[0][1] == "stats-yaml"
+    assert sent_logs[0][2]["content"] == "CompileFailed: 1\n"
+    assert sent_logs[0][2]["lease_token"] == "lease-1"
+
+
+@pytest.mark.asyncio
+async def test_reporter_invalid_upload_config_falls_back_to_full(tmp_path):
+    log_file = tmp_path / "stats.yaml"
+    log_file.write_text("CompileFailed: 2\n")
+
+    sent_logs = []
+
+    class FakeClient:
+        async def send_log(self, task_id, log_type, payload):
+            sent_logs.append((task_id, log_type, payload))
+
+        async def send_log_chunk(self, *_args, **_kwargs):
+            raise AssertionError("chunk upload should not be called")
+
+    reporter = TaskReporter(
+        client=FakeClient(),
+        task_id=1,
+        lease_token="lease-1",
+        log_paths={"stats-yaml": log_file},
+        workspace_dir=tmp_path,
+        upload_config={"stats-yaml": "invalid-mode"},
+    )
+
+    await reporter._flush_logs()
+    assert len(sent_logs) == 1
+    assert sent_logs[0][2]["content"] == "CompileFailed: 2\n"
