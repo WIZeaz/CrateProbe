@@ -1,4 +1,5 @@
 import asyncio
+from functools import partial
 import logging
 import os
 import shutil
@@ -187,6 +188,20 @@ class DockerRunner:
             stderr=True,
         )
 
+    async def _cleanup_container_after_cancel(
+        self, container, command_summary: str, workspace_dir: Path
+    ) -> None:
+        """Best-effort cleanup for containers that surface after cancellation."""
+        logger.warning(
+            "container started after cancellation; stopping late-started container",
+            extra={
+                "command_summary": command_summary,
+                "workspace": str(workspace_dir),
+            },
+        )
+        await asyncio.to_thread(self._stop_container_sync, container)
+        await asyncio.to_thread(self._remove_container_sync, container)
+
     async def run(
         self,
         command: List[str],
@@ -260,22 +275,45 @@ class DockerRunner:
             stderr_log.unlink()
 
         try:
-            container = await asyncio.to_thread(
-                self._run_container_sync,
-                image=self.image,
-                command=wrapped_command,
-                working_dir="/workspace",
-                volumes=volumes,
-                detach=True,
-                stdout=False,  # No need to capture stdout via Docker API
-                stderr=False,  # No need to capture stderr via Docker API
-                tty=True,  # Enable TTY for colored output in logs
-                environment={
-                    "CARGO_TERM_COLOR": "always",
-                    "TERM": "xterm-256color",
-                },
-                **resource_limits,
+            loop = asyncio.get_running_loop()
+            start_future = loop.run_in_executor(
+                None,
+                partial(
+                    self._run_container_sync,
+                    image=self.image,
+                    command=wrapped_command,
+                    working_dir="/workspace",
+                    volumes=volumes,
+                    detach=True,
+                    stdout=False,  # No need to capture stdout via Docker API
+                    stderr=False,  # No need to capture stderr via Docker API
+                    tty=True,  # Enable TTY for colored output in logs
+                    environment={
+                        "CARGO_TERM_COLOR": "always",
+                        "TERM": "xterm-256color",
+                    },
+                    **resource_limits,
+                ),
             )
+
+            try:
+                container = await asyncio.shield(start_future)
+            except asyncio.CancelledError:
+                cancelled = True
+
+                def _cleanup_when_started(fut) -> None:
+                    try:
+                        late_container = fut.result()
+                    except Exception:
+                        return
+                    asyncio.create_task(
+                        self._cleanup_container_after_cancel(
+                            late_container, command_summary, workspace_dir
+                        )
+                    )
+
+                start_future.add_done_callback(_cleanup_when_started)
+                raise
 
             # Start log sync task for real-time log updates
             log_sync_task = asyncio.create_task(
@@ -290,7 +328,6 @@ class DockerRunner:
             )
 
             timeout_seconds = self.max_runtime_seconds
-            loop = asyncio.get_running_loop()
 
             def _wait_container() -> dict:
                 """Wait for container to finish and return result dict."""

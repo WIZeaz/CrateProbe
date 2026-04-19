@@ -530,3 +530,48 @@ async def test_docker_cancellation_skips_workspace_ownership_reconciliation(
 
         # _ensure_workspace_ownership_sync should NOT have been called
         assert len(ownership_called) == 0
+
+
+@pytest.mark.asyncio
+async def test_docker_cancellation_during_container_startup_stops_started_container(
+    docker_runner, tmp_path, monkeypatch
+):
+    """If cancellation happens while starting the container, the started container
+    must still be stopped to avoid leaving it running after runner shutdown."""
+    stdout_log = tmp_path / "stdout.log"
+    stderr_log = tmp_path / "stderr.log"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    mock_container = Mock()
+    start_entered = threading.Event()
+    allow_start_return = threading.Event()
+
+    def slow_start_container(**kwargs):
+        # Simulate container already started in Docker daemon, but API call
+        # has not returned container handle to async caller yet.
+        start_entered.set()
+        allow_start_return.wait(timeout=2.0)
+        return mock_container
+
+    monkeypatch.setattr(docker_runner, "_run_container_sync", slow_start_container)
+
+    run_task = asyncio.create_task(
+        docker_runner.run(
+            command=["cargo", "rapx"],
+            workspace_dir=workspace,
+            stdout_log=stdout_log,
+            stderr_log=stderr_log,
+        )
+    )
+
+    await asyncio.to_thread(start_entered.wait, timeout=1.0)
+
+    run_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(run_task, timeout=2.0)
+
+    allow_start_return.set()
+    await asyncio.sleep(0.05)
+
+    mock_container.stop.assert_called_once()
