@@ -700,6 +700,8 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         if task is None:
             return PlainTextResponse(status_code=204, content="")
 
+        _clear_task_logs(task, config)
+
         return ClaimTaskResponse(
             id=task.id,
             crate_name=task.crate_name,

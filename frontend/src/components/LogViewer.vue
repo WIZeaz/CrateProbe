@@ -15,20 +15,28 @@ const props = defineProps({
 })
 
 const activeLog = ref('runner')
-const logs = ref({
-  runner: '',
-  stdout: '',
-  stderr: '',
-  miri_report: '',
-  stats: ''
-})
-const logHtml = ref({
-  runner: '',
-  stdout: '',
-  stderr: '',
-  miri_report: '',
-  stats: ''
-})
+function emptyLogMap() {
+  return {
+    runner: '',
+    stdout: '',
+    stderr: '',
+    miri_report: '',
+    stats: ''
+  }
+}
+
+function defaultFetchedMap() {
+  return {
+    runner: false,
+    stdout: false,
+    stderr: false,
+    miri_report: false,
+    stats: false
+  }
+}
+
+const logs = ref(emptyLogMap())
+const logHtml = ref(emptyLogMap())
 
 // Function to convert ANSI to HTML
 function ansiToHtml(text) {
@@ -44,13 +52,7 @@ const loading = ref({
   miri_report: false,
   stats: false
 })
-const fetched = ref({
-  runner: false,
-  stdout: false,
-  stderr: false,
-  miri_report: false,
-  stats: false
-})
+const fetched = ref(defaultFetchedMap())
 const logContainer = ref(null)
 let refreshInterval = null
 
@@ -151,6 +153,17 @@ function scrollToBottom() {
     }
   }, 100)
 }
+
+function resetForNewAttempt() {
+  logs.value = emptyLogMap()
+  logHtml.value = emptyLogMap()
+  fetched.value = defaultFetchedMap()
+  loadLog(activeLog.value)
+}
+
+defineExpose({
+  resetForNewAttempt
+})
 
 watch(activeLog, (newLog) => {
   if (!fetched.value[newLog]) {

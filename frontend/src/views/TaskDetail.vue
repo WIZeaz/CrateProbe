@@ -5,6 +5,7 @@ import api from '../services/api'
 import websocket from '../services/websocket'
 import LogViewer from '../components/LogViewer.vue'
 import RunnerIdBadge from '../components/RunnerIdBadge.vue'
+import { shouldResetLogViewer } from '../utils/logAttemptReset'
 
 const route = useRoute()
 const router = useRouter()
@@ -12,6 +13,7 @@ const task = ref(null)
 const loading = ref(true)
 const error = ref(null)
 const cancelling = ref(false)
+const logViewerRef = ref(null)
 
 const taskId = computed(() => route.params.id)
 
@@ -64,9 +66,13 @@ async function handleTaskUpdate(data) {
       const updatedTask = await api.getTask(taskId.value)
       // Only update if task object is loaded to avoid race conditions
       if (task.value) {
+        const shouldResetLogs = shouldResetLogViewer(task.value, updatedTask)
         // Update task data without replacing the entire object
         // This minimizes re-renders of child components
         Object.assign(task.value, updatedTask)
+        if (shouldResetLogs) {
+          logViewerRef.value?.resetForNewAttempt()
+        }
       }
     } catch (err) {
       // Silently fail on update errors to avoid disrupting user experience
@@ -241,7 +247,7 @@ onUnmounted(() => {
       </div>
 
       <!-- Log Viewer -->
-      <LogViewer :key="`log-viewer-${taskId}`" :task-id="taskId" :auto-scroll="task.status === 'running'" />
+      <LogViewer ref="logViewerRef" :key="`log-viewer-${taskId}`" :task-id="taskId" :auto-scroll="task.status === 'running'" />
     </div>
   </div>
 </template>
