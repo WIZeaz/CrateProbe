@@ -44,8 +44,19 @@ async def test_worker_sends_metrics_and_claims_when_idle():
     assert did_work is False
     assert len(client.heartbeats) == 0
     assert len(client.claims) == 1
-    assert len(client.metrics) == 1
+    assert len(client.metrics) == 0
     assert client.events == []
+
+
+@pytest.mark.asyncio
+async def test_poll_and_schedule_one_does_not_send_metrics_directly():
+    client = FakeClient(claimed_task=None)
+    worker = RunnerWorker(client=client, runner_id="runner-1", executor=None)
+
+    did_work = await worker.poll_and_schedule_one()
+
+    assert did_work is False
+    assert client.metrics == []
 
 
 @pytest.mark.asyncio
@@ -103,7 +114,7 @@ async def test_worker_claims_and_executes_task():
         await asyncio.sleep(0)
 
     assert executed == [42]
-    assert len(client.metrics) == 1
+    assert len(client.metrics) == 0
     assert client.events == []
 
 
@@ -198,7 +209,7 @@ async def test_worker_executor_failure_isolated_from_poll_and_schedule_one():
         await asyncio.sleep(0)
 
     assert worker._current_jobs() == 0
-    assert len(client.metrics) == 1
+    assert len(client.metrics) == 0
     assert client.events == []
 
 
@@ -228,14 +239,31 @@ async def test_worker_metrics_warning_contains_runner_id(caplog):
     client.send_metrics = broken_send_metrics
     worker = RunnerWorker(client=client, runner_id="runner-1", executor=None)
 
-    did_work = await worker.poll_and_schedule_one()
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(worker, "poll_and_schedule_one", lambda: asyncio.sleep(999))
+        run_task = asyncio.create_task(worker.run_forever(10.0))
+        deadline = asyncio.get_running_loop().time() + 1.0
+        record = None
+        while asyncio.get_running_loop().time() < deadline:
+            record = next(
+                (
+                    r
+                    for r in caplog.records
+                    if "failed to send runner metrics" in r.message.lower()
+                ),
+                None,
+            )
+            if record is not None:
+                break
+            await asyncio.sleep(0.01)
+        run_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run_task
+    finally:
+        monkeypatch.undo()
 
-    assert did_work is False
-    record = next(
-        r
-        for r in caplog.records
-        if "failed to send runner metrics" in r.message.lower()
-    )
+    assert record is not None
     assert record.runner_id == "runner-1"
 
 
@@ -339,7 +367,7 @@ async def test_worker_metrics_payload_uses_disk_percent():
     client = FakeClient(claimed_task=None)
     worker = RunnerWorker(client=client, runner_id="runner-1", executor=None)
 
-    await worker.poll_and_schedule_one()
+    await worker._send_metrics_once(client)
 
     assert len(client.metrics) == 1
     payload = client.metrics[0]
@@ -358,6 +386,8 @@ async def test_run_forever_uses_single_heartbeat_thread_lifecycle(monkeypatch):
 
     started = []
     stopped = []
+    metrics_started = []
+    metrics_stopped = []
     poll_and_schedule_one_calls = []
 
     def fake_start_heartbeat_background():
@@ -365,6 +395,12 @@ async def test_run_forever_uses_single_heartbeat_thread_lifecycle(monkeypatch):
 
     def fake_stop_heartbeat_background():
         stopped.append(True)
+
+    def fake_start_metrics_background():
+        metrics_started.append(True)
+
+    async def fake_stop_metrics_background():
+        metrics_stopped.append(True)
 
     async def fake_poll_and_schedule_one():
         poll_and_schedule_one_calls.append(True)
@@ -379,6 +415,12 @@ async def test_run_forever_uses_single_heartbeat_thread_lifecycle(monkeypatch):
     monkeypatch.setattr(
         worker, "_stop_heartbeat_background", fake_stop_heartbeat_background
     )
+    monkeypatch.setattr(
+        worker, "_start_metrics_background", fake_start_metrics_background
+    )
+    monkeypatch.setattr(
+        worker, "_stop_metrics_background", fake_stop_metrics_background
+    )
     monkeypatch.setattr(worker, "poll_and_schedule_one", fake_poll_and_schedule_one)
     monkeypatch.setattr("runner.worker.asyncio.sleep", fake_sleep)
 
@@ -388,6 +430,8 @@ async def test_run_forever_uses_single_heartbeat_thread_lifecycle(monkeypatch):
     assert len(poll_and_schedule_one_calls) == 1
     assert len(started) == 1
     assert len(stopped) == 1
+    assert len(metrics_started) == 1
+    assert len(metrics_stopped) == 1
 
 
 @pytest.mark.asyncio

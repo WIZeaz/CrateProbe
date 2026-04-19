@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import threading
 
@@ -28,17 +29,12 @@ class RunnerWorker:
         self._max_jobs = max_jobs
         self._inflight_tasks: set[asyncio.Task] = set()
         self._is_executing = False
-        self._last_metrics_sent_at = 0.0
+        self._metrics_task: asyncio.Task | None = None
         self._heartbeat_stop_event: threading.Event | None = None
         self._heartbeat_thread: threading.Thread | None = None
 
-    async def _send_metrics_if_due(self, *, force: bool = False) -> None:
-        now = asyncio.get_running_loop().time()
-        if (
-            not force
-            and (now - self._last_metrics_sent_at) < self._metrics_interval_seconds
-        ):
-            return
+    async def _send_metrics_once(self, client=None) -> None:
+        target_client = client or self._client
         payload = {
             "cpu_percent": psutil.cpu_percent(interval=0.0),
             "memory_percent": psutil.virtual_memory().percent,
@@ -46,8 +42,7 @@ class RunnerWorker:
             "active_tasks": self._current_jobs(),
         }
         try:
-            await self._client.send_metrics(payload)
-            self._last_metrics_sent_at = now
+            await target_client.send_metrics(payload)
         except Exception as exc:
             logger.warning(
                 "failed to send runner metrics: %s",
@@ -55,13 +50,35 @@ class RunnerWorker:
                 extra={"runner_id": self._runner_id},
             )
 
+    async def _metrics_loop(self, interval: float) -> None:
+        while True:
+            await self._send_metrics_once()
+            await asyncio.sleep(interval)
+
+    def _start_metrics_background(self) -> None:
+        if self._metrics_task is not None and not self._metrics_task.done():
+            return
+
+        self._metrics_task = asyncio.create_task(
+            self._metrics_loop(self._metrics_interval_seconds)
+        )
+
+    async def _stop_metrics_background(self) -> None:
+        task = self._metrics_task
+        if task is None:
+            return
+
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        self._metrics_task = None
+
     async def poll_and_schedule_one(self) -> bool:
         self._inflight_tasks = {
             task for task in self._inflight_tasks if not task.done()
         }
-        self._is_executing = self._current_jobs() > 0
 
-        await self._send_metrics_if_due(force=True)
+        self._is_executing = self._current_jobs() > 0
 
         if not self._has_capacity():
             return False
@@ -186,6 +203,7 @@ class RunnerWorker:
 
     async def run_forever(self, poll_interval_seconds: float) -> None:
         self._start_heartbeat_background()
+        self._start_metrics_background()
         try:
             while True:
                 try:
@@ -225,4 +243,5 @@ class RunnerWorker:
                 }
                 self._is_executing = self._current_jobs() > 0
 
+            await self._stop_metrics_background()
             self._stop_heartbeat_background()
