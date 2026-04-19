@@ -500,8 +500,8 @@ class Database:
                 exit_code = NULL,
                 error_message = NULL,
                 message = NULL,
-                case_count = 0,
-                poc_count = 0,
+                case_count = NULL,
+                poc_count = NULL,
                 compile_failed = NULL,
                 pid = NULL,
                 runner_id = NULL,
@@ -752,7 +752,17 @@ class Database:
                     runner_id = ?,
                     lease_token = ?,
                     lease_expires_at = ?,
-                    started_at = ?
+                    started_at = ?,
+                    finished_at = NULL,
+                    exit_code = NULL,
+                    error_message = NULL,
+                    message = NULL,
+                    case_count = 0,
+                    poc_count = 0,
+                    compile_failed = 0,
+                    pid = NULL,
+                    last_event_seq = 0,
+                    cancel_requested = 0
                 WHERE id = ? AND status = ?
                 """,
                 (
