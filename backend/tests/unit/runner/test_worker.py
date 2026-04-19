@@ -313,15 +313,22 @@ async def test_worker_run_forever_uses_sleep_interval(monkeypatch):
     )
 
     sleep_calls = []
+    stop_event = asyncio.Event()
+
+    original_sleep = asyncio.sleep
 
     async def fake_sleep(duration):
         sleep_calls.append(duration)
-        raise RuntimeError("stop-loop")
+        if not stop_event.is_set():
+            stop_event.set()
+        raise asyncio.CancelledError()
 
     monkeypatch.setattr("runner.worker.asyncio.sleep", fake_sleep)
 
-    with pytest.raises(RuntimeError, match="stop-loop"):
-        await worker.run_forever(3.5)
+    run_task = asyncio.create_task(worker.run_forever(3.5))
+    await asyncio.wait_for(stop_event.wait(), timeout=1.0)
+    with pytest.raises(asyncio.CancelledError):
+        await run_task
 
     assert sleep_calls == [3.5]
 
@@ -381,6 +388,35 @@ async def test_run_forever_uses_single_heartbeat_thread_lifecycle(monkeypatch):
     assert len(poll_and_schedule_one_calls) == 1
     assert len(started) == 1
     assert len(stopped) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_forever_survives_poll_and_schedule_one_exception(monkeypatch):
+    client = FakeClient(claimed_task=None)
+    worker = RunnerWorker(
+        client=client, runner_id="runner-1", executor=None, metrics_interval_seconds=10
+    )
+
+    call_count = 0
+    stop_event = asyncio.Event()
+
+    async def failing_poll():
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 2:
+            raise RuntimeError("claim transient failure")
+        stop_event.set()
+        return False
+
+    monkeypatch.setattr(worker, "poll_and_schedule_one", failing_poll)
+
+    run_task = asyncio.create_task(worker.run_forever(0.01))
+    await asyncio.wait_for(stop_event.wait(), timeout=1.0)
+    run_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run_task
+
+    assert call_count == 3
 
 
 def test_stop_heartbeat_background_keeps_references_when_join_times_out(caplog):

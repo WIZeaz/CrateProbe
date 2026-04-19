@@ -188,8 +188,18 @@ class RunnerWorker:
         self._start_heartbeat_background()
         try:
             while True:
-                did_work = await self.poll_and_schedule_one()
-                if not did_work:
+                try:
+                    did_work = await self.poll_and_schedule_one()
+                    if not did_work:
+                        await asyncio.sleep(poll_interval_seconds)
+                except Exception:
+                    logger.exception(
+                        "poll_and_schedule_one failed, retrying after interval",
+                        extra={
+                            "runner_id": self._runner_id,
+                            "poll_interval_seconds": poll_interval_seconds,
+                        },
+                    )
                     await asyncio.sleep(poll_interval_seconds)
         finally:
             if self._inflight_tasks:
