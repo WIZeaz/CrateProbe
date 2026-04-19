@@ -453,3 +453,15 @@ async def test_docker_unexpected_error_logs_traceback(docker_runner, tmp_path, c
         r for r in caplog.records if "container execution failed" in r.message.lower()
     )
     assert record.exc_info is not None
+
+
+def test_docker_runner_uses_custom_log_sync_interval():
+    runner = DockerRunner(
+        image="rust:test",
+        max_memory_gb=8,
+        max_runtime_seconds=7200,
+        max_cpus=2,
+        log_sync_interval_seconds=5.0,
+    )
+
+    assert runner.log_sync_interval_seconds == 5.0

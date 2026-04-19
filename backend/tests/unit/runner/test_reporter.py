@@ -230,6 +230,23 @@ async def test_reporter_run_loop_stops_on_event(tmp_path):
     assert any("line 2" in c for c in contents)
 
 
+def test_reporter_uses_custom_flush_interval(tmp_path):
+    class FakeClient:
+        async def send_log_chunk(self, task_id, log_type, payload):
+            pass
+
+    reporter = TaskReporter(
+        client=FakeClient(),
+        task_id=1,
+        lease_token="lease-1",
+        log_paths={},
+        workspace_dir=tmp_path,
+        log_flush_interval=7.5,
+    )
+
+    assert reporter.log_flush_interval == 7.5
+
+
 def test_reporter_count_generated_items(tmp_path):
     testgen = tmp_path / "testgen"
     (testgen / "tests" / "a").mkdir(parents=True)

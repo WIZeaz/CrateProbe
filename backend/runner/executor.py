@@ -26,6 +26,7 @@ class TaskExecutor:
             max_runtime_seconds=config.max_runtime_seconds,
             max_cpus=config.max_cpus,
             mounts=config.docker_mounts,
+            log_sync_interval_seconds=config.log_sync_interval_seconds,
         )
 
     async def close(self):
@@ -78,6 +79,7 @@ class TaskExecutor:
                 "stats-yaml": workspace_dir / "testgen" / "stats.yaml",
             },
             workspace_dir=workspace_dir,
+            log_flush_interval=self.config.log_flush_interval_seconds,
         )
         reporter_task = asyncio.create_task(reporter.run())
 

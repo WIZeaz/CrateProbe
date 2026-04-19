@@ -161,6 +161,8 @@ def test_runner_config_defaults_metrics_interval_to_10_seconds(monkeypatch):
 
     cfg = RunnerConfig.from_env()
     assert cfg.metrics_interval_seconds == 10.0
+    assert cfg.log_flush_interval_seconds == 3.0
+    assert cfg.log_sync_interval_seconds == 2.0
 
 
 def test_runner_config_reads_metrics_interval_from_env(monkeypatch):
@@ -196,6 +198,20 @@ def test_runner_config_reads_workspace_dir_from_env(monkeypatch):
 
     cfg = RunnerConfig.from_env()
     assert cfg.workspace_dir == "/tmp/custom-runner-workspace"
+
+
+def test_runner_config_reads_log_intervals_from_env(monkeypatch):
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://localhost:8080")
+    monkeypatch.setenv("RUNNER_ID", "runner-1")
+    monkeypatch.setenv("RUNNER_TOKEN", "token-1")
+    monkeypatch.setenv("RUNNER_LOG_FLUSH_INTERVAL_SECONDS", "5")
+    monkeypatch.setenv("RUNNER_LOG_SYNC_INTERVAL_SECONDS", "1")
+
+    from runner.config import RunnerConfig
+
+    cfg = RunnerConfig.from_env()
+    assert cfg.log_flush_interval_seconds == 5.0
+    assert cfg.log_sync_interval_seconds == 1.0
 
 
 @pytest.mark.parametrize("invalid_max_jobs", [0, -1])

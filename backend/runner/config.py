@@ -10,6 +10,8 @@ class RunnerConfig:
     runner_token: str
     poll_interval_seconds: float = 3.0
     metrics_interval_seconds: float = 10.0
+    log_flush_interval_seconds: float = 3.0
+    log_sync_interval_seconds: float = 2.0
     request_timeout_seconds: float = 10.0
     max_jobs: int = 3
     max_memory_gb: int = 20
@@ -27,6 +29,10 @@ class RunnerConfig:
         runner_token = os.environ.get("RUNNER_TOKEN")
         poll_interval_raw = os.environ.get("RUNNER_POLL_INTERVAL_SECONDS", "3")
         metrics_interval_raw = os.environ.get("RUNNER_METRICS_INTERVAL_SECONDS", "10")
+        log_flush_interval_raw = os.environ.get(
+            "RUNNER_LOG_FLUSH_INTERVAL_SECONDS", "3"
+        )
+        log_sync_interval_raw = os.environ.get("RUNNER_LOG_SYNC_INTERVAL_SECONDS", "2")
         request_timeout_raw = os.environ.get("RUNNER_REQUEST_TIMEOUT_SECONDS", "10")
         max_jobs_raw = os.environ.get("RUNNER_MAX_JOBS", "3")
         max_memory_raw = os.environ.get("RUNNER_MAX_MEMORY_GB", "20")
@@ -78,6 +84,12 @@ class RunnerConfig:
             ),
             metrics_interval_seconds=_float(
                 "RUNNER_METRICS_INTERVAL_SECONDS", metrics_interval_raw
+            ),
+            log_flush_interval_seconds=_float(
+                "RUNNER_LOG_FLUSH_INTERVAL_SECONDS", log_flush_interval_raw
+            ),
+            log_sync_interval_seconds=_float(
+                "RUNNER_LOG_SYNC_INTERVAL_SECONDS", log_sync_interval_raw
             ),
             request_timeout_seconds=_float(
                 "RUNNER_REQUEST_TIMEOUT_SECONDS", request_timeout_raw

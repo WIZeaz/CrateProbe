@@ -83,12 +83,14 @@ class DockerRunner:
         max_runtime_seconds: int,
         max_cpus: int,
         mounts: Optional[List[str]] = None,
+        log_sync_interval_seconds: float = 2.0,
     ):
         self.image = image
         self.max_memory_gb = max_memory_gb
         self.max_runtime_seconds = max_runtime_seconds
         self.max_cpus = max_cpus
         self.mounts = mounts or []
+        self.log_sync_interval_seconds = log_sync_interval_seconds
         self._client: Optional[docker.DockerClient] = None
 
     @property
@@ -255,7 +257,7 @@ class DockerRunner:
                     source_stderr=source_stderr,
                     target_stdout=stdout_log,
                     target_stderr=stderr_log,
-                    interval=2.0,
+                    interval=self.log_sync_interval_seconds,
                     stop_event=stop_sync_event,
                 )
             )

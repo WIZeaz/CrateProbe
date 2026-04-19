@@ -29,6 +29,8 @@ RUNNER_SERVER_URL=http://localhost:8080 \
 |----------|---------|-------------|
 | `RUNNER_POLL_INTERVAL_SECONDS` | `3.0` | Seconds to sleep between task claim attempts when idle |
 | `RUNNER_METRICS_INTERVAL_SECONDS` | `10.0` | Minimum seconds between metrics/heartbeat payloads |
+| `RUNNER_LOG_FLUSH_INTERVAL_SECONDS` | `3.0` | Seconds between uploading log chunks to the server |
+| `RUNNER_LOG_SYNC_INTERVAL_SECONDS` | `2.0` | Seconds between syncing Docker container logs to the host |
 | `RUNNER_REQUEST_TIMEOUT_SECONDS` | `10.0` | HTTP request timeout when talking to the backend |
 | `RUNNER_MAX_JOBS` | `3` | *(Reserved)* Max concurrent jobs configured locally |
 | `RUNNER_MAX_MEMORY_GB` | `20` | Docker container memory limit in GB |
@@ -49,11 +51,11 @@ ${RUNNER_WORKSPACE_DIR}/
 │   ├── {task_id}-stdout.log
 │   ├── {task_id}-stderr.log
 │   └── {task_id}-runner.log
-├── repos/                          # Downloaded .crate files and temp extraction
-└── {crate_name}-{version}/         # Per-task workspace mounted into Docker
-    └── testgen/
-        ├── tests/                  # Generated test cases
-        ├── poc/                    # Proof-of-concept outputs
-        ├── miri_report.txt
-        └── stats.yaml
+└── repos/                          # Downloaded .crate files and temp extraction
+    └── {crate_name}-{version}/         # Per-task workspace mounted into Docker
+        └── testgen/
+            ├── tests/                  # Generated test cases
+            ├── poc/                    # Proof-of-concept outputs
+            ├── miri_report.txt
+            └── stats.yaml
 ```

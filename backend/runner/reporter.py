@@ -9,7 +9,6 @@ logger = logging.getLogger(__name__)
 
 
 class TaskReporter:
-    LOG_FLUSH_INTERVAL = 3.0
     PROGRESS_INTERVAL = 10.0
 
     def __init__(
@@ -19,12 +18,14 @@ class TaskReporter:
         lease_token: str,
         log_paths: dict[str, Path],
         workspace_dir: Path,
+        log_flush_interval: float = 3.0,
     ):
         self.client = client
         self.task_id = task_id
         self.lease_token = lease_token
         self.log_paths = log_paths
         self.workspace_dir = workspace_dir
+        self.log_flush_interval = log_flush_interval
         self._stop_event = asyncio.Event()
         self._next_chunk_seq: dict[str, int] = {}
         self._sent_offsets: dict[str, int] = {}
@@ -40,7 +41,7 @@ class TaskReporter:
 
                 try:
                     await asyncio.wait_for(
-                        self._stop_event.wait(), timeout=self.LOG_FLUSH_INTERVAL
+                        self._stop_event.wait(), timeout=self.log_flush_interval
                     )
                 except asyncio.TimeoutError:
                     pass
