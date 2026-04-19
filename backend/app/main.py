@@ -780,6 +780,8 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                     case_count=request.case_count,
                     poc_count=request.poc_count,
                 )
+            if request.compile_failed is not None:
+                db.update_task_compile_failed(task_id, request.compile_failed)
 
         if applied:
             updated_task = db.get_task(task_id)

@@ -29,7 +29,7 @@ class TaskReporter:
         self._next_chunk_seq: dict[str, int] = {}
         self._sent_offsets: dict[str, int] = {}
         self._next_event_seq = 2  # started uses 1
-        self._last_counts: Tuple[int, int] = (0, 0)
+        self._last_counts: Tuple[int, int, int | None] = (0, 0, None)
         self._last_progress_time = 0.0
 
     async def run(self) -> None:
@@ -115,10 +115,11 @@ class TaskReporter:
             return
 
         case_count, poc_count = self._count_generated_items()
-        if (case_count, poc_count) == self._last_counts:
+        compile_failed = self._get_compile_failed_count()
+        if (case_count, poc_count, compile_failed) == self._last_counts:
             return
 
-        self._last_counts = (case_count, poc_count)
+        self._last_counts = (case_count, poc_count, compile_failed)
         self._last_progress_time = now
 
         event_seq = self._next_event_seq
@@ -133,6 +134,7 @@ class TaskReporter:
                     "event_type": "progress",
                     "case_count": case_count,
                     "poc_count": poc_count,
+                    "compile_failed": compile_failed,
                 },
             )
         except Exception as exc:
@@ -144,6 +146,34 @@ class TaskReporter:
                     "event_seq": event_seq,
                 },
             )
+
+    def _get_compile_failed_count(self) -> int | None:
+        stats_yaml_path = self.workspace_dir / "testgen" / "stats.yaml"
+        if not stats_yaml_path.exists():
+            return None
+        try:
+            lines = stats_yaml_path.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines()
+        except Exception:
+            return None
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if not line.startswith("CompileFailed:") and not line.startswith(
+                "compile_failed:"
+            ):
+                continue
+            value = line.split(":", 1)[1].strip()
+            if value.startswith('"') and value.endswith('"') and len(value) >= 2:
+                value = value[1:-1].strip()
+            if value.startswith("'") and value.endswith("'") and len(value) >= 2:
+                value = value[1:-1].strip()
+            if value.isdigit():
+                return int(value)
+            return None
+        return None
 
     def _count_generated_items(self) -> Tuple[int, int]:
         testgen_dir = self.workspace_dir / "testgen"
