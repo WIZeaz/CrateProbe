@@ -371,7 +371,7 @@ class DockerRunner:
                     },
                 )
                 await asyncio.to_thread(
-                    self._stop_container_sync, container, timeout=10
+                    self._stop_container_sync, container, timeout=30
                 )
                 duration_ms = int((time.monotonic() - started_at) * 1000)
                 logger.error(
@@ -490,7 +490,7 @@ class DockerRunner:
     def _run_container_sync(self, **kwargs):
         return self.client.containers.run(**kwargs)
 
-    def _stop_container_sync(self, container, timeout: int = 5) -> None:
+    def _stop_container_sync(self, container, timeout: int = 10) -> None:
         try:
             container.stop(timeout=timeout)
         except Exception:
