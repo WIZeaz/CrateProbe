@@ -191,7 +191,7 @@ def test_create_task_allows_different_crates_same_version(client, monkeypatch):
     assert task1_id != task2_id
 
 
-def test_log_chunk_unknown_type_logs_warning_with_fields(client, caplog):
+def test_log_chunk_missing_task_logs_warning_with_fields(client, caplog):
     caplog.set_level("WARNING")
     runner_id, token = create_runner_and_token(client, "runner-unknown")
 
@@ -202,7 +202,11 @@ def test_log_chunk_unknown_type_logs_warning_with_fields(client, caplog):
     )
 
     assert response.status_code == 404
-    record = next(r for r in caplog.records if "unknown log type" in r.message.lower())
+    record = next(
+        r
+        for r in caplog.records
+        if "runner task not found for log ingest" in r.message.lower()
+    )
     assert record.request_id == "req-unknown"
     assert record.runner_id == runner_id
     assert record.task_id == 1

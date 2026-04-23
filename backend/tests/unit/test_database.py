@@ -163,7 +163,7 @@ def test_reset_task_for_retry(db):
     assert task.case_count == 0
     assert task.poc_count == 0
     assert task.exit_code is None
-    assert task.compile_failed is None
+    assert task.compile_failed == 0
     assert task.pid is None
     assert task.started_at is None
     assert task.finished_at is None
