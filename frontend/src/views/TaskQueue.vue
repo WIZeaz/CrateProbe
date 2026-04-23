@@ -195,11 +195,11 @@ onUnmounted(() => {
       <p class="text-gray-500">No tasks in queue.</p>
     </div>
 
-    <div v-else class="bento-card overflow-x-auto">
-      <table class="min-w-full divide-y divide-gray-200">
+    <div v-else class="bento-card">
+      <table class="w-full table-fixed divide-y divide-gray-200">
         <thead>
           <tr>
-            <th class="px-4 py-3 text-left">
+            <th class="px-4 py-3 text-left w-12">
               <input
                 v-if="runningTasks.length > 0"
                 type="checkbox"
@@ -209,13 +209,13 @@ onUnmounted(() => {
                 class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
             </th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Crate</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Version</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Runner ID</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Queue Position</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Runtime</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap w-16">ID</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">Crate</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap w-24">Version</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap w-24">Status</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap w-32">Runner ID</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap w-28">Queue Pos</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap w-24">Runtime</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-gray-200">
@@ -234,12 +234,12 @@ onUnmounted(() => {
               />
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">#{{ task.id }}</td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">{{ task.crate_name }}</td>
+            <td class="px-4 py-3 text-sm font-medium text-gray-900 truncate">{{ task.crate_name }}</td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">{{ task.version }}</td>
             <td class="px-4 py-3 whitespace-nowrap">
               <span class="status-badge status-running">{{ task.status }}</span>
             </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500"><RunnerIdBadge :runner-id="task.runner_id || ''" /></td>
+            <td class="px-4 py-3 text-sm text-gray-500 truncate"><RunnerIdBadge :runner-id="task.runner_id || ''" /></td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">-</td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">{{ formatDuration(task.started_at, task.finished_at) }}</td>
           </tr>
@@ -259,12 +259,12 @@ onUnmounted(() => {
               />
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">#{{ task.id }}</td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">{{ task.crate_name }}</td>
+            <td class="px-4 py-3 text-sm font-medium text-gray-900 truncate">{{ task.crate_name }}</td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">{{ task.version }}</td>
             <td class="px-4 py-3 whitespace-nowrap">
               <span class="status-badge status-pending">{{ task.status }}</span>
             </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500"><RunnerIdBadge :runner-id="task.runner_id || ''" /></td>
+            <td class="px-4 py-3 text-sm text-gray-500 truncate"><RunnerIdBadge :runner-id="task.runner_id || ''" /></td>
             <td class="px-4 py-3 whitespace-nowrap text-sm font-medium" :class="task.priority > 0 ? 'text-orange-600' : 'text-gray-500'">
               {{ getQueuePosition(task, idx) }}
             </td>
