@@ -360,6 +360,16 @@ class DockerRunner:
                 raise  # Re-raise to propagate cancellation
             except asyncio.TimeoutError:
                 # Execution time limit reached - stop the container
+                actual_elapsed = time.monotonic() - started_at
+                logger.warning(
+                    "enforcing execution timeout",
+                    extra={
+                        "command_summary": command_summary,
+                        "workspace": str(workspace_dir),
+                        "timeout_seconds": timeout_seconds,
+                        "actual_elapsed_seconds": round(actual_elapsed, 2),
+                    },
+                )
                 await asyncio.to_thread(
                     self._stop_container_sync, container, timeout=10
                 )

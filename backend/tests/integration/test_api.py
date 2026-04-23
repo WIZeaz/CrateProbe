@@ -328,6 +328,7 @@ def test_generic_log_raw_endpoint(client, config):
     assert response.status_code == 200
     assert log_content in response.text
 
+
 def test_generic_log_endpoint_file_missing(client):
     """GET /api/tasks/{id}/logs/{name} returns 404 when file doesn't exist"""
     create_resp = client.post(

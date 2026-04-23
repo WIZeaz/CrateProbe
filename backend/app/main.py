@@ -742,11 +742,16 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             )
 
         if applied and request.event_type not in ("started", "progress"):
-            terminal_status = (
-                TaskStatus.COMPLETED
-                if request.event_type == "completed"
-                else TaskStatus.FAILED
-            )
+            if request.event_type == "completed":
+                terminal_status = TaskStatus.COMPLETED
+            elif request.event_type == "cancelled":
+                terminal_status = TaskStatus.CANCELLED
+            elif request.event_type == "timeout":
+                terminal_status = TaskStatus.TIMEOUT
+            elif request.event_type == "oom":
+                terminal_status = TaskStatus.OOM
+            else:
+                terminal_status = TaskStatus.FAILED
             db.update_task_status(
                 task_id,
                 terminal_status,
