@@ -265,7 +265,7 @@ onUnmounted(() => {
         <button
           @click="handleExportXlsx"
           :disabled="loading || tasks.length === 0"
-          class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          class="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           Export XLSX
         </button>
