@@ -131,14 +131,32 @@ class CratesAPI:
             output_path: Where to save the downloaded file
 
         Raises:
-            VersionNotFoundError: If version doesn't exist
+            VersionNotFoundError: If version doesn't exist (404)
+            RuntimeError: If download fails after all retries
         """
         url = f"{self.DOWNLOAD_URL}/{crate_name}/{crate_name}-{version}.crate"
         headers = {"User-Agent": "experiment-platform"}
+        last_error = None
 
-        response = await self.client.get(url, headers=headers)
-        response.raise_for_status()
-        content = response.content
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                response = await self.client.get(url, headers=headers, timeout=30.0)
+                if response.status_code == 404:
+                    raise VersionNotFoundError(
+                        f"Version '{version}' of crate '{crate_name}' not found"
+                    )
+                response.raise_for_status()
+                break
+            except httpx.HTTPError as e:
+                last_error = e
+                if attempt < self.MAX_RETRIES - 1:
+                    await asyncio.sleep(self.RETRY_DELAY)
+                continue
+        else:
+            raise RuntimeError(
+                f"Failed to download {crate_name}@{version} from {url} "
+                f"after {self.MAX_RETRIES} attempts: {last_error}"
+            ) from last_error
 
         with open(output_path, "wb") as f:
-            f.write(content)
+            f.write(response.content)
