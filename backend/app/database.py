@@ -37,8 +37,9 @@ class TaskRecord:
     lease_token: Optional[str] = None
     lease_expires_at: Optional[datetime] = None
     attempt: Optional[int] = None
-    last_event_seq: Optional[int] = None
+    last_sync_seq: Optional[int] = None
     cancel_requested: Optional[bool] = None
+    last_state_sync_at: Optional[datetime] = None
 
 
 @dataclass
@@ -139,13 +140,19 @@ class Database:
             cursor.execute("ALTER TABLE tasks ADD COLUMN lease_expires_at TIMESTAMP")
         if "attempt" not in columns:
             cursor.execute("ALTER TABLE tasks ADD COLUMN attempt INTEGER DEFAULT 0")
-        if "last_event_seq" not in columns:
+        if "last_event_seq" in columns and "last_sync_seq" not in columns:
+            cursor.execute("ALTER TABLE tasks RENAME COLUMN last_event_seq TO last_sync_seq")
+        elif "last_sync_seq" not in columns:
             cursor.execute(
-                "ALTER TABLE tasks ADD COLUMN last_event_seq INTEGER DEFAULT 0"
+                "ALTER TABLE tasks ADD COLUMN last_sync_seq INTEGER DEFAULT 0"
             )
         if "cancel_requested" not in columns:
             cursor.execute(
                 "ALTER TABLE tasks ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0"
+            )
+        if "last_state_sync_at" not in columns:
+            cursor.execute(
+                "ALTER TABLE tasks ADD COLUMN last_state_sync_at TIMESTAMP"
             )
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_created_at ON tasks(created_at DESC)
@@ -155,15 +162,23 @@ class Database:
         """)
         self.conn.commit()
 
-    def apply_task_event(
-        self, task_id: int, event_seq: int, event_type: str
+    def apply_task_sync(
+        self,
+        task_id: int,
+        sync_seq: int,
+        status: str,
+        exit_code: Optional[int] = None,
+        message: Optional[str] = None,
+        case_count: Optional[int] = None,
+        poc_count: Optional[int] = None,
+        compile_failed: Optional[int] = None,
     ) -> Optional[bool]:
-        """Apply an ordered runner event.
+        """Apply an ordered runner sync.
 
         Returns:
             None: task does not exist
-            False: duplicate/stale event sequence (idempotent no-op)
-            True: event applied
+            False: duplicate/stale sequence or invalid state transition
+            True: sync applied
         """
         cursor = self.conn.cursor()
         now = datetime.now()
@@ -171,42 +186,66 @@ class Database:
         try:
             cursor.execute("BEGIN IMMEDIATE")
             row = cursor.execute(
-                "SELECT last_event_seq FROM tasks WHERE id = ?", (task_id,)
+                "SELECT status, last_sync_seq FROM tasks WHERE id = ?", (task_id,)
             ).fetchone()
 
             if row is None:
                 self.conn.commit()
                 return None
 
-            last_event_seq = row["last_event_seq"] or 0
-            if event_seq <= last_event_seq:
+            last_sync_seq = row["last_sync_seq"] or 0
+            if sync_seq <= last_sync_seq:
                 self.conn.commit()
                 return False
 
-            updates = ["last_event_seq = ?"]
-            params = [event_seq]
+            current_status = TaskStatus(row["status"])
+            new_status = TaskStatus(status)
+            terminal_statuses = {
+                TaskStatus.COMPLETED,
+                TaskStatus.FAILED,
+                TaskStatus.CANCELLED,
+                TaskStatus.TIMEOUT,
+                TaskStatus.OOM,
+                TaskStatus.RUNNER_FAILED,
+            }
 
-            if event_type in ("started", "progress"):
-                updates.append("status = ?")
-                params.append(TaskStatus.RUNNING.value)
+            # Prevent rollback from terminal to non-terminal
+            if current_status in terminal_statuses and new_status == TaskStatus.RUNNING:
+                self.conn.commit()
+                return False
+
+            updates = ["last_sync_seq = ?", "last_state_sync_at = ?"]
+            params = [sync_seq, now]
+
+            updates.append("status = ?")
+            params.append(new_status.value)
+
+            if new_status == TaskStatus.RUNNING:
                 updates.append("started_at = COALESCE(started_at, ?)")
                 params.append(now)
-            else:
-                # All non-running events are terminal
-                if event_type == "completed":
-                    terminal_status = TaskStatus.COMPLETED.value
-                elif event_type == "cancelled":
-                    terminal_status = TaskStatus.CANCELLED.value
-                elif event_type == "timeout":
-                    terminal_status = TaskStatus.TIMEOUT.value
-                elif event_type == "oom":
-                    terminal_status = TaskStatus.OOM.value
-                else:
-                    terminal_status = TaskStatus.FAILED.value
-                updates.append("status = ?")
-                params.append(terminal_status)
+            elif new_status in terminal_statuses:
                 updates.append("finished_at = ?")
                 params.append(now)
+
+            if exit_code is not None:
+                updates.append("exit_code = ?")
+                params.append(exit_code)
+
+            if message is not None:
+                updates.append("message = ?")
+                params.append(message)
+
+            if case_count is not None:
+                updates.append("case_count = ?")
+                params.append(case_count)
+
+            if poc_count is not None:
+                updates.append("poc_count = ?")
+                params.append(poc_count)
+
+            if compile_failed is not None:
+                updates.append("compile_failed = ?")
+                params.append(compile_failed)
 
             params.append(task_id)
             cursor.execute(
@@ -462,6 +501,57 @@ class Database:
         )
         self.conn.commit()
 
+    def update_task_state_sync(self, task_id: int) -> bool:
+        """Update the last_state_sync_at timestamp for a running task.
+
+        Args:
+            task_id: Task ID to update
+
+        Returns:
+            True if a row was updated, False otherwise
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "UPDATE tasks SET last_state_sync_at = ? WHERE id = ? AND status = ?",
+            (datetime.now(), task_id, TaskStatus.RUNNING.value),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def reconcile_stale_tasks(self, max_sync_interval_seconds: int) -> int:
+        """Mark RUNNING tasks that haven't synced within the threshold as runner_failed.
+
+        Args:
+            max_sync_interval_seconds: Maximum allowed interval since last sync
+
+        Returns:
+            Number of tasks marked as runner_failed
+        """
+        now = datetime.now()
+        threshold = now - timedelta(seconds=max_sync_interval_seconds)
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            UPDATE tasks
+            SET status = ?,
+                finished_at = ?,
+                last_state_sync_at = NULL,
+                error_message = COALESCE(error_message, ?)
+            WHERE status = ?
+              AND last_state_sync_at IS NOT NULL
+              AND last_state_sync_at <= ?
+            """,
+            (
+                TaskStatus.RUNNER_FAILED.value,
+                now,
+                "Runner stopped sending state sync updates",
+                TaskStatus.RUNNING.value,
+                threshold,
+            ),
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
     def update_task_priority(self, task_id: int, priority: int):
         """Update task priority."""
         cursor = self.conn.cursor()
@@ -507,8 +597,9 @@ class Database:
                 runner_id = NULL,
                 lease_token = NULL,
                 lease_expires_at = NULL,
-                last_event_seq = 0,
-                cancel_requested = 0
+                last_sync_seq = 0,
+                cancel_requested = 0,
+                last_state_sync_at = NULL
             WHERE id = ?
         """,
             (TaskStatus.PENDING.value, task_id),
@@ -597,8 +688,13 @@ class Database:
                 else None
             ),
             attempt=row["attempt"],
-            last_event_seq=row["last_event_seq"],
+            last_sync_seq=row["last_sync_seq"],
             cancel_requested=bool(row["cancel_requested"]),
+            last_state_sync_at=(
+                self._parse_datetime(row["last_state_sync_at"])
+                if row["last_state_sync_at"]
+                else None
+            ),
         )
 
     def _row_to_runner_record(self, row: sqlite3.Row) -> RunnerRecord:
@@ -761,8 +857,9 @@ class Database:
                     poc_count = 0,
                     compile_failed = 0,
                     pid = NULL,
-                    last_event_seq = 0,
-                    cancel_requested = 0
+                    last_sync_seq = 0,
+                    cancel_requested = 0,
+                    last_state_sync_at = ?
                 WHERE id = ? AND status = ?
                 """,
                 (
@@ -770,6 +867,7 @@ class Database:
                     runner_id,
                     lease_token,
                     lease_expires_at,
+                    now,
                     now,
                     row["id"],
                     TaskStatus.PENDING.value,

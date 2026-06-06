@@ -99,12 +99,12 @@ def test_websocket_task_update_event_contains_runner_id(client):
 
     with client.websocket_connect(f"/ws/tasks/{task_id}") as websocket:
         _ = websocket.receive_json()
-        event_resp = client.post(
-            f"/api/runners/{runner_id}/tasks/{task_id}/events",
+        sync_resp = client.post(
+            f"/api/runners/{runner_id}/tasks/{task_id}/sync",
             headers=_runner_headers(token),
-            json={"lease_token": lease_token, "event_seq": 1, "event_type": "started"},
+            json={"lease_token": lease_token, "sync_seq": 1, "status": "running"},
         )
-        assert event_resp.status_code == 200
+        assert sync_resp.status_code == 200
         update_payload = websocket.receive_json()
         assert "runner_id" in update_payload
 
@@ -134,16 +134,16 @@ def test_websocket_dashboard_task_created_and_completed_events_include_runner_id
         assert claim_resp.status_code == 200
         lease_token = claim_resp.json()["lease_token"]
 
-        event_resp = client.post(
-            f"/api/runners/{runner_id}/tasks/{task_id}/events",
+        sync_resp = client.post(
+            f"/api/runners/{runner_id}/tasks/{task_id}/sync",
             headers=_runner_headers(token),
             json={
                 "lease_token": lease_token,
-                "event_seq": 1,
-                "event_type": "completed",
+                "sync_seq": 1,
+                "status": "completed",
             },
         )
-        assert event_resp.status_code == 200
+        assert sync_resp.status_code == 200
         completed_payload = websocket.receive_json()
         assert completed_payload.get("type") == "task_completed"
         assert "runner_id" in completed_payload

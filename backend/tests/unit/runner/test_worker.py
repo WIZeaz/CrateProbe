@@ -22,9 +22,9 @@ class FakeClient:
         self.claims.append(payload)
         return self.claimed_task
 
-    async def send_event(self, task_id, payload):
+    async def sync_task(self, task_id, payload):
         self.events.append((task_id, payload))
-        return {"applied": True}
+        return {"synced": True, "last_sync_seq": payload.get("sync_seq", 0)}
 
     async def send_metrics(self, payload):
         self.metrics.append(payload)

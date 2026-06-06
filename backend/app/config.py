@@ -21,6 +21,8 @@ class Config:
     lease_ttl_seconds: int = 30
     runner_offline_seconds: int = 30
     claim_max_jobs_hard_limit: int = 256
+    state_sync_interval_seconds: int = 30
+    max_state_sync_interval_seconds: int = 120
     admin_token: str = ""
 
     @classmethod
@@ -55,6 +57,12 @@ class Config:
             lease_ttl_seconds=distributed.get("lease_ttl_seconds", 30),
             runner_offline_seconds=distributed.get("runner_offline_seconds", 30),
             claim_max_jobs_hard_limit=claim_max_jobs_hard_limit,
+            state_sync_interval_seconds=distributed.get(
+                "state_sync_interval_seconds", 30
+            ),
+            max_state_sync_interval_seconds=distributed.get(
+                "max_state_sync_interval_seconds", 120
+            ),
             admin_token=security.get("admin_token", ""),
         )
 

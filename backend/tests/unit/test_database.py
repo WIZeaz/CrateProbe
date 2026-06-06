@@ -264,7 +264,7 @@ def test_tasks_table_has_distributed_columns(db):
     assert "lease_token" in columns
     assert "lease_expires_at" in columns
     assert "attempt" in columns
-    assert "last_event_seq" in columns
+    assert "last_sync_seq" in columns
     assert "cancel_requested" in columns
 
 
@@ -344,9 +344,9 @@ def test_runner_mutations_return_false_for_missing_runner(db):
     assert db.delete_runner("missing-runner") is False
 
 
-def test_apply_task_event_started_sets_running(db):
+def test_apply_task_sync_running_sets_running(db):
     task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
-    result = db.apply_task_event(task_id, 1, "started")
+    result = db.apply_task_sync(task_id, 1, "running")
     assert result is True
     task = db.get_task(task_id)
     assert task.status == TaskStatus.RUNNING
@@ -354,71 +354,116 @@ def test_apply_task_event_started_sets_running(db):
     assert task.finished_at is None
 
 
-def test_apply_task_event_progress_sets_running(db):
+def test_apply_task_sync_running_idempotent(db):
     task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
-    db.apply_task_event(task_id, 1, "started")
-    result = db.apply_task_event(task_id, 2, "progress")
+    db.apply_task_sync(task_id, 1, "running")
+    result = db.apply_task_sync(task_id, 2, "running")
     assert result is True
     task = db.get_task(task_id)
     assert task.status == TaskStatus.RUNNING
     assert task.finished_at is None
 
 
-def test_apply_task_event_completed_sets_terminal(db):
+def test_apply_task_sync_completed_sets_terminal(db):
     task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
-    db.apply_task_event(task_id, 1, "started")
-    result = db.apply_task_event(task_id, 2, "completed")
+    db.apply_task_sync(task_id, 1, "running")
+    result = db.apply_task_sync(task_id, 2, "completed")
     assert result is True
     task = db.get_task(task_id)
     assert task.status == TaskStatus.COMPLETED
     assert task.finished_at is not None
 
 
-def test_apply_task_event_failed_sets_terminal(db):
+def test_apply_task_sync_failed_sets_terminal(db):
     task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
-    db.apply_task_event(task_id, 1, "started")
-    result = db.apply_task_event(task_id, 2, "failed")
+    db.apply_task_sync(task_id, 1, "running")
+    result = db.apply_task_sync(task_id, 2, "failed")
     assert result is True
     task = db.get_task(task_id)
     assert task.status == TaskStatus.FAILED
     assert task.finished_at is not None
 
 
-def test_apply_task_event_unknown_type_treats_as_terminal(db):
+def test_apply_task_sync_rejects_stale_seq(db):
     task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
-    db.apply_task_event(task_id, 1, "started")
-    result = db.apply_task_event(task_id, 2, "garbage")
-    assert result is True
-    task = db.get_task(task_id)
-    assert task.status == TaskStatus.FAILED
-    assert task.finished_at is not None
+    db.apply_task_sync(task_id, 1, "running")
+    db.apply_task_sync(task_id, 2, "completed")
+    result = db.apply_task_sync(task_id, 1, "running")
+    assert result is False
+    result = db.apply_task_sync(task_id, 2, "failed")
+    assert result is False
 
 
-def test_apply_task_event_timeout_sets_timeout_status(db):
+def test_apply_task_sync_timeout_sets_timeout_status(db):
     task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
-    db.apply_task_event(task_id, 1, "started")
-    result = db.apply_task_event(task_id, 2, "timeout")
+    db.apply_task_sync(task_id, 1, "running")
+    result = db.apply_task_sync(task_id, 2, "timeout")
     assert result is True
     task = db.get_task(task_id)
     assert task.status == TaskStatus.TIMEOUT
     assert task.finished_at is not None
 
 
-def test_apply_task_event_oom_sets_oom_status(db):
+def test_apply_task_sync_oom_sets_oom_status(db):
     task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
-    db.apply_task_event(task_id, 1, "started")
-    result = db.apply_task_event(task_id, 2, "oom")
+    db.apply_task_sync(task_id, 1, "running")
+    result = db.apply_task_sync(task_id, 2, "oom")
     assert result is True
     task = db.get_task(task_id)
     assert task.status == TaskStatus.OOM
     assert task.finished_at is not None
 
 
-def test_apply_task_event_cancelled_sets_cancelled_status(db):
+def test_apply_task_sync_cancelled_sets_cancelled_status(db):
     task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
-    db.apply_task_event(task_id, 1, "started")
-    result = db.apply_task_event(task_id, 2, "cancelled")
+    db.apply_task_sync(task_id, 1, "running")
+    result = db.apply_task_sync(task_id, 2, "cancelled")
     assert result is True
     task = db.get_task(task_id)
     assert task.status == TaskStatus.CANCELLED
     assert task.finished_at is not None
+
+
+def test_apply_task_sync_prevents_terminal_to_running_rollback(db):
+    task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
+    db.apply_task_sync(task_id, 1, "running")
+    db.apply_task_sync(task_id, 2, "completed")
+    result = db.apply_task_sync(task_id, 3, "running")
+    assert result is False
+    task = db.get_task(task_id)
+    assert task.status == TaskStatus.COMPLETED
+
+
+def test_apply_task_sync_allows_terminal_to_terminal_transition(db):
+    task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
+    db.apply_task_sync(task_id, 1, "running")
+    db.apply_task_sync(task_id, 2, "failed")
+    result = db.apply_task_sync(task_id, 3, "completed")
+    assert result is True
+    task = db.get_task(task_id)
+    assert task.status == TaskStatus.COMPLETED
+
+
+def test_apply_task_sync_updates_counts(db):
+    task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
+    db.apply_task_sync(task_id, 1, "running")
+    result = db.apply_task_sync(
+        task_id, 2, "running", case_count=5, poc_count=2, compile_failed=1
+    )
+    assert result is True
+    task = db.get_task(task_id)
+    assert task.case_count == 5
+    assert task.poc_count == 2
+    assert task.compile_failed == 1
+
+
+def test_apply_task_sync_updates_exit_code_and_message(db):
+    task_id = db.create_task("serde", "1.0.0", "/path", "/log1", "/log2")
+    db.apply_task_sync(task_id, 1, "running")
+    result = db.apply_task_sync(
+        task_id, 2, "failed", exit_code=1, message="build error"
+    )
+    assert result is True
+    task = db.get_task(task_id)
+    assert task.exit_code == 1
+    assert task.message == "build error"

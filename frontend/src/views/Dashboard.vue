@@ -39,6 +39,7 @@ async function fetchDashboard(isRefresh = false) {
       cancelled_tasks: stats.cancelled,
       timeout_tasks: stats.timeout,
       oom_tasks: stats.oom,
+      runner_failed_tasks: stats.runner_failed,
       recent_tasks: tasks.slice(0, 10) // Get 10 most recent tasks
     }
     // Only hide loading spinner after initial load
@@ -151,7 +152,7 @@ onUnmounted(() => {
 
     <div v-else>
       <!-- Stats Grid -->
-      <div class="bento-grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 mb-8">
+      <div class="bento-grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 mb-8">
         <StatCard
           title="Total Tasks"
           :value="dashboard.total_tasks"
@@ -191,6 +192,14 @@ onUnmounted(() => {
           color="purple"
           :clickable="true"
           @click="navigateToTasks('pending')"
+        />
+        <StatCard
+          title="Runner Failed"
+          :value="dashboard.runner_failed_tasks || 0"
+          icon="💥"
+          color="red"
+          :clickable="true"
+          @click="navigateToTasks('runner_failed')"
         />
       </div>
 

@@ -10,6 +10,7 @@ class TaskStatus(str, Enum):
     CANCELLED = "cancelled"
     TIMEOUT = "timeout"
     OOM = "oom"
+    RUNNER_FAILED = "runner_failed"
 
 
 @dataclass

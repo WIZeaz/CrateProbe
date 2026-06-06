@@ -20,6 +20,7 @@ class TaskScheduler:
 
     async def schedule_tasks(self):
         self.reconcile_expired_leases()
+        self.reconcile_stale_tasks()
 
     def reconcile_expired_leases(self):
         now = datetime.now()
@@ -82,6 +83,20 @@ class TaskScheduler:
                     "reason": "server_shutdown",
                     "from_status": TaskStatus.RUNNING.value,
                     "to_status": TaskStatus.FAILED.value,
+                },
+            )
+
+    def reconcile_stale_tasks(self):
+        stale_count = self.db.reconcile_stale_tasks(
+            self.config.max_state_sync_interval_seconds
+        )
+        if stale_count > 0:
+            logger.warning(
+                "marked stale tasks as runner_failed",
+                extra={
+                    "stale_count": stale_count,
+                    "to_status": TaskStatus.RUNNER_FAILED.value,
+                    "max_sync_interval_seconds": self.config.max_state_sync_interval_seconds,
                 },
             )
 

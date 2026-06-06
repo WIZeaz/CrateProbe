@@ -44,3 +44,6 @@ htmlcov/
 CLAUDE.md
 .venv/
 .superpowers/
+
+# temp scripts
+start_runner.sh

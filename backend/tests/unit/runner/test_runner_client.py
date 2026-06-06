@@ -87,7 +87,7 @@ async def test_heartbeat_sends_bearer_auth_header(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.asyncio
-async def test_send_event_retries_transient_5xx(monkeypatch: pytest.MonkeyPatch):
+async def test_sync_task_retries_transient_5xx(monkeypatch: pytest.MonkeyPatch):
     attempts = 0
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -97,23 +97,23 @@ async def test_send_event_retries_transient_5xx(monkeypatch: pytest.MonkeyPatch)
             return httpx.Response(
                 status_code=503, json={"detail": "busy"}, request=request
             )
-        return httpx.Response(status_code=200, json={"applied": True}, request=request)
+        return httpx.Response(status_code=200, json={"synced": True, "last_sync_seq": 1}, request=request)
 
     _patch_async_client(monkeypatch, handler)
     client = RunnerControlClient(
         base_url="http://control.local",
         runner_id="runner-3",
-        token="event-token",
+        token="sync-token",
         timeout=5.0,
     )
 
-    result = await client.send_event(
+    result = await client.sync_task(
         task_id=99,
-        payload={"lease_token": "lease", "event_seq": 1, "event_type": "started"},
+        payload={"lease_token": "lease", "sync_seq": 1, "status": "running"},
     )
 
     assert attempts == 3
-    assert result == {"applied": True}
+    assert result == {"synced": True, "last_sync_seq": 1}
     await client.aclose()
 
 

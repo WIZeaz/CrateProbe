@@ -105,10 +105,10 @@ class ClaimTaskRequest(BaseModel):
     max_jobs: int = Field(ge=1)
 
 
-class RunnerTaskEventRequest(BaseModel):
+class RunnerTaskSyncRequest(BaseModel):
     lease_token: str
-    event_seq: int
-    event_type: str
+    sync_seq: int
+    status: str
     exit_code: Optional[int] = None
     message: Optional[str] = None
     case_count: Optional[int] = None
@@ -279,7 +279,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         lease_token: str,
         *,
         request_id: str,
-        event_seq: Optional[int] = None,
+        sync_seq: Optional[int] = None,
         log_type: Optional[str] = None,
         chunk_seq: Optional[int] = None,
     ) -> TaskRecord:
@@ -298,12 +298,12 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                 )
             else:
                 logger.warning(
-                    "runner task not found for event ingest",
+                    "runner task not found for sync ingest",
                     extra={
                         "request_id": request_id,
                         "runner_id": runner_id,
                         "task_id": task_id,
-                        "event_seq": event_seq,
+                        "sync_seq": sync_seq,
                     },
                 )
             raise HTTPException(status_code=404, detail="Task not found")
@@ -319,7 +319,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                     "request_id": request_id,
                     "runner_id": runner_id,
                     "task_id": task_id,
-                    "event_seq": event_seq,
+                    "sync_seq": sync_seq,
                     "log_type": log_type,
                     "chunk_seq": chunk_seq,
                 },
@@ -701,11 +701,11 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             ),
         )
 
-    @app.post("/api/runners/{runner_id}/tasks/{task_id}/events")
-    async def ingest_runner_task_event(
+    @app.post("/api/runners/{runner_id}/tasks/{task_id}/sync")
+    async def ingest_runner_task_sync(
         runner_id: str,
         task_id: int,
-        request: RunnerTaskEventRequest,
+        request: RunnerTaskSyncRequest,
         x_request_id: Optional[str] = Header(default=None, alias="X-Request-ID"),
         _auth: None = Depends(require_runner_auth),
     ):
@@ -715,67 +715,43 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             runner_id,
             request.lease_token,
             request_id=request_id,
-            event_seq=request.event_seq,
+            sync_seq=request.sync_seq,
         )
-        applied = db.apply_task_event(task_id, request.event_seq, request.event_type)
+        applied = db.apply_task_sync(
+            task_id,
+            request.sync_seq,
+            request.status,
+            exit_code=request.exit_code,
+            message=request.message,
+            case_count=request.case_count,
+            poc_count=request.poc_count,
+            compile_failed=request.compile_failed,
+        )
         if applied is None:
             logger.warning(
-                "runner task not found for event ingest",
+                "runner task not found for sync ingest",
                 extra={
                     "request_id": request_id,
                     "runner_id": runner_id,
                     "task_id": task_id,
-                    "event_seq": request.event_seq,
+                    "sync_seq": request.sync_seq,
                 },
             )
             raise HTTPException(status_code=404, detail="Task not found")
 
         if not applied:
             logger.info(
-                "runner task event not applied",
+                "runner task sync not applied",
                 extra={
                     "request_id": request_id,
                     "runner_id": runner_id,
                     "task_id": task_id,
-                    "event_seq": request.event_seq,
+                    "sync_seq": request.sync_seq,
                 },
             )
 
-        if applied and request.event_type not in ("started", "progress"):
-            if request.event_type == "completed":
-                terminal_status = TaskStatus.COMPLETED
-            elif request.event_type == "cancelled":
-                terminal_status = TaskStatus.CANCELLED
-            elif request.event_type == "timeout":
-                terminal_status = TaskStatus.TIMEOUT
-            elif request.event_type == "oom":
-                terminal_status = TaskStatus.OOM
-            else:
-                terminal_status = TaskStatus.FAILED
-            db.update_task_status(
-                task_id,
-                terminal_status,
-                exit_code=request.exit_code,
-                message=request.message,
-            )
-            if request.case_count is not None or request.poc_count is not None:
-                db.update_task_counts(
-                    task_id,
-                    case_count=request.case_count,
-                    poc_count=request.poc_count,
-                )
-            if request.compile_failed is not None:
-                db.update_task_compile_failed(task_id, request.compile_failed)
-
-        if applied and request.event_type == "progress":
-            if request.case_count is not None or request.poc_count is not None:
-                db.update_task_counts(
-                    task_id,
-                    case_count=request.case_count,
-                    poc_count=request.poc_count,
-                )
-            if request.compile_failed is not None:
-                db.update_task_compile_failed(task_id, request.compile_failed)
+        task = db.get_task(task_id)
+        last_sync_seq = task.last_sync_seq if task is not None else 0
 
         if applied:
             updated_task = db.get_task(task_id)
@@ -787,12 +763,20 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                 dashboard_payload = _task_to_dict(updated_task)
                 dashboard_payload["type"] = (
                     "task_completed"
-                    if request.event_type not in ("started", "progress")
+                    if TaskStatus(request.status)
+                    in (
+                        TaskStatus.COMPLETED,
+                        TaskStatus.FAILED,
+                        TaskStatus.CANCELLED,
+                        TaskStatus.TIMEOUT,
+                        TaskStatus.OOM,
+                        TaskStatus.RUNNER_FAILED,
+                    )
                     else "task_update"
                 )
                 await ws_manager.broadcast_dashboard_update(dashboard_payload)
 
-        return {"applied": applied}
+        return {"synced": applied, "last_sync_seq": last_sync_seq}
 
     @app.post("/api/runners/{runner_id}/tasks/{task_id}/logs/{log_type}/chunks")
     async def ingest_runner_task_log_chunk(
@@ -999,6 +983,9 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             ),
             "timeout": len([t for t in all_tasks if t.status == TaskStatus.TIMEOUT]),
             "oom": len([t for t in all_tasks if t.status == TaskStatus.OOM]),
+            "runner_failed": len(
+                [t for t in all_tasks if t.status == TaskStatus.RUNNER_FAILED]
+            ),
         }
 
         return stats
@@ -1100,6 +1087,9 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                     [t for t in all_tasks if t.status == TaskStatus.TIMEOUT]
                 ),
                 "oom": len([t for t in all_tasks if t.status == TaskStatus.OOM]),
+                "runner_failed": len(
+                    [t for t in all_tasks if t.status == TaskStatus.RUNNER_FAILED]
+                ),
             }
             await websocket.send_json(stats)
 

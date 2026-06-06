@@ -56,9 +56,9 @@ class RunnerControlClient:
         response.raise_for_status()
         return response.json()
 
-    async def send_event(self, task_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+    async def sync_task(self, task_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._post_with_retry(
-            f"/api/runners/{self.runner_id}/tasks/{task_id}/events", payload
+            f"/api/runners/{self.runner_id}/tasks/{task_id}/sync", payload
         )
 
     async def send_log_chunk(

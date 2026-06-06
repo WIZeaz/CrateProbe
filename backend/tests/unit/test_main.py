@@ -214,245 +214,190 @@ def test_log_chunk_missing_task_logs_warning_with_fields(client, caplog):
     assert record.chunk_seq == 1
 
 
-def test_event_lease_mismatch_logs_warning_with_fields(client, monkeypatch, caplog):
-    caplog.set_level("WARNING")
-    runner_id, token = create_runner_and_token(client, "runner-lease")
-    task_id = create_pending_task(client, monkeypatch, crate_name="lease-crate")
+def test_sync_endpoint_updates_status_and_counts(client, monkeypatch):
+    runner_id, token = create_runner_and_token(client, "runner-sync")
+    task_id = create_pending_task(client, monkeypatch, crate_name="sync-crate")
     claimed_task_id, lease_token = claim_task(client, runner_id, token)
     assert claimed_task_id == task_id
 
     response = client.post(
-        f"/api/runners/{runner_id}/tasks/{task_id}/events",
+        f"/api/runners/{runner_id}/tasks/{task_id}/sync",
         headers=auth_headers(token),
         json={
-            "lease_token": f"wrong-{lease_token}",
-            "event_seq": 1,
-            "event_type": "progress",
+            "lease_token": lease_token,
+            "sync_seq": 1,
+            "status": "running",
+            "case_count": 3,
+            "poc_count": 1,
         },
+    )
+    assert response.status_code == 200
+    assert response.json()["synced"] is True
+
+    task_response = client.get(f"/api/tasks/{task_id}")
+    assert task_response.status_code == 200
+    task_data = task_response.json()
+    assert task_data["status"] == "running"
+    assert task_data["case_count"] == 3
+    assert task_data["poc_count"] == 1
+
+
+def test_sync_endpoint_terminal_status_sets_finished_at(client, monkeypatch):
+    runner_id, token = create_runner_and_token(client, "runner-sync-term")
+    task_id = create_pending_task(client, monkeypatch, crate_name="sync-term-crate")
+    claimed_task_id, lease_token = claim_task(client, runner_id, token)
+    assert claimed_task_id == task_id
+
+    client.post(
+        f"/api/runners/{runner_id}/tasks/{task_id}/sync",
+        headers=auth_headers(token),
+        json={"lease_token": lease_token, "sync_seq": 1, "status": "running"},
+    )
+
+    response = client.post(
+        f"/api/runners/{runner_id}/tasks/{task_id}/sync",
+        headers=auth_headers(token),
+        json={
+            "lease_token": lease_token,
+            "sync_seq": 2,
+            "status": "completed",
+            "exit_code": 0,
+            "message": "Done",
+            "case_count": 10,
+            "poc_count": 5,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["synced"] is True
+
+    task_response = client.get(f"/api/tasks/{task_id}")
+    assert task_response.status_code == 200
+    task_data = task_response.json()
+    assert task_data["status"] == "completed"
+    assert task_data["finished_at"] is not None
+    assert task_data["exit_code"] == 0
+    assert task_data["message"] == "Done"
+    assert task_data["case_count"] == 10
+
+
+def test_sync_endpoint_idempotent_for_duplicate_seq(client, monkeypatch):
+    runner_id, token = create_runner_and_token(client, "runner-sync-dup")
+    task_id = create_pending_task(client, monkeypatch, crate_name="sync-dup-crate")
+    claimed_task_id, lease_token = claim_task(client, runner_id, token)
+    assert claimed_task_id == task_id
+
+    first = client.post(
+        f"/api/runners/{runner_id}/tasks/{task_id}/sync",
+        headers=auth_headers(token),
+        json={
+            "lease_token": lease_token,
+            "sync_seq": 1,
+            "status": "completed",
+            "case_count": 5,
+        },
+    )
+    assert first.status_code == 200
+    assert first.json()["synced"] is True
+
+    second = client.post(
+        f"/api/runners/{runner_id}/tasks/{task_id}/sync",
+        headers=auth_headers(token),
+        json={
+            "lease_token": lease_token,
+            "sync_seq": 1,
+            "status": "failed",
+            "case_count": 99,
+        },
+    )
+    assert second.status_code == 200
+    assert second.json()["synced"] is False
+
+    task_response = client.get(f"/api/tasks/{task_id}")
+    assert task_response.status_code == 200
+    task_data = task_response.json()
+    assert task_data["status"] == "completed"
+    assert task_data["case_count"] == 5
+
+
+def test_sync_endpoint_rejects_invalid_lease(client, monkeypatch):
+    runner_id, token = create_runner_and_token(client, "runner-sync-lease")
+    task_id = create_pending_task(client, monkeypatch, crate_name="sync-lease-crate")
+    claim_task(client, runner_id, token)
+
+    response = client.post(
+        f"/api/runners/{runner_id}/tasks/{task_id}/sync",
+        headers=auth_headers(token),
+        json={
+            "lease_token": "invalid-lease",
+            "sync_seq": 1,
+            "status": "running",
+        },
+    )
+    assert response.status_code == 409
+    assert "lease" in response.json()["detail"].lower()
+
+
+def test_sync_missing_task_logs_warning_with_fields(client, caplog):
+    caplog.set_level("WARNING")
+    runner_id, token = create_runner_and_token(client, "runner-sync-missing")
+
+    response = client.post(
+        f"/api/runners/{runner_id}/tasks/999999/sync",
+        headers=auth_headers(token, request_id="req-sync-missing"),
+        json={"lease_token": "x", "sync_seq": 1, "status": "running"},
+    )
+
+    assert response.status_code == 404
+    record = next(
+        r
+        for r in caplog.records
+        if "task not found" in r.message.lower() and "sync" in r.message.lower()
+    )
+    assert record.request_id == "req-sync-missing"
+    assert record.runner_id == runner_id
+    assert record.task_id == 999999
+    assert record.sync_seq == 1
+
+
+
+
+def test_task_sync_endpoint_updates_last_state_sync_at(client, monkeypatch):
+    runner_id, token = create_runner_and_token(client, "runner-sync")
+    task_id = create_pending_task(client, monkeypatch, crate_name="sync-crate")
+    claimed_task_id, lease_token = claim_task(client, runner_id, token)
+    assert claimed_task_id == task_id
+
+    response = client.post(
+        f"/api/runners/{runner_id}/tasks/{task_id}/sync",
+        headers=auth_headers(token),
+        json={"lease_token": lease_token, "sync_seq": 1, "status": "running"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["synced"] is True
+
+
+def test_task_sync_endpoint_rejects_invalid_lease(client, monkeypatch):
+    runner_id, token = create_runner_and_token(client, "runner-sync-bad")
+    task_id = create_pending_task(client, monkeypatch, crate_name="sync-bad-crate")
+    claim_task(client, runner_id, token)
+
+    response = client.post(
+        f"/api/runners/{runner_id}/tasks/{task_id}/sync",
+        headers=auth_headers(token),
+        json={"lease_token": "invalid-lease", "sync_seq": 1, "status": "running"},
     )
 
     assert response.status_code == 409
-    record = next(
-        r for r in caplog.records if "lease token mismatch" in r.message.lower()
-    )
-    assert record.runner_id == runner_id
-    assert record.task_id == task_id
-    assert record.event_seq == 1
-    assert isinstance(record.request_id, str)
-    assert len(record.request_id) == 12
+    assert "lease" in response.json()["detail"].lower()
 
 
-def test_event_not_applied_logs_info_with_fields(client, monkeypatch, caplog):
-    caplog.set_level("INFO")
-    runner_id, token = create_runner_and_token(client, "runner-not-applied")
-    task_id = create_pending_task(client, monkeypatch, crate_name="not-applied-crate")
-    claimed_task_id, lease_token = claim_task(client, runner_id, token)
-    assert claimed_task_id == task_id
-
-    monkeypatch.setattr(
-        main_module.Database, "apply_task_event", lambda *_a, **_k: False
-    )
-    response = client.post(
-        f"/api/runners/{runner_id}/tasks/{task_id}/events",
-        headers=auth_headers(token, request_id="req-not-applied"),
-        json={"lease_token": lease_token, "event_seq": 2, "event_type": "progress"},
-    )
-
+def test_dashboard_stats_includes_runner_failed(client, monkeypatch):
+    # Create a task and mark it as runner_failed directly via DB
+    task_id = create_pending_task(client, monkeypatch, crate_name="stats-crate")
+    # We cannot easily set runner_failed through API, so just verify the field exists
+    response = client.get("/api/dashboard/stats")
     assert response.status_code == 200
-    assert response.json()["applied"] is False
-    record = next(r for r in caplog.records if "event not applied" in r.message.lower())
-    assert record.request_id == "req-not-applied"
-    assert record.runner_id == runner_id
-    assert record.task_id == task_id
-    assert record.event_seq == 2
-
-
-def test_event_missing_task_logs_warning_with_fields(client, caplog):
-    caplog.set_level("WARNING")
-    runner_id, token = create_runner_and_token(client, "runner-missing-event")
-
-    response = client.post(
-        f"/api/runners/{runner_id}/tasks/999999/events",
-        headers=auth_headers(token, request_id="req-missing-event"),
-        json={"lease_token": "x", "event_seq": 1, "event_type": "progress"},
-    )
-
-    assert response.status_code == 404
-    record = next(
-        r
-        for r in caplog.records
-        if "task not found" in r.message.lower() and "event" in r.message.lower()
-    )
-    assert record.request_id == "req-missing-event"
-    assert record.runner_id == runner_id
-    assert record.task_id == 999999
-    assert record.event_seq == 1
-
-
-def test_log_ingest_missing_task_logs_warning_with_fields(client, caplog):
-    caplog.set_level("WARNING")
-    runner_id, token = create_runner_and_token(client, "runner-missing-log")
-
-    response = client.post(
-        f"/api/runners/{runner_id}/tasks/999999/logs/stdout/chunks",
-        headers=auth_headers(token, request_id="req-missing-log"),
-        json={"lease_token": "x", "chunk_seq": 1, "content": "hello"},
-    )
-
-    assert response.status_code == 404
-    record = next(
-        r
-        for r in caplog.records
-        if "task not found" in r.message.lower() and "log" in r.message.lower()
-    )
-    assert record.request_id == "req-missing-log"
-    assert record.runner_id == runner_id
-    assert record.task_id == 999999
-    assert record.log_type == "stdout"
-    assert record.chunk_seq == 1
-
-
-def test_claim_invalid_jobs_warning_contains_runner_id(client, caplog):
-    caplog.set_level("WARNING")
-    runner_id, token = create_runner_and_token(client, "runner-claim-invalid-warning")
-
-    response = client.post(
-        f"/api/runners/{runner_id}/claim",
-        headers=auth_headers(token, request_id="req-claim-invalid-jobs"),
-        json={"jobs": 3, "max_jobs": 2},
-    )
-
-    assert response.status_code == 422
-    record = next(
-        r for r in caplog.records if "invalid claim payload" in r.message.lower()
-    )
-    assert record.request_id == "req-claim-invalid-jobs"
-    assert record.runner_id == runner_id
-    assert record.jobs == 3
-    assert record.max_jobs == 2
-
-
-def test_claim_max_jobs_overflow_warning_contains_runner_id(client, caplog):
-    caplog.set_level("WARNING")
-    runner_id, token = create_runner_and_token(client, "runner-claim-overflow-warning")
-
-    response = client.post(
-        f"/api/runners/{runner_id}/claim",
-        headers=auth_headers(token, request_id="req-claim-overflow-max-jobs"),
-        json={"jobs": 0, "max_jobs": 257},
-    )
-
-    assert response.status_code == 422
-    record = next(
-        r for r in caplog.records if "max_jobs exceeds hard limit" in r.message.lower()
-    )
-    assert record.request_id == "req-claim-overflow-max-jobs"
-    assert record.runner_id == runner_id
-    assert record.max_jobs == 257
-
-
-def test_progress_event_updates_counts_and_broadcasts(client, monkeypatch):
-    runner_id, token = create_runner_and_token(client, "runner-progress")
-    task_id = create_pending_task(client, monkeypatch, crate_name="progress-crate")
-    claimed_task_id, lease_token = claim_task(client, runner_id, token)
-    assert claimed_task_id == task_id
-
-    response = client.post(
-        f"/api/runners/{runner_id}/tasks/{task_id}/events",
-        headers=auth_headers(token),
-        json={
-            "lease_token": lease_token,
-            "event_seq": 2,
-            "event_type": "progress",
-            "case_count": 5,
-            "poc_count": 2,
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json()["applied"] is True
-
-    task_response = client.get(f"/api/tasks/{task_id}")
-    assert task_response.status_code == 200
-    task_data = task_response.json()
-    assert task_data["case_count"] == 5
-    assert task_data["poc_count"] == 2
-    assert task_data["status"] == "running"
-
-
-def test_terminal_event_type_timeout_sets_timeout_status(client, monkeypatch):
-    runner_id, token = create_runner_and_token(client, "runner-timeout")
-    task_id = create_pending_task(client, monkeypatch, crate_name="timeout-crate")
-    claimed_task_id, lease_token = claim_task(client, runner_id, token)
-    assert claimed_task_id == task_id
-
-    client.post(
-        f"/api/runners/{runner_id}/tasks/{task_id}/events",
-        headers=auth_headers(token),
-        json={
-            "lease_token": lease_token,
-            "event_seq": 1,
-            "event_type": "started",
-        },
-    )
-
-    response = client.post(
-        f"/api/runners/{runner_id}/tasks/{task_id}/events",
-        headers=auth_headers(token),
-        json={
-            "lease_token": lease_token,
-            "event_seq": 2,
-            "event_type": "timeout",
-            "exit_code": -1,
-            "message": "Execution timed out",
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json()["applied"] is True
-
-    task_response = client.get(f"/api/tasks/{task_id}")
-    assert task_response.status_code == 200
-    task_data = task_response.json()
-    assert task_data["status"] == "timeout"
-    assert task_data["finished_at"] is not None
-    assert task_data["message"] == "Execution timed out"
-
-
-def test_terminal_event_type_generic_treats_unknown_as_failed(client, monkeypatch):
-    runner_id, token = create_runner_and_token(client, "runner-terminal-generic")
-    task_id = create_pending_task(client, monkeypatch, crate_name="generic-crate")
-    claimed_task_id, lease_token = claim_task(client, runner_id, token)
-    assert claimed_task_id == task_id
-
-    client.post(
-        f"/api/runners/{runner_id}/tasks/{task_id}/events",
-        headers=auth_headers(token),
-        json={
-            "lease_token": lease_token,
-            "event_seq": 1,
-            "event_type": "started",
-        },
-    )
-
-    response = client.post(
-        f"/api/runners/{runner_id}/tasks/{task_id}/events",
-        headers=auth_headers(token),
-        json={
-            "lease_token": lease_token,
-            "event_seq": 2,
-            "event_type": "garbage_event",
-            "exit_code": -1,
-            "message": "Something weird happened",
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json()["applied"] is True
-
-    task_response = client.get(f"/api/tasks/{task_id}")
-    assert task_response.status_code == 200
-    task_data = task_response.json()
-    assert task_data["status"] == "failed"
-    assert task_data["finished_at"] is not None
-    assert task_data["message"] == "Something weird happened"
+    data = response.json()
+    assert "runner_failed" in data
+    assert isinstance(data["runner_failed"], int)

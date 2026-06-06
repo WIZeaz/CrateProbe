@@ -31,6 +31,7 @@ RUNNER_SERVER_URL=http://localhost:8080 \
 | `RUNNER_METRICS_INTERVAL_SECONDS` | `10.0` | Minimum seconds between metrics/heartbeat payloads |
 | `RUNNER_LOG_FLUSH_INTERVAL_SECONDS` | `3.0` | Seconds between uploading log chunks to the server |
 | `RUNNER_LOG_SYNC_INTERVAL_SECONDS` | `2.0` | Seconds between syncing Docker container logs to the host |
+| `RUNNER_STATE_SYNC_INTERVAL_SECONDS` | `30.0` | Seconds between sending task state sync payloads to the server |
 | `RUNNER_REQUEST_TIMEOUT_SECONDS` | `10.0` | HTTP request timeout when talking to the backend |
 | `RUNNER_MAX_JOBS` | `3` | Max concurrent tasks this runner executes in parallel (must be `>= 1`) |
 | `RUNNER_MAX_MEMORY_GB` | `20` | Docker container memory limit in GB |
@@ -59,3 +60,19 @@ ${RUNNER_WORKSPACE_DIR}/
             ├── miri_report.txt
             └── stats.yaml
 ```
+
+## Communication Protocol
+
+The runner communicates with the backend through the following endpoints:
+
+- **`POST /api/runners/{runner_id}/claim`** — Attempt to claim a pending task. The runner reports its current capacity (`jobs` / `max_jobs`) in the payload.
+- **`POST /api/runners/{runner_id}/heartbeat`** — Periodic heartbeat that extends active task leases and keeps the runner marked as online.
+- **`POST /api/runners/{runner_id}/tasks/{task_id}/sync`** — State synchronization for an active task. The payload includes:
+  - `sync_seq` — Monotonically increasing sequence number for idempotency.
+  - `status` — Task state (`running`, `completed`, `failed`, `timeout`, `oom`, `cancelled`, `runner_failed`).
+  - `exit_code`, `message` — Optional terminal-state details.
+  - `case_count`, `poc_count`, `compile_failed` — Optional progress counters.
+  The backend ACKs with `last_sync_seq`; the runner retries terminal syncs until ACKed.
+- **`POST /api/runners/{runner_id}/tasks/{task_id}/logs/{log_type}/chunks`** — Incremental log chunk upload (stdout, stderr, runner logs, etc.).
+- **`POST /api/runners/{runner_id}/tasks/{task_id}/logs/{log_type}`** — Full log upload for small files (e.g., `stats.yaml`).
+- **`POST /api/runners/{runner_id}/metrics`** — System metrics payload (`cpu_percent`, `memory_percent`, `disk_percent`, `active_tasks`).

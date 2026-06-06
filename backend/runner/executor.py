@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import shutil
 import tarfile
@@ -22,6 +23,29 @@ LOG_UPLOAD_CONFIG = {
     "miri_report": "chunk",
     "stats-yaml": "full",
 }
+
+
+class _SyncState:
+    def __init__(self):
+        self.status = "running"
+        self.exit_code = None
+        self.message = None
+        self.case_count = None
+        self.poc_count = None
+        self.compile_failed = None
+        self.wake_event = asyncio.Event()
+        self.terminal_acked = asyncio.Event()
+        self._next_seq = 1
+
+    def set_terminal(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+        self.wake_event.set()
+
+    def next_seq(self) -> int:
+        seq = self._next_seq
+        self._next_seq += 1
+        return seq
 
 
 class TaskExecutor:
@@ -50,11 +74,6 @@ class TaskExecutor:
             log_sync_interval_seconds=self.config.log_sync_interval_seconds,
         )
 
-        await self.client.send_event(
-            task_id,
-            {"lease_token": lease_token, "event_seq": 1, "event_type": "started"},
-        )
-
         workspace_dir = (
             Path(self.config.workspace_dir) / "repos" / f"{crate_name}-{crate_version}"
         )
@@ -79,6 +98,8 @@ class TaskExecutor:
             "version": crate_version,
         }
 
+        sync_state = _SyncState()
+
         reporter = TaskReporter(
             client=self.client,
             task_id=task_id,
@@ -95,6 +116,21 @@ class TaskExecutor:
             upload_config=LOG_UPLOAD_CONFIG,
         )
         reporter_task = asyncio.create_task(reporter.run())
+
+        sync_task = asyncio.create_task(
+            self._state_sync_loop(
+                task_id,
+                lease_token,
+                workspace_dir,
+                self.config.state_sync_interval_seconds,
+                sync_state,
+            )
+        )
+
+        terminal_status = None
+        terminal_exit_code = None
+        terminal_message = None
+        terminal_counts = None
 
         try:
             task_logger.info("task started", extra=task_ctx)
@@ -135,64 +171,138 @@ class TaskExecutor:
                 self._get_compile_failed_count, workspace_dir
             )
 
-            terminal_seq = reporter.stop()
-            await reporter_task
-
-            await self.client.send_event(
-                task_id,
-                {
-                    "lease_token": lease_token,
-                    "event_seq": terminal_seq,
-                    "event_type": result.state.value,
-                    "exit_code": result.exit_code,
-                    "message": result.message,
-                    "case_count": case_count,
-                    "poc_count": poc_count,
-                    "compile_failed": compile_failed,
-                },
-            )
-            task_logger.info(
-                "task terminal event sent",
-                extra={**task_ctx, "terminal_status": result.state.value},
-            )
+            terminal_status = result.state.value
+            terminal_exit_code = result.exit_code
+            terminal_message = result.message
+            terminal_counts = {
+                "case_count": case_count,
+                "poc_count": poc_count,
+                "compile_failed": compile_failed,
+            }
         except asyncio.CancelledError:
             task_logger.info("task cancelled", extra=task_ctx)
-            terminal_seq = reporter.stop()
-            done, pending = await asyncio.wait([reporter_task], timeout=5.0)
-            if reporter_task in pending:
-                reporter_task.cancel()
-                try:
-                    await reporter_task
-                except asyncio.CancelledError:
-                    pass
-            await self.client.send_event(
-                task_id,
-                {
-                    "lease_token": lease_token,
-                    "event_seq": terminal_seq,
-                    "event_type": "failed",
-                    "message": "Task interrupted by shutdown",
-                },
-            )
+            terminal_status = "failed"
+            terminal_message = "Task interrupted by shutdown"
             raise
         except Exception as exc:
             task_logger.exception("task execution failed", extra=task_ctx)
-            terminal_seq = reporter.stop()
-            await reporter_task
-            await self.client.send_event(
-                task_id,
-                {
-                    "lease_token": lease_token,
-                    "event_seq": terminal_seq,
-                    "event_type": "failed",
-                    "message": str(exc),
-                },
-            )
+            terminal_status = "failed"
+            terminal_message = str(exc)
         finally:
-            task_logger.info("task runner log closed", extra=task_ctx)
-            task_logger.removeHandler(handler)
-            handler.close()
-            await docker.close()
+            await self._shutdown_task(
+                reporter=reporter,
+                reporter_task=reporter_task,
+                sync_state=sync_state,
+                sync_task=sync_task,
+                terminal_status=terminal_status,
+                terminal_exit_code=terminal_exit_code,
+                terminal_message=terminal_message,
+                terminal_counts=terminal_counts,
+                task_logger=task_logger,
+                handler=handler,
+                docker=docker,
+                task_ctx=task_ctx,
+            )
+
+    async def _shutdown_task(
+        self,
+        reporter,
+        reporter_task,
+        sync_state,
+        sync_task,
+        terminal_status,
+        terminal_exit_code,
+        terminal_message,
+        terminal_counts,
+        task_logger,
+        handler,
+        docker,
+        task_ctx,
+    ):
+        reporter.stop()
+        try:
+            await asyncio.wait_for(reporter_task, timeout=30.0)
+        except asyncio.TimeoutError:
+            reporter_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reporter_task
+
+        if terminal_status is not None:
+            sync_state.set_terminal(
+                status=terminal_status,
+                exit_code=terminal_exit_code,
+                message=terminal_message,
+                **(terminal_counts or {}),
+            )
+            try:
+                await asyncio.wait_for(sync_state.terminal_acked.wait(), timeout=300.0)
+                task_logger.info("terminal sync acked", extra=task_ctx)
+            except asyncio.TimeoutError:
+                task_logger.warning(
+                    "terminal sync not acked within timeout", extra=task_ctx
+                )
+
+        sync_state.terminal_acked.set()
+        try:
+            await asyncio.wait_for(sync_task, timeout=10.0)
+        except asyncio.TimeoutError:
+            sync_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await sync_task
+
+        task_logger.info("task runner log closed", extra=task_ctx)
+        task_logger.removeHandler(handler)
+        handler.close()
+        await docker.close()
+
+    async def _state_sync_loop(
+        self,
+        task_id: int,
+        lease_token: str,
+        workspace_dir: Path,
+        interval: float,
+        sync_state: _SyncState,
+    ) -> None:
+        while not sync_state.terminal_acked.is_set():
+            seq = sync_state.next_seq()
+            try:
+                case_count, poc_count = await asyncio.to_thread(
+                    self._count_generated_items, workspace_dir
+                )
+                compile_failed = await asyncio.to_thread(
+                    self._get_compile_failed_count, workspace_dir
+                )
+            except Exception:
+                case_count = poc_count = compile_failed = None
+
+            payload = {
+                "lease_token": lease_token,
+                "sync_seq": seq,
+                "status": sync_state.status,
+                "exit_code": sync_state.exit_code,
+                "message": sync_state.message,
+                "case_count": case_count,
+                "poc_count": poc_count,
+                "compile_failed": compile_failed,
+            }
+
+            try:
+                result = await self.client.sync_task(task_id, payload)
+                last_sync_seq = result.get("last_sync_seq", 0)
+                if seq <= last_sync_seq and sync_state.status != "running":
+                    sync_state.terminal_acked.set()
+            except Exception as exc:
+                logger.warning(
+                    "task sync failed: %s",
+                    exc,
+                    extra={"task_id": task_id, "sync_seq": seq},
+                )
+
+            try:
+                await asyncio.wait_for(sync_state.wake_event.wait(), timeout=interval)
+                sync_state.wake_event.clear()
+            except asyncio.TimeoutError:
+                pass
 
     async def _prepare_workspace(
         self,

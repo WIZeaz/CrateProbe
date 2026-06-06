@@ -87,6 +87,11 @@ body {
   color: rgb(107 33 168);
 }
 
+.status-runner_failed {
+  background-color: rgb(127 29 29);
+  color: rgb(254 242 242);
+}
+
 /* Code Block Styles */
 .log-viewer {
   background-color: rgb(17 24 39);

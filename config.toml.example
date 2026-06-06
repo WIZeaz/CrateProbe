@@ -21,6 +21,8 @@ file_path = "server.log"
 lease_ttl_seconds = 30
 runner_offline_seconds = 30
 claim_max_jobs_hard_limit = 256
+state_sync_interval_seconds = 30
+max_state_sync_interval_seconds = 120
 
 [security]
 admin_token = ""

@@ -264,16 +264,16 @@ def test_claim_ignores_body_runner_id_and_uses_path_runner_id(client):
     assert claim_response.json()["runner_id"] == "runner-claim-path-authoritative"
 
 
-def test_events_endpoint_persists_runner_counts_and_message(client):
+def test_sync_endpoint_persists_runner_counts_and_message(client):
     task_id, token, lease_token = _create_and_claim_task(client, "runner-counts-1")
 
     response = client.post(
-        f"/api/runners/runner-counts-1/tasks/{task_id}/events",
+        f"/api/runners/runner-counts-1/tasks/{task_id}/sync",
         headers=_runner_headers(token),
         json={
             "lease_token": lease_token,
-            "event_seq": 1,
-            "event_type": "completed",
+            "sync_seq": 1,
+            "status": "completed",
             "exit_code": 0,
             "message": "All tests passed",
             "case_count": 42,
@@ -294,23 +294,23 @@ def test_events_endpoint_persists_runner_counts_and_message(client):
     assert data["compile_failed"] == 3
 
 
-def test_events_endpoint_is_idempotent_for_duplicate_event_seq(client):
+def test_sync_endpoint_is_idempotent_for_duplicate_sync_seq(client):
     task_id, token, lease_token = _create_and_claim_task(client, "runner-events-1")
 
     started_response = client.post(
-        f"/api/runners/runner-events-1/tasks/{task_id}/events",
+        f"/api/runners/runner-events-1/tasks/{task_id}/sync",
         headers=_runner_headers(token),
-        json={"lease_token": lease_token, "event_seq": 1, "event_type": "started"},
+        json={"lease_token": lease_token, "sync_seq": 1, "status": "running"},
     )
     assert started_response.status_code == 200
 
     completed_response = client.post(
-        f"/api/runners/runner-events-1/tasks/{task_id}/events",
+        f"/api/runners/runner-events-1/tasks/{task_id}/sync",
         headers=_runner_headers(token),
         json={
             "lease_token": lease_token,
-            "event_seq": 2,
-            "event_type": "completed",
+            "sync_seq": 2,
+            "status": "completed",
             "case_count": 10,
             "poc_count": 2,
         },
@@ -325,12 +325,12 @@ def test_events_endpoint_is_idempotent_for_duplicate_event_seq(client):
     assert before_data["case_count"] == 10
 
     duplicate_response = client.post(
-        f"/api/runners/runner-events-1/tasks/{task_id}/events",
+        f"/api/runners/runner-events-1/tasks/{task_id}/sync",
         headers=_runner_headers(token),
         json={
             "lease_token": lease_token,
-            "event_seq": 2,
-            "event_type": "failed",
+            "sync_seq": 2,
+            "status": "failed",
             "case_count": 99,
         },
     )
@@ -399,9 +399,9 @@ def test_retry_clears_old_logs_and_allows_chunk_seq_restart(client):
     assert first_chunk.status_code == 200
 
     complete_response = client.post(
-        f"/api/runners/runner-retry-logs/tasks/{task_id}/events",
+        f"/api/runners/runner-retry-logs/tasks/{task_id}/sync",
         headers=_runner_headers(token),
-        json={"lease_token": lease_token, "event_seq": 1, "event_type": "completed"},
+        json={"lease_token": lease_token, "sync_seq": 1, "status": "completed"},
     )
     assert complete_response.status_code == 200
 
@@ -439,9 +439,9 @@ def test_claim_clears_stale_logs_before_new_attempt(client, config):
     assert first_chunk.status_code == 200
 
     complete_response = client.post(
-        f"/api/runners/runner-claim-clear/tasks/{task_id}/events",
+        f"/api/runners/runner-claim-clear/tasks/{task_id}/sync",
         headers=_runner_headers(token),
-        json={"lease_token": lease_token, "event_seq": 1, "event_type": "completed"},
+        json={"lease_token": lease_token, "sync_seq": 1, "status": "completed"},
     )
     assert complete_response.status_code == 200
 
@@ -464,13 +464,13 @@ def test_claim_clears_stale_logs_before_new_attempt(client, config):
     assert raw_log.status_code == 404
 
 
-def test_events_endpoint_returns_409_for_lease_mismatch(client):
+def test_sync_endpoint_returns_409_for_lease_mismatch(client):
     task_id, token, _lease_token = _create_and_claim_task(client, "runner-lease-1")
 
     response = client.post(
-        f"/api/runners/runner-lease-1/tasks/{task_id}/events",
+        f"/api/runners/runner-lease-1/tasks/{task_id}/sync",
         headers=_runner_headers(token),
-        json={"lease_token": "wrong-lease", "event_seq": 1, "event_type": "started"},
+        json={"lease_token": "wrong-lease", "sync_seq": 1, "status": "running"},
     )
 
     assert response.status_code == 409
@@ -924,3 +924,30 @@ def test_action_after_claim_requeues_task_after_lease_expiry(
     assert task_data["runner_id"] is None
     assert task_data.get("lease_token") is None
     assert task_data.get("lease_expires_at") is None
+
+
+def test_task_sync_endpoint_accepts_valid_lease(client):
+    task_id, token, lease_token = _create_and_claim_task(
+        client, "runner-sync-valid"
+    )
+
+    response = client.post(
+        f"/api/runners/runner-sync-valid/tasks/{task_id}/sync",
+        headers=_runner_headers(token),
+        json={"lease_token": lease_token, "sync_seq": 1, "status": "running"},
+    )
+    assert response.status_code == 200
+    assert response.json()["synced"] is True
+
+
+def test_task_sync_endpoint_rejects_invalid_lease(client):
+    task_id, token, _lease_token = _create_and_claim_task(
+        client, "runner-sync-invalid"
+    )
+
+    response = client.post(
+        f"/api/runners/runner-sync-invalid/tasks/{task_id}/sync",
+        headers=_runner_headers(token),
+        json={"lease_token": "bad-token", "sync_seq": 1, "status": "running"},
+    )
+    assert response.status_code == 409

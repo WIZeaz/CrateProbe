@@ -13,6 +13,7 @@ class RunnerConfig:
     log_flush_interval_seconds: float = 3.0
     log_sync_interval_seconds: float = 2.0
     request_timeout_seconds: float = 10.0
+    state_sync_interval_seconds: float = 30.0
     max_jobs: int = 3
     max_memory_gb: int = 20
     max_runtime_seconds: int = 86400
@@ -34,6 +35,9 @@ class RunnerConfig:
         )
         log_sync_interval_raw = os.environ.get("RUNNER_LOG_SYNC_INTERVAL_SECONDS", "2")
         request_timeout_raw = os.environ.get("RUNNER_REQUEST_TIMEOUT_SECONDS", "10")
+        state_sync_interval_raw = os.environ.get(
+            "RUNNER_STATE_SYNC_INTERVAL_SECONDS", "30"
+        )
         max_jobs_raw = os.environ.get("RUNNER_MAX_JOBS", "3")
         max_memory_raw = os.environ.get("RUNNER_MAX_MEMORY_GB", "20")
         max_runtime_raw = os.environ.get("RUNNER_MAX_RUNTIME_SECONDS", "86400")
@@ -93,6 +97,9 @@ class RunnerConfig:
             ),
             request_timeout_seconds=_float(
                 "RUNNER_REQUEST_TIMEOUT_SECONDS", request_timeout_raw
+            ),
+            state_sync_interval_seconds=_float(
+                "RUNNER_STATE_SYNC_INTERVAL_SECONDS", state_sync_interval_raw
             ),
             max_jobs=max_jobs,
             max_memory_gb=_int("RUNNER_MAX_MEMORY_GB", max_memory_raw),

@@ -34,8 +34,8 @@ async def test_execute_claimed_task_does_not_block_event_loop_during_docker_prec
     tmp_path, monkeypatch
 ):
     class FakeClient:
-        async def send_event(self, task_id, payload):
-            return {"applied": True}
+        async def sync_task(self, task_id, payload):
+            return {"synced": True, "last_sync_seq": payload["sync_seq"]}
 
         async def send_log_chunk(self, task_id, log_type, payload):
             return {"appended": True}
@@ -69,6 +69,7 @@ async def test_execute_claimed_task_does_not_block_event_loop_during_docker_prec
         docker_image = "rust:test"
         log_flush_interval_seconds = 3.0
         log_sync_interval_seconds = 2.0
+        state_sync_interval_seconds = 30.0
         max_memory_gb = 8
         max_runtime_seconds = 10
         max_cpus = 2
@@ -132,15 +133,17 @@ async def test_executor_logs_lifecycle_boundaries(tmp_path, monkeypatch):
             "docker_pull_policy": "if-not-present",
             "log_flush_interval_seconds": 3.0,
             "log_sync_interval_seconds": 2.0,
+            "state_sync_interval_seconds": 30.0,
         },
     )()
 
     class FakeClient:
         def __init__(self):
-            self.events = []
+            self.syncs = []
 
-        async def send_event(self, task_id, payload):
-            self.events.append((task_id, payload))
+        async def sync_task(self, task_id, payload):
+            self.syncs.append((task_id, payload))
+            return {"synced": True, "last_sync_seq": payload["sync_seq"]}
 
         async def send_log_chunk(self, *_args, **_kwargs):
             return None
@@ -181,7 +184,7 @@ async def test_executor_logs_lifecycle_boundaries(tmp_path, monkeypatch):
             pass
 
         def stop(self):
-            return 2
+            pass
 
     monkeypatch.setattr("runner.executor.TaskReporter", FakeReporter)
     monkeypatch.setattr("runner.executor.DockerRunner", lambda **kwargs: FakeDocker())
@@ -203,7 +206,7 @@ async def test_executor_logs_lifecycle_boundaries(tmp_path, monkeypatch):
     assert "task started" in content
     assert "command started" in content
     assert "command finished" in content
-    assert "task terminal event sent" in content
+    assert "terminal sync acked" in content
 
 
 @pytest.mark.asyncio
@@ -221,12 +224,13 @@ async def test_executor_failure_logs_traceback(tmp_path, monkeypatch):
             "docker_pull_policy": "if-not-present",
             "log_flush_interval_seconds": 3.0,
             "log_sync_interval_seconds": 2.0,
+            "state_sync_interval_seconds": 30.0,
         },
     )()
 
     class FakeClient:
-        async def send_event(self, *_args, **_kwargs):
-            return None
+        async def sync_task(self, *_args, **_kwargs):
+            return {"synced": True, "last_sync_seq": 1}
 
         async def send_log_chunk(self, *_args, **_kwargs):
             return None
@@ -263,7 +267,7 @@ async def test_executor_failure_logs_traceback(tmp_path, monkeypatch):
             pass
 
         def stop(self):
-            return 2
+            pass
 
     monkeypatch.setattr("runner.executor.TaskReporter", FakeReporter)
     monkeypatch.setattr("runner.executor.DockerRunner", lambda **kwargs: BrokenDocker())
@@ -302,12 +306,13 @@ async def test_multiple_tasks_run_containers_concurrently(tmp_path, monkeypatch)
             "docker_pull_policy": "if-not-present",
             "log_flush_interval_seconds": 3.0,
             "log_sync_interval_seconds": 2.0,
+            "state_sync_interval_seconds": 30.0,
         },
     )()
 
     class FakeClient:
-        async def send_event(self, *_args, **_kwargs):
-            return None
+        async def sync_task(self, *_args, **_kwargs):
+            return {"synced": True, "last_sync_seq": 1}
 
         async def send_log_chunk(self, *_args, **_kwargs):
             return None
@@ -359,7 +364,7 @@ async def test_multiple_tasks_run_containers_concurrently(tmp_path, monkeypatch)
             pass
 
         def stop(self):
-            return 2
+            pass
 
     monkeypatch.setattr("runner.executor.TaskReporter", FakeReporter)
     monkeypatch.setattr(
@@ -409,16 +414,17 @@ async def test_executor_cancellation_does_not_block_on_reporter(tmp_path, monkey
             "docker_pull_policy": "if-not-present",
             "log_flush_interval_seconds": 3.0,
             "log_sync_interval_seconds": 2.0,
+            "state_sync_interval_seconds": 30.0,
         },
     )()
 
     class FakeClient:
         def __init__(self):
-            self.events = []
+            self.syncs = []
 
-        async def send_event(self, *_args, **_kwargs):
-            self.events.append(("send_event",))
-            return None
+        async def sync_task(self, task_id, payload):
+            self.syncs.append(("sync_task", task_id, payload))
+            return {"synced": True, "last_sync_seq": payload["sync_seq"]}
 
         async def send_log_chunk(self, *_args, **_kwargs):
             # Simulate a slow network call that blocks reporter shutdown

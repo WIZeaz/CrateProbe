@@ -29,7 +29,8 @@ const statusOptions = [
   { value: 'failed', label: 'Failed' },
   { value: 'cancelled', label: 'Cancelled' },
   { value: 'timeout', label: 'Timeout' },
-  { value: 'oom', label: 'OOM' }
+  { value: 'oom', label: 'OOM' },
+  { value: 'runner_failed', label: 'Runner Failed' }
 ]
 
 const filteredAndSortedTasks = computed(() => {

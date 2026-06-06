@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict
 
 from runner.client import RunnerControlClient
 
@@ -9,8 +9,6 @@ logger = logging.getLogger(__name__)
 
 
 class TaskReporter:
-    PROGRESS_INTERVAL = 10.0
-
     def __init__(
         self,
         client: RunnerControlClient,
@@ -31,15 +29,11 @@ class TaskReporter:
         self._stop_event = asyncio.Event()
         self._next_chunk_seq: dict[str, int] = {}
         self._sent_offsets: dict[str, int] = {}
-        self._next_event_seq = 2  # started uses 1
-        self._last_counts: Tuple[int, int, int | None] = (0, 0, None)
-        self._last_progress_time = 0.0
 
     async def run(self) -> None:
         try:
             while not self._stop_event.is_set():
                 await self._flush_logs()
-                await self._maybe_send_progress()
 
                 try:
                     await asyncio.wait_for(
@@ -50,11 +44,8 @@ class TaskReporter:
         finally:
             await self._flush_logs()
 
-    def stop(self) -> int:
+    def stop(self) -> None:
         self._stop_event.set()
-        seq = self._next_event_seq
-        self._next_event_seq += 1
-        return seq
 
     async def _flush_logs(self) -> None:
         for log_type, path in self.log_paths.items():
@@ -177,83 +168,3 @@ class TaskReporter:
         )
         return "full"
 
-    async def _maybe_send_progress(self) -> None:
-        now = asyncio.get_running_loop().time()
-        if now - self._last_progress_time < self.PROGRESS_INTERVAL:
-            return
-
-        case_count, poc_count = self._count_generated_items()
-        compile_failed = self._get_compile_failed_count()
-        if (case_count, poc_count, compile_failed) == self._last_counts:
-            return
-
-        self._last_counts = (case_count, poc_count, compile_failed)
-        self._last_progress_time = now
-
-        event_seq = self._next_event_seq
-        self._next_event_seq += 1
-
-        try:
-            await self.client.send_event(
-                self.task_id,
-                {
-                    "lease_token": self.lease_token,
-                    "event_seq": event_seq,
-                    "event_type": "progress",
-                    "case_count": case_count,
-                    "poc_count": poc_count,
-                    "compile_failed": compile_failed,
-                },
-            )
-        except Exception as exc:
-            logger.warning(
-                "progress event send failed: %s",
-                exc,
-                extra={
-                    "task_id": self.task_id,
-                    "event_seq": event_seq,
-                },
-            )
-
-    def _get_compile_failed_count(self) -> int | None:
-        stats_yaml_path = self.workspace_dir / "testgen" / "stats.yaml"
-        if not stats_yaml_path.exists():
-            return None
-        try:
-            lines = stats_yaml_path.read_text(
-                encoding="utf-8", errors="replace"
-            ).splitlines()
-        except Exception:
-            return None
-        for raw_line in lines:
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if not line.startswith("CompileFailed:") and not line.startswith(
-                "compile_failed:"
-            ):
-                continue
-            value = line.split(":", 1)[1].strip()
-            if value.startswith('"') and value.endswith('"') and len(value) >= 2:
-                value = value[1:-1].strip()
-            if value.startswith("'") and value.endswith("'") and len(value) >= 2:
-                value = value[1:-1].strip()
-            if value.isdigit():
-                return int(value)
-            return None
-        return None
-
-    def _count_generated_items(self) -> Tuple[int, int]:
-        testgen_dir = self.workspace_dir / "testgen"
-        case_count = 0
-        poc_count = 0
-
-        tests_dir = testgen_dir / "tests"
-        if tests_dir.exists():
-            case_count = len([d for d in tests_dir.iterdir() if d.is_dir()])
-
-        poc_dir = testgen_dir / "poc"
-        if poc_dir.exists():
-            poc_count = len([d for d in poc_dir.iterdir() if d.is_dir()])
-
-        return case_count, poc_count

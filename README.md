@@ -58,7 +58,7 @@ cd backend
 uv run python -m runner
 ```
 
-5. Runner 启动后会周期性心跳并 claim 任务；执行期间通过 Runner API 上报事件与日志分片。
+5. Runner 启动后会周期性心跳并 claim 任务；执行期间通过 Runner API 上报状态同步（`/sync`）与日志分片（`/logs`）。
 
 ### Runner 管理语义
 

@@ -127,79 +127,6 @@ async def test_reporter_flush_logs_handles_truncation(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_reporter_progress_only_sends_when_counts_change(tmp_path):
-    (tmp_path / "testgen" / "tests" / "a").mkdir(parents=True)
-    (tmp_path / "testgen" / "poc" / "x").mkdir(parents=True)
-
-    sent_events = []
-
-    class FakeClient:
-        async def send_event(self, task_id, payload):
-            sent_events.append(payload)
-
-    reporter = TaskReporter(
-        client=FakeClient(),
-        task_id=1,
-        lease_token="lease-1",
-        log_paths={},
-        workspace_dir=tmp_path,
-    )
-
-    reporter._last_progress_time = 0
-    await reporter._maybe_send_progress()
-    assert len(sent_events) == 1
-    assert sent_events[0]["event_type"] == "progress"
-    assert sent_events[0]["case_count"] == 1
-    assert sent_events[0]["poc_count"] == 1
-
-    reporter._last_progress_time = 0
-    sent_events.clear()
-    await reporter._maybe_send_progress()
-    assert len(sent_events) == 0
-
-
-@pytest.mark.asyncio
-async def test_reporter_progress_respects_interval(tmp_path):
-    (tmp_path / "testgen" / "tests" / "a").mkdir(parents=True)
-
-    sent_events = []
-
-    class FakeClient:
-        async def send_event(self, task_id, payload):
-            sent_events.append(payload)
-
-    reporter = TaskReporter(
-        client=FakeClient(),
-        task_id=1,
-        lease_token="lease-1",
-        log_paths={},
-        workspace_dir=tmp_path,
-    )
-
-    # Set last_progress_time to now to simulate recent send
-    reporter._last_progress_time = asyncio.get_running_loop().time()
-    await reporter._maybe_send_progress()
-    assert len(sent_events) == 0
-
-
-@pytest.mark.asyncio
-async def test_reporter_stop_returns_incrementing_seq(tmp_path):
-    reporter = TaskReporter(
-        client=type("C", (), {"send_log_chunk": lambda *a, **k: None})(),
-        task_id=1,
-        lease_token="lease-1",
-        log_paths={},
-        workspace_dir=tmp_path,
-    )
-
-    seq1 = reporter.stop()
-    seq2 = reporter.stop()
-    assert seq1 == 2  # started uses 1
-    assert seq2 == 3
-    assert seq2 > seq1
-
-
-@pytest.mark.asyncio
 async def test_reporter_run_loop_stops_on_event(tmp_path):
     log_file = tmp_path / "stdout.log"
     log_file.write_text("line 1\n")
@@ -251,19 +178,6 @@ def test_reporter_uses_custom_flush_interval(tmp_path):
 
     assert reporter.log_flush_interval == 7.5
 
-
-def test_reporter_count_generated_items(tmp_path):
-    testgen = tmp_path / "testgen"
-    (testgen / "tests" / "a").mkdir(parents=True)
-    (testgen / "tests" / "b").mkdir(parents=True)
-    (testgen / "poc" / "x").mkdir(parents=True)
-    (testgen / "poc" / "y").mkdir(parents=True)
-    (testgen / "poc" / "z").mkdir(parents=True)
-
-    reporter = object.__new__(TaskReporter)
-    reporter.workspace_dir = tmp_path
-
-    assert reporter._count_generated_items() == (2, 3)
 
 
 @pytest.mark.asyncio
