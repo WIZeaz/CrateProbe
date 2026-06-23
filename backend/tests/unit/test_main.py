@@ -1,8 +1,10 @@
 import pytest
+from datetime import datetime
 from fastapi.testclient import TestClient
 from app.main import create_app
 from app.config import Config
 import app.main as main_module
+from core.models import TaskStatus
 
 
 @pytest.fixture
@@ -123,6 +125,77 @@ def test_create_task_returns_existing_task_if_duplicate(client, monkeypatch):
     assert task2["task_id"] == task1_id
     assert task2["crate_name"] == "test-crate"
     assert task2["version"] == "1.0.0"
+
+
+def test_create_task_running_duplicate_returns_unchanged(client, monkeypatch):
+    """Test that creating a duplicate task while it is running returns it unchanged"""
+
+    class MockCratesAPI:
+        async def get_latest_version(self, crate_name):
+            return "1.0.0"
+
+        async def verify_version_exists(self, crate_name, version):
+            return True
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr("app.main.CratesAPI", lambda: MockCratesAPI())
+
+    task_id = create_pending_task(client, monkeypatch, crate_name="running-crate")
+    runner_id, token = create_runner_and_token(client, "runner-running-dup")
+    claimed_id, _ = claim_task(client, runner_id, token)
+    assert claimed_id == task_id
+
+    response = client.post(
+        "/api/tasks", json={"crate_name": "running-crate", "version": "1.0.0"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["task_id"] == task_id
+    assert body["status"] == "running"
+
+
+def test_create_task_terminal_duplicate_resets_for_retry(client, monkeypatch):
+    """Test that creating a duplicate terminal task resets it to pending"""
+
+    class MockCratesAPI:
+        async def get_latest_version(self, crate_name):
+            return "1.0.0"
+
+        async def verify_version_exists(self, crate_name, version):
+            return True
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr("app.main.CratesAPI", lambda: MockCratesAPI())
+
+    task_id = create_pending_task(client, monkeypatch, crate_name="terminal-crate")
+    db = client.app.state.scheduler.db
+    db.update_task_status(
+        task_id,
+        TaskStatus.FAILED,
+        started_at=datetime.now(),
+        finished_at=datetime.now(),
+        exit_code=1,
+        error_message="boom",
+    )
+
+    response = client.post(
+        "/api/tasks", json={"crate_name": "terminal-crate", "version": "1.0.0"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["task_id"] == task_id
+    assert body["status"] == "pending"
+
+    task = db.get_task(task_id)
+    assert task.status == TaskStatus.PENDING
+    assert task.started_at is None
+    assert task.finished_at is None
+    assert task.exit_code is None
+    assert task.error_message is None
 
 
 def test_create_task_allows_different_versions(client, monkeypatch):
@@ -357,8 +430,6 @@ def test_sync_missing_task_logs_warning_with_fields(client, caplog):
     assert record.runner_id == runner_id
     assert record.task_id == 999999
     assert record.sync_seq == 1
-
-
 
 
 def test_task_sync_endpoint_updates_last_state_sync_at(client, monkeypatch):

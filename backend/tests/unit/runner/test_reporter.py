@@ -179,7 +179,6 @@ def test_reporter_uses_custom_flush_interval(tmp_path):
     assert reporter.log_flush_interval == 7.5
 
 
-
 @pytest.mark.asyncio
 async def test_reporter_flush_logs_defaults_to_full_upload(tmp_path):
     log_file = tmp_path / "stats.yaml"

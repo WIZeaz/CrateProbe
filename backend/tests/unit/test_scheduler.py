@@ -216,7 +216,9 @@ def test_apply_task_sync_updates_counts_on_running_sync(scheduler):
     task = db.get_tasks_by_status(TaskStatus.PENDING)[0]
     db.update_task_status(task.id, TaskStatus.RUNNING, started_at=datetime.now())
 
-    db.apply_task_sync(task.id, 1, "running", case_count=5, poc_count=2, compile_failed=1)
+    db.apply_task_sync(
+        task.id, 1, "running", case_count=5, poc_count=2, compile_failed=1
+    )
     updated = db.get_task(task.id)
     assert updated.case_count == 5
     assert updated.poc_count == 2

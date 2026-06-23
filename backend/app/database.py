@@ -141,7 +141,9 @@ class Database:
         if "attempt" not in columns:
             cursor.execute("ALTER TABLE tasks ADD COLUMN attempt INTEGER DEFAULT 0")
         if "last_event_seq" in columns and "last_sync_seq" not in columns:
-            cursor.execute("ALTER TABLE tasks RENAME COLUMN last_event_seq TO last_sync_seq")
+            cursor.execute(
+                "ALTER TABLE tasks RENAME COLUMN last_event_seq TO last_sync_seq"
+            )
         elif "last_sync_seq" not in columns:
             cursor.execute(
                 "ALTER TABLE tasks ADD COLUMN last_sync_seq INTEGER DEFAULT 0"
@@ -151,9 +153,7 @@ class Database:
                 "ALTER TABLE tasks ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0"
             )
         if "last_state_sync_at" not in columns:
-            cursor.execute(
-                "ALTER TABLE tasks ADD COLUMN last_state_sync_at TIMESTAMP"
-            )
+            cursor.execute("ALTER TABLE tasks ADD COLUMN last_state_sync_at TIMESTAMP")
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_created_at ON tasks(created_at DESC)
         """)

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../services/api'
 
@@ -7,6 +7,7 @@ const router = useRouter()
 const textarea = ref('')
 const loading = ref(false)
 const progress = ref({ current: 0, total: 0 })
+const batchErrors = ref([])
 
 // Parse input text into crate list
 function parseInput(text) {
@@ -74,6 +75,7 @@ async function createBatchTasks() {
 
   loading.value = true
   progress.value = { current: 0, total: parsed.length }
+  batchErrors.value = []
 
   const CONCURRENCY = 16
 
@@ -83,6 +85,8 @@ async function createBatchTasks() {
         try {
           await api.createTask(crate_name, version)
         } catch (err) {
+          const message = err.response?.data?.detail || err.message
+          batchErrors.value.push({ crate_name, version, message })
           console.error(`Failed to create task for ${crate_name}:`, err)
         }
       })
@@ -95,8 +99,14 @@ async function createBatchTasks() {
     progress.value.current = Math.min(i + CONCURRENCY, parsed.length)
   }
 
+  // Wait for the 100% progress bar to render before navigating
+  await nextTick()
   loading.value = false
-  router.push('/tasks')
+
+  if (batchErrors.value.length === 0) {
+    router.push('/tasks')
+  }
+  // If there were failures, stay on the page to show the error summary
 }
 </script>
 
@@ -156,6 +166,17 @@ async function createBatchTasks() {
         </ul>
       </div>
 
+      <!-- Batch Create Errors -->
+      <div v-if="batchErrors.length > 0"
+           class="mb-4 bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg">
+        <p class="font-medium mb-2">Failed to create {{ batchErrors.length }} task(s):</p>
+        <ul class="text-sm space-y-1 max-h-48 overflow-y-auto">
+          <li v-for="(error, index) in batchErrors" :key="index">
+            {{ error.crate_name }}{{ error.version ? `@${error.version}` : '' }}: {{ error.message }}
+          </li>
+        </ul>
+      </div>
+
       <!-- Action Buttons -->
       <div class="flex items-center justify-between">
         <button
@@ -199,6 +220,9 @@ async function createBatchTasks() {
         <!-- Progress Text -->
         <p class="text-center text-gray-600">
           {{ progressPercentage }}% complete
+        </p>
+        <p v-if="batchErrors.length > 0" class="text-center text-red-600 mt-2">
+          {{ batchErrors.length }} task(s) failed
         </p>
       </div>
     </div>

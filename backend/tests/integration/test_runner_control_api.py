@@ -927,9 +927,7 @@ def test_action_after_claim_requeues_task_after_lease_expiry(
 
 
 def test_task_sync_endpoint_accepts_valid_lease(client):
-    task_id, token, lease_token = _create_and_claim_task(
-        client, "runner-sync-valid"
-    )
+    task_id, token, lease_token = _create_and_claim_task(client, "runner-sync-valid")
 
     response = client.post(
         f"/api/runners/runner-sync-valid/tasks/{task_id}/sync",
@@ -941,9 +939,7 @@ def test_task_sync_endpoint_accepts_valid_lease(client):
 
 
 def test_task_sync_endpoint_rejects_invalid_lease(client):
-    task_id, token, _lease_token = _create_and_claim_task(
-        client, "runner-sync-invalid"
-    )
+    task_id, token, _lease_token = _create_and_claim_task(client, "runner-sync-invalid")
 
     response = client.post(
         f"/api/runners/runner-sync-invalid/tasks/{task_id}/sync",

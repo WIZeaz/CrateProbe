@@ -97,7 +97,9 @@ async def test_sync_task_retries_transient_5xx(monkeypatch: pytest.MonkeyPatch):
             return httpx.Response(
                 status_code=503, json={"detail": "busy"}, request=request
             )
-        return httpx.Response(status_code=200, json={"synced": True, "last_sync_seq": 1}, request=request)
+        return httpx.Response(
+            status_code=200, json={"synced": True, "last_sync_seq": 1}, request=request
+        )
 
     _patch_async_client(monkeypatch, handler)
     client = RunnerControlClient(

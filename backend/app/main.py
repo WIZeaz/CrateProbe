@@ -403,6 +403,40 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                 request.crate_name, version
             )
             if existing_task:
+                terminal_statuses = {
+                    TaskStatus.COMPLETED,
+                    TaskStatus.FAILED,
+                    TaskStatus.CANCELLED,
+                    TaskStatus.TIMEOUT,
+                    TaskStatus.OOM,
+                    TaskStatus.RUNNER_FAILED,
+                }
+
+                if existing_task.status == TaskStatus.RUNNING:
+                    # Already running: return existing task unchanged
+                    return TaskResponse(
+                        task_id=existing_task.id,
+                        crate_name=existing_task.crate_name,
+                        version=existing_task.version,
+                        status=existing_task.status.value,
+                    )
+
+                if existing_task.status in terminal_statuses:
+                    # Terminal task: reset for re-execution
+                    db.reset_task_for_retry(existing_task.id)
+                    reset_task = db.get_task(existing_task.id)
+                    if reset_task is not None:
+                        payload = _task_to_dict(reset_task)
+                        payload["type"] = "task_created"
+                        await ws_manager.broadcast_dashboard_update(payload)
+                    return TaskResponse(
+                        task_id=existing_task.id,
+                        crate_name=existing_task.crate_name,
+                        version=existing_task.version,
+                        status=TaskStatus.PENDING.value,
+                    )
+
+                # Non-terminal, non-running state (e.g. pending): return existing task
                 return TaskResponse(
                     task_id=existing_task.id,
                     crate_name=existing_task.crate_name,
