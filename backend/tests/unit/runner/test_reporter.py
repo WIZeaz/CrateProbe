@@ -210,6 +210,46 @@ async def test_reporter_flush_logs_defaults_to_full_upload(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_reporter_full_mode_reuploads_on_same_size_content_change(tmp_path):
+    # stats.yaml is rewritten in place; when a count changes without changing
+    # the file's byte length (e.g. 329 -> 336), size-based dedup would wrongly
+    # skip the upload and leave the platform with a stale copy.
+    log_file = tmp_path / "stats.yaml"
+    log_file.write_text("compile_failed: 329\n")
+
+    sent_logs = []
+
+    class FakeClient:
+        async def send_log(self, task_id, log_type, payload):
+            sent_logs.append(payload)
+
+        async def send_log_chunk(self, *_args, **_kwargs):
+            raise AssertionError("chunk upload should not be called")
+
+    reporter = TaskReporter(
+        client=FakeClient(),
+        task_id=1,
+        lease_token="lease-1",
+        log_paths={"stats-yaml": log_file},
+        workspace_dir=tmp_path,
+        upload_config={"stats-yaml": "full"},
+    )
+
+    await reporter._flush_logs()
+    assert len(sent_logs) == 1
+    assert sent_logs[0]["content"] == "compile_failed: 329\n"
+
+    # In-place rewrite, identical byte length, different content.
+    log_file.write_text("compile_failed: 336\n")
+    assert log_file.stat().st_size == len("compile_failed: 329\n")
+
+    sent_logs.clear()
+    await reporter._flush_logs()
+    assert len(sent_logs) == 1
+    assert sent_logs[0]["content"] == "compile_failed: 336\n"
+
+
+@pytest.mark.asyncio
 async def test_reporter_invalid_upload_config_falls_back_to_full(tmp_path):
     log_file = tmp_path / "stats.yaml"
     log_file.write_text("CompileFailed: 2\n")

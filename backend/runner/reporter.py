@@ -57,16 +57,24 @@ class TaskReporter:
             except OSError:
                 continue
 
+            upload_mode = self._resolve_upload_mode(log_type)
             sent_offset = self._sent_offsets.get(log_type, 0)
 
-            if current_size == sent_offset:
-                continue
-
-            if current_size < sent_offset:
+            if upload_mode == "chunk":
+                # Append-only logs: byte size is a reliable change signal, so
+                # skip when nothing new was written and only send the tail.
+                if current_size == sent_offset:
+                    continue
+                if current_size < sent_offset:
+                    sent_offset = 0
+                    self._next_chunk_seq[log_type] = 1
+            else:
+                # full mode (e.g. stats.yaml) is rewritten in place; an
+                # in-place edit can change content without changing the byte
+                # length, so size comparison is unreliable. Always re-read the
+                # whole file and re-upload it.
                 sent_offset = 0
-                self._next_chunk_seq[log_type] = 1
 
-            upload_mode = self._resolve_upload_mode(log_type)
             chunk_seq = self._next_chunk_seq.get(log_type, 1)
 
             try:
@@ -167,4 +175,3 @@ class TaskReporter:
             },
         )
         return "full"
-
