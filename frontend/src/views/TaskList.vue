@@ -8,6 +8,7 @@ import websocket from '../services/websocket'
 import RunnerIdBadge from '../components/RunnerIdBadge.vue'
 import { filterTasksByCrateName } from './taskListFilters'
 import { exportTasksToXlsx } from '../utils/exportXlsx'
+import { useResizableColumns } from '../composables/useResizableColumns'
 
 const router = useRouter()
 const route = useRoute()
@@ -20,6 +21,28 @@ const sortColumn = ref('created_at')
 const sortDirection = ref('desc')
 const selectedIds = ref(new Set())
 const batchLoading = ref(false)
+
+const columns = [
+  { key: 'checkbox', width: 48, resizable: false },
+  { key: 'id', width: 64, minWidth: 50 },
+  { key: 'crate_name', width: 300, minWidth: 120 },
+  { key: 'version', width: 96, minWidth: 70 },
+  { key: 'status', width: 96, minWidth: 80 },
+  { key: 'case_count', width: 80, minWidth: 60 },
+  { key: 'poc_count', width: 80, minWidth: 60 },
+  { key: 'compile_failed', width: 112, minWidth: 80 },
+  { key: 'runtime', width: 112, minWidth: 80 },
+  { key: 'runner_id', width: 160, minWidth: 100 },
+]
+
+const { columnWidths, startResize } = useResizableColumns(
+  columns,
+  'task-list-column-widths'
+)
+
+const totalWidth = computed(() => {
+  return Object.values(columnWidths.value).reduce((sum, width) => sum + width, 0)
+})
 
 const statusOptions = [
   { value: 'all', label: 'All' },
@@ -348,9 +371,10 @@ onUnmounted(() => {
     </div>
 
     <div v-else class="bento-card overflow-x-auto">
-      <div class="table-header bg-gray-50 sticky top-0 z-10 border-b border-gray-200">
+      <div :style="{ minWidth: totalWidth + 'px' }">
+        <div class="table-header bg-gray-50 sticky top-0 z-10 border-b border-gray-200">
         <div class="header-row flex items-center">
-          <div class="px-4 py-3 w-12">
+          <div class="px-4 py-3 relative" :style="{ width: columnWidths.checkbox + 'px' }">
             <input
               type="checkbox"
               :checked="allSelected"
@@ -361,66 +385,111 @@ onUnmounted(() => {
           </div>
           <div
             @click="sortBy('id')"
-            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 w-16"
+            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 relative overflow-hidden whitespace-nowrap"
+            :style="{ width: columnWidths.id + 'px' }"
           >
             ID
             <span v-if="sortColumn === 'id'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
+            <span
+              class="resize-handle absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 z-10"
+              @pointerdown.stop="startResize('id', $event)"
+            ></span>
           </div>
           <div
             @click="sortBy('crate_name')"
-            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 flex-1 min-w-0"
+            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 relative overflow-hidden whitespace-nowrap"
+            :style="{ width: columnWidths.crate_name + 'px' }"
           >
             Crate
             <span v-if="sortColumn === 'crate_name'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
+            <span
+              class="resize-handle absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 z-10"
+              @pointerdown.stop="startResize('crate_name', $event)"
+            ></span>
           </div>
           <div
             @click="sortBy('version')"
-            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 w-24"
+            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 relative overflow-hidden whitespace-nowrap"
+            :style="{ width: columnWidths.version + 'px' }"
           >
             Version
             <span v-if="sortColumn === 'version'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
+            <span
+              class="resize-handle absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 z-10"
+              @pointerdown.stop="startResize('version', $event)"
+            ></span>
           </div>
           <div
             @click="sortBy('status')"
-            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 w-24"
+            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 relative overflow-hidden whitespace-nowrap"
+            :style="{ width: columnWidths.status + 'px' }"
           >
             Status
             <span v-if="sortColumn === 'status'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
+            <span
+              class="resize-handle absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 z-10"
+              @pointerdown.stop="startResize('status', $event)"
+            ></span>
           </div>
           <div
             @click="sortBy('case_count')"
-            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 w-20"
+            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 relative overflow-hidden whitespace-nowrap"
+            :style="{ width: columnWidths.case_count + 'px' }"
           >
             Cases
             <span v-if="sortColumn === 'case_count'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
+            <span
+              class="resize-handle absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 z-10"
+              @pointerdown.stop="startResize('case_count', $event)"
+            ></span>
           </div>
           <div
             @click="sortBy('poc_count')"
-            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 w-20"
+            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 relative overflow-hidden whitespace-nowrap"
+            :style="{ width: columnWidths.poc_count + 'px' }"
           >
             POCs
             <span v-if="sortColumn === 'poc_count'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
+            <span
+              class="resize-handle absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 z-10"
+              @pointerdown.stop="startResize('poc_count', $event)"
+            ></span>
           </div>
           <div
             @click="sortBy('compile_failed')"
-            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 w-28"
+            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 relative overflow-hidden whitespace-nowrap"
+            :style="{ width: columnWidths.compile_failed + 'px' }"
           >
             Compile Failed
             <span v-if="sortColumn === 'compile_failed'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
+            <span
+              class="resize-handle absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 z-10"
+              @pointerdown.stop="startResize('compile_failed', $event)"
+            ></span>
           </div>
           <div
             @click="sortBy('runtime')"
-            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 w-28"
+            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 relative overflow-hidden whitespace-nowrap"
+            :style="{ width: columnWidths.runtime + 'px' }"
           >
             Runtime
             <span v-if="sortColumn === 'runtime'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
+            <span
+              class="resize-handle absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 z-10"
+              @pointerdown.stop="startResize('runtime', $event)"
+            ></span>
           </div>
           <div
             @click="sortBy('runner_id')"
-            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 w-40"
+            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 relative overflow-hidden whitespace-nowrap"
+            :style="{ width: columnWidths.runner_id + 'px' }"
           >
             Runner
             <span v-if="sortColumn === 'runner_id'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
+            <span
+              class="resize-handle absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 z-10"
+              @pointerdown.stop="startResize('runner_id', $event)"
+            ></span>
           </div>
         </div>
       </div>
@@ -436,7 +505,7 @@ onUnmounted(() => {
           :class="selectedIds.has(task.id) ? 'bg-blue-50' : ''"
           :style="{ height: '53px' }"
         >
-          <div class="px-4 py-3 whitespace-nowrap w-12">
+          <div class="px-4 py-3 whitespace-nowrap" :style="{ width: columnWidths.checkbox + 'px' }">
             <input
               v-if="task.status !== 'running'"
               type="checkbox"
@@ -447,37 +516,38 @@ onUnmounted(() => {
             />
             <span v-else class="inline-block h-4 w-4"></span>
           </div>
-          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer w-16" @click="viewTask(task.id)">
+          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer overflow-hidden" :style="{ width: columnWidths.id + 'px' }" @click="viewTask(task.id)">
             #{{ task.id }}
           </div>
-          <div class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900 cursor-pointer flex-1 min-w-0 truncate" @click="viewTask(task.id)">
+          <div class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900 cursor-pointer truncate" :style="{ width: columnWidths.crate_name + 'px' }" @click="viewTask(task.id)">
             {{ task.crate_name }}
           </div>
-          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer w-24" @click="viewTask(task.id)">
+          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer overflow-hidden" :style="{ width: columnWidths.version + 'px' }" @click="viewTask(task.id)">
             {{ task.version }}
           </div>
-          <div class="px-4 py-3 whitespace-nowrap cursor-pointer w-24" @click="viewTask(task.id)">
+          <div class="px-4 py-3 whitespace-nowrap cursor-pointer overflow-hidden" :style="{ width: columnWidths.status + 'px' }" @click="viewTask(task.id)">
             <span :class="['status-badge', `status-${task.status}`]">
               {{ task.status }}
             </span>
           </div>
-          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer w-20" @click="viewTask(task.id)">
+          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer overflow-hidden" :style="{ width: columnWidths.case_count + 'px' }" @click="viewTask(task.id)">
             {{ task.case_count }}
           </div>
-          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer w-20" @click="viewTask(task.id)">
+          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer overflow-hidden" :style="{ width: columnWidths.poc_count + 'px' }" @click="viewTask(task.id)">
             {{ task.poc_count }}
           </div>
-          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer w-28" @click="viewTask(task.id)">
+          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer overflow-hidden" :style="{ width: columnWidths.compile_failed + 'px' }" @click="viewTask(task.id)">
             {{ task.compile_failed ?? '-' }}
           </div>
-          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer w-28" @click="viewTask(task.id)">
+          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer overflow-hidden" :style="{ width: columnWidths.runtime + 'px' }" @click="viewTask(task.id)">
             {{ formatDuration(task.started_at, task.finished_at) }}
           </div>
-          <div class="px-4 py-3 whitespace-nowrap cursor-pointer w-40" @click="viewTask(task.id)">
+          <div class="px-4 py-3 whitespace-nowrap cursor-pointer overflow-hidden" :style="{ width: columnWidths.runner_id + 'px' }" @click="viewTask(task.id)">
             <RunnerIdBadge :runner-id="task.runner_id || ''" />
           </div>
         </div>
       </RecycleScroller>
+      </div>
     </div>
   </div>
 </template>
@@ -515,5 +585,9 @@ onUnmounted(() => {
 
 :deep(.vue-recycle-scroller) {
   width: 100%;
+}
+
+.resize-handle {
+  transition: background-color 0.15s ease;
 }
 </style>
