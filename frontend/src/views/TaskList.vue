@@ -31,6 +31,7 @@ const columns = [
   { key: 'case_count', width: 80, minWidth: 60 },
   { key: 'poc_count', width: 80, minWidth: 60 },
   { key: 'compile_failed', width: 112, minWidth: 80 },
+  { key: 'started_at', width: 176, minWidth: 120 },
   { key: 'runtime', width: 112, minWidth: 80 },
   { key: 'runner_id', width: 160, minWidth: 100 },
 ]
@@ -176,8 +177,13 @@ function sortBy(column) {
   }
 }
 
-function formatDuration(startStr, endStr) {
-  if (!startStr) return 'N/A'
+function formatDate(dateStr) {
+  if (!dateStr) return 'N/A'
+  const date = new Date(dateStr)
+  return date.toLocaleString()
+}
+
+function formatDuration(startStr, endStr) {  if (!startStr) return 'N/A'
   const start = new Date(startStr)
   const end = endStr ? new Date(endStr) : new Date()
   const diff = Math.floor((end - start) / 1000)
@@ -468,6 +474,18 @@ onUnmounted(() => {
             ></span>
           </div>
           <div
+            @click="sortBy('started_at')"
+            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 relative overflow-hidden whitespace-nowrap"
+            :style="{ width: columnWidths.started_at + 'px' }"
+          >
+            Started At
+            <span v-if="sortColumn === 'started_at'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
+            <span
+              class="resize-handle absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 z-10"
+              @pointerdown.stop="startResize('started_at', $event)"
+            ></span>
+          </div>
+          <div
             @click="sortBy('runtime')"
             class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 relative overflow-hidden whitespace-nowrap"
             :style="{ width: columnWidths.runtime + 'px' }"
@@ -538,6 +556,9 @@ onUnmounted(() => {
           </div>
           <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer overflow-hidden" :style="{ width: columnWidths.compile_failed + 'px' }" @click="viewTask(task.id)">
             {{ task.compile_failed ?? '-' }}
+          </div>
+          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer overflow-hidden" :style="{ width: columnWidths.started_at + 'px' }" @click="viewTask(task.id)">
+            {{ formatDate(task.started_at) }}
           </div>
           <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer overflow-hidden" :style="{ width: columnWidths.runtime + 'px' }" @click="viewTask(task.id)">
             {{ formatDuration(task.started_at, task.finished_at) }}
