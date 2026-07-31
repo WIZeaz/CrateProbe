@@ -1,5 +1,7 @@
 import asyncio
+import contextlib
 import logging
+import shutil
 import time
 from types import SimpleNamespace
 
@@ -7,7 +9,7 @@ import pytest
 
 from core.models import TaskStatus
 from runner.crates_api import CratesAPI
-from runner.executor import TaskExecutor
+from runner.executor import TaskExecutor, _SyncState
 from runner.reporter import TaskReporter
 
 
@@ -229,8 +231,9 @@ async def test_executor_failure_logs_traceback(tmp_path, monkeypatch):
     )()
 
     class FakeClient:
-        async def sync_task(self, *_args, **_kwargs):
-            return {"synced": True, "last_sync_seq": 1}
+        async def sync_task(self, *_args, **kwargs):
+            payload = kwargs.get("payload") or (_args[1] if len(_args) > 1 else {})
+            return {"synced": True, "last_sync_seq": payload.get("sync_seq", 1)}
 
         async def send_log_chunk(self, *_args, **_kwargs):
             return None
@@ -311,8 +314,9 @@ async def test_multiple_tasks_run_containers_concurrently(tmp_path, monkeypatch)
     )()
 
     class FakeClient:
-        async def sync_task(self, *_args, **_kwargs):
-            return {"synced": True, "last_sync_seq": 1}
+        async def sync_task(self, *_args, **kwargs):
+            payload = kwargs.get("payload") or (_args[1] if len(_args) > 1 else {})
+            return {"synced": True, "last_sync_seq": payload.get("sync_seq", 1)}
 
         async def send_log_chunk(self, *_args, **_kwargs):
             return None
@@ -487,3 +491,223 @@ async def test_executor_cancellation_does_not_block_on_reporter(tmp_path, monkey
         else:
             # execution_task completed within timeout
             await execution_task
+
+
+@pytest.mark.asyncio
+async def test_state_sync_loop_starts_after_prepare_workspace(tmp_path, monkeypatch):
+    """Regression: sync loop must not read stats.yaml before workspace is wiped."""
+    config = type(
+        "Cfg",
+        (),
+        {
+            "workspace_dir": str(tmp_path),
+            "docker_image": "rust:test",
+            "max_memory_gb": 8,
+            "max_runtime_seconds": 10,
+            "max_cpus": 2,
+            "docker_mounts": [],
+            "docker_pull_policy": "if-not-present",
+            "log_flush_interval_seconds": 3.0,
+            "log_sync_interval_seconds": 2.0,
+            "state_sync_interval_seconds": 30.0,
+        },
+    )()
+
+    workspace_dir = tmp_path / "repos" / "serde-1.0.0"
+    stale_stats = workspace_dir / "testgen" / "stats.yaml"
+    stale_stats.parent.mkdir(parents=True)
+    stale_stats.write_text("CompileFailed: 999\n")
+
+    class FakeClient:
+        def __init__(self):
+            self.sync_payloads = []
+
+        async def sync_task(self, task_id, payload):
+            self.sync_payloads.append(payload.copy())
+            return {"synced": True, "last_sync_seq": payload["sync_seq"]}
+
+        async def send_log_chunk(self, *_args, **_kwargs):
+            return None
+
+        async def send_log(self, *_args, **_kwargs):
+            return None
+
+    class FakeDocker:
+        async def is_available(self):
+            return True
+
+        async def ensure_image(self, _policy):
+            return True
+
+        async def ensure_workspace_ownership(self, _workspace):
+            return None
+
+        async def run(self, *_args, **_kwargs):
+            # Block so the task stays running and the sync loop can iterate.
+            await asyncio.Event().wait()
+
+        async def close(self):
+            pass
+
+    class FakeReporter:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def run(self):
+            pass
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr("runner.executor.TaskReporter", FakeReporter)
+    monkeypatch.setattr("runner.executor.DockerRunner", lambda **kwargs: FakeDocker())
+
+    executor = TaskExecutor(config=config, client=FakeClient())
+
+    prepare_started = asyncio.Event()
+    prepare_done = asyncio.Event()
+    reads = []
+
+    async def instrumented_prepare_workspace(
+        self, workspace_dir, crate_name, version, task_logger, docker
+    ):
+        prepare_started.set()
+        # Yield to give the sync loop a chance to run before deletion.
+        await asyncio.sleep(0)
+        if workspace_dir.exists():
+            await asyncio.to_thread(shutil.rmtree, workspace_dir)
+        workspace_dir.mkdir(parents=True, exist_ok=True)
+        prepare_done.set()
+
+    def instrumented_get_compile_failed_count(workspace_dir):
+        stats_path = workspace_dir / "testgen" / "stats.yaml"
+        reads.append(
+            {
+                "workspace_existed": workspace_dir.exists(),
+                "stats_existed": stats_path.exists(),
+                "stats_value": stats_path.read_text() if stats_path.exists() else None,
+            }
+        )
+        return None
+
+    monkeypatch.setattr(
+        TaskExecutor, "_prepare_workspace", instrumented_prepare_workspace
+    )
+    monkeypatch.setattr(
+        TaskExecutor, "_get_compile_failed_count", instrumented_get_compile_failed_count
+    )
+    monkeypatch.setattr(
+        TaskExecutor, "_count_generated_items", lambda _workspace_dir: (0, 0)
+    )
+
+    claimed = {
+        "id": 50,
+        "lease_token": "lease-50",
+        "crate_name": "serde",
+        "version": "1.0.0",
+    }
+
+    execution_task = asyncio.create_task(executor.execute_claimed_task(claimed))
+    try:
+        await asyncio.wait_for(prepare_done.wait(), timeout=2.0)
+        # Allow a few event loop iterations for any early sync loop runs.
+        await asyncio.sleep(0.1)
+    finally:
+        execution_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await execution_task
+
+    # No sync payload should carry the stale 999 value.
+    stale_payloads = [
+        p for p in executor.client.sync_payloads if p.get("compile_failed") == 999
+    ]
+    assert (
+        not stale_payloads
+    ), "sync loop observed stale compile_failed before workspace wipe"
+
+    # No read should have observed the stale stats.yaml file.
+    stale_reads = [r for r in reads if r["stats_existed"]]
+    assert (
+        not stale_reads
+    ), "_get_compile_failed_count read stats.yaml before workspace deletion"
+
+
+@pytest.mark.asyncio
+async def test_running_sync_in_flight_does_not_ack_terminal(tmp_path, monkeypatch):
+    """Regression: a running payload in flight must not ack terminal."""
+    config = type(
+        "Cfg",
+        (),
+        {
+            "workspace_dir": str(tmp_path),
+            "docker_image": "rust:test",
+            "max_memory_gb": 8,
+            "max_runtime_seconds": 10,
+            "max_cpus": 2,
+            "docker_mounts": [],
+            "docker_pull_policy": "if-not-present",
+            "log_flush_interval_seconds": 3.0,
+            "log_sync_interval_seconds": 2.0,
+            "state_sync_interval_seconds": 30.0,
+        },
+    )()
+
+    executor = object.__new__(TaskExecutor)
+    executor.config = config
+
+    running_started = asyncio.Event()
+    running_released = asyncio.Event()
+    terminal_observed = asyncio.Event()
+
+    class DelayedAckClient:
+        def __init__(self):
+            self.payloads = []
+
+        async def sync_task(self, task_id, payload):
+            self.payloads.append(payload.copy())
+            if payload["status"] == "running" and not running_released.is_set():
+                running_started.set()
+                await running_released.wait()
+            elif payload["status"] != "running":
+                terminal_observed.set()
+            return {"synced": True, "last_sync_seq": payload["sync_seq"]}
+
+    executor.client = DelayedAckClient()
+    sync_state = _SyncState()
+
+    monkeypatch.setattr(
+        executor, "_count_generated_items", lambda _workspace_dir: (0, 0)
+    )
+    monkeypatch.setattr(
+        executor, "_get_compile_failed_count", lambda _workspace_dir: None
+    )
+
+    loop_task = asyncio.create_task(
+        executor._state_sync_loop(
+            task_id=1,
+            lease_token="lease-1",
+            workspace_dir=tmp_path / "workspace",
+            interval=30.0,
+            sync_state=sync_state,
+        )
+    )
+
+    try:
+        # Wait until the running payload is blocked inside client.sync_task.
+        await asyncio.wait_for(running_started.wait(), timeout=2.0)
+        # Flip to terminal while the running payload is still in flight.
+        sync_state.set_terminal(status="completed", exit_code=0, message="done")
+        # Give the buggy ack logic a chance to fire if present.
+        await asyncio.sleep(0.1)
+        assert (
+            not sync_state.terminal_acked.is_set()
+        ), "running payload incorrectly acked terminal"
+
+        # Release the running response and wait for the real terminal sync.
+        running_released.set()
+        await asyncio.wait_for(terminal_observed.wait(), timeout=2.0)
+        await asyncio.sleep(0.1)
+        assert sync_state.terminal_acked.is_set(), "terminal payload was not acked"
+    finally:
+        sync_state.terminal_acked.set()
+        await loop_task

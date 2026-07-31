@@ -117,15 +117,7 @@ class TaskExecutor:
         )
         reporter_task = asyncio.create_task(reporter.run())
 
-        sync_task = asyncio.create_task(
-            self._state_sync_loop(
-                task_id,
-                lease_token,
-                workspace_dir,
-                self.config.state_sync_interval_seconds,
-                sync_state,
-            )
-        )
+        sync_task = None
 
         terminal_status = None
         terminal_exit_code = None
@@ -145,6 +137,17 @@ class TaskExecutor:
 
             await self._prepare_workspace(
                 workspace_dir, crate_name, crate_version, task_logger, docker
+            )
+
+            task_logger.info("workspace prepared, starting state sync", extra=task_ctx)
+            sync_task = asyncio.create_task(
+                self._state_sync_loop(
+                    task_id,
+                    lease_token,
+                    workspace_dir,
+                    self.config.state_sync_interval_seconds,
+                    sync_state,
+                )
             )
 
             cmd = ["cargo", "rapx", f"--test-crate={crate_name}", "test"]
@@ -243,12 +246,18 @@ class TaskExecutor:
                 )
 
         sync_state.terminal_acked.set()
-        try:
-            await asyncio.wait_for(sync_task, timeout=10.0)
-        except asyncio.TimeoutError:
-            sync_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await sync_task
+        if sync_task is not None:
+            try:
+                await asyncio.wait_for(sync_task, timeout=10.0)
+            except asyncio.TimeoutError:
+                sync_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await sync_task
+        else:
+            task_logger.info(
+                "no state sync loop started, skipping terminal sync wait",
+                extra=task_ctx,
+            )
 
         task_logger.info("task runner log closed", extra=task_ctx)
         task_logger.removeHandler(handler)
@@ -275,10 +284,11 @@ class TaskExecutor:
             except Exception:
                 case_count = poc_count = compile_failed = None
 
+            payload_status = sync_state.status
             payload = {
                 "lease_token": lease_token,
                 "sync_seq": seq,
-                "status": sync_state.status,
+                "status": payload_status,
                 "exit_code": sync_state.exit_code,
                 "message": sync_state.message,
                 "case_count": case_count,
@@ -289,7 +299,7 @@ class TaskExecutor:
             try:
                 result = await self.client.sync_task(task_id, payload)
                 last_sync_seq = result.get("last_sync_seq", 0)
-                if seq <= last_sync_seq and sync_state.status != "running":
+                if seq <= last_sync_seq and payload_status != "running":
                     sync_state.terminal_acked.set()
             except Exception as exc:
                 logger.warning(
