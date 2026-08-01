@@ -1,9 +1,13 @@
 import asyncio
 import logging
 
+from runner.cache import TTLCache
 from runner.client import RunnerControlClient
 from runner.config import RunnerConfig
+from runner.crate_downloader import CrateDownloader
+from runner.crates_api import CratesAPI
 from runner.executor import TaskExecutor
+from runner.rate_limiter import AsyncTokenBucket
 from runner.worker import RunnerWorker
 
 
@@ -15,7 +19,16 @@ async def _run() -> None:
         token=config.runner_token,
         timeout=config.request_timeout_seconds,
     )
-    executor = TaskExecutor(config, client)
+    crates_api = CratesAPI(
+        user_agent=config.crates_io_user_agent,
+        rate_limiter=AsyncTokenBucket(rate=config.crates_io_rate_limit_rps),
+        cache=TTLCache(ttl_seconds=config.crates_io_cache_ttl_seconds),
+    )
+    crate_downloader = CrateDownloader(
+        crates_api=crates_api,
+        max_concurrent_downloads=config.crates_io_max_concurrent_downloads,
+    )
+    executor = TaskExecutor(config, client, crate_downloader=crate_downloader)
     worker = RunnerWorker(
         client=client,
         runner_id=config.runner_id,

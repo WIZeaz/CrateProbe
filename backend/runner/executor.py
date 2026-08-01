@@ -5,10 +5,11 @@ import shutil
 import tarfile
 from datetime import datetime
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple
 from core.models import TaskStatus
 from runner.client import RunnerControlClient
 from runner.config import RunnerConfig
+from runner.crate_downloader import CrateDownloader
 from runner.crates_api import CratesAPI
 from runner.docker_runner import DockerRunner
 from runner.reporter import TaskReporter
@@ -49,13 +50,23 @@ class _SyncState:
 
 
 class TaskExecutor:
-    def __init__(self, config: RunnerConfig, client: RunnerControlClient):
+    def __init__(
+        self,
+        config: RunnerConfig,
+        client: RunnerControlClient,
+        crate_downloader: Optional[CrateDownloader] = None,
+    ):
         self.config = config
         self.client = client
-        self.crates_api = CratesAPI()
+        self.crate_downloader = crate_downloader or CrateDownloader(
+            crates_api=CratesAPI(
+                user_agent=config.crates_io_user_agent,
+            ),
+            max_concurrent_downloads=config.crates_io_max_concurrent_downloads,
+        )
 
     async def close(self):
-        await self.crates_api.close()
+        await self.crate_downloader.close()
 
     async def execute_claimed_task(self, claimed: dict) -> None:
         task_id = claimed["id"]
@@ -336,7 +347,7 @@ class TaskExecutor:
             "crate download started",
             extra={"crate_name": crate_name, "version": version},
         )
-        await self.crates_api.download_crate(crate_name, version, crate_file)
+        await self.crate_downloader.download(crate_name, version, crate_file)
         task_logger.info(
             "crate download completed",
             extra={"crate_name": crate_name, "version": version},

@@ -8,9 +8,19 @@ from types import SimpleNamespace
 import pytest
 
 from core.models import TaskStatus
-from runner.crates_api import CratesAPI
 from runner.executor import TaskExecutor, _SyncState
 from runner.reporter import TaskReporter
+
+
+class FakeDownloader:
+    async def download(self, *args, **kwargs):
+        pass
+
+    async def close(self):
+        pass
+
+    async def resolve_version(self, crate_name, version=None):
+        return version or "1.0.0"
 
 
 def test_count_generated_items(tmp_path):
@@ -82,7 +92,7 @@ async def test_execute_claimed_task_does_not_block_event_loop_during_docker_prec
     executor = object.__new__(TaskExecutor)
     executor.config = FakeConfig()
     executor.client = FakeClient()
-    executor.crates_api = object.__new__(CratesAPI)
+    executor.crate_downloader = FakeDownloader()
 
     async def noop_prepare_workspace(
         workspace_dir, crate_name, version, task_logger, docker
@@ -191,7 +201,11 @@ async def test_executor_logs_lifecycle_boundaries(tmp_path, monkeypatch):
     monkeypatch.setattr("runner.executor.TaskReporter", FakeReporter)
     monkeypatch.setattr("runner.executor.DockerRunner", lambda **kwargs: FakeDocker())
 
-    executor = TaskExecutor(config=config, client=FakeClient())
+    executor = TaskExecutor(
+        config=config,
+        client=FakeClient(),
+        crate_downloader=FakeDownloader(),
+    )
     monkeypatch.setattr(TaskExecutor, "_prepare_workspace", fake_prepare_workspace)
 
     claimed = {
@@ -275,7 +289,11 @@ async def test_executor_failure_logs_traceback(tmp_path, monkeypatch):
     monkeypatch.setattr("runner.executor.TaskReporter", FakeReporter)
     monkeypatch.setattr("runner.executor.DockerRunner", lambda **kwargs: BrokenDocker())
 
-    executor = TaskExecutor(config=config, client=FakeClient())
+    executor = TaskExecutor(
+        config=config,
+        client=FakeClient(),
+        crate_downloader=FakeDownloader(),
+    )
     monkeypatch.setattr(TaskExecutor, "_prepare_workspace", fake_prepare_workspace)
 
     claimed = {
@@ -375,7 +393,11 @@ async def test_multiple_tasks_run_containers_concurrently(tmp_path, monkeypatch)
         "runner.executor.DockerRunner", lambda **kwargs: ConcurrentTrackingDocker()
     )
 
-    executor = TaskExecutor(config=config, client=FakeClient())
+    executor = TaskExecutor(
+        config=config,
+        client=FakeClient(),
+        crate_downloader=FakeDownloader(),
+    )
     monkeypatch.setattr(TaskExecutor, "_prepare_workspace", fake_prepare_workspace)
 
     claimed_a = {
@@ -463,7 +485,11 @@ async def test_executor_cancellation_does_not_block_on_reporter(tmp_path, monkey
 
     monkeypatch.setattr("runner.executor.DockerRunner", lambda **kwargs: FakeDocker())
 
-    executor = TaskExecutor(config=config, client=FakeClient())
+    executor = TaskExecutor(
+        config=config,
+        client=FakeClient(),
+        crate_downloader=FakeDownloader(),
+    )
     monkeypatch.setattr(TaskExecutor, "_prepare_workspace", fake_prepare_workspace)
 
     claimed = {
@@ -562,7 +588,11 @@ async def test_state_sync_loop_starts_after_prepare_workspace(tmp_path, monkeypa
     monkeypatch.setattr("runner.executor.TaskReporter", FakeReporter)
     monkeypatch.setattr("runner.executor.DockerRunner", lambda **kwargs: FakeDocker())
 
-    executor = TaskExecutor(config=config, client=FakeClient())
+    executor = TaskExecutor(
+        config=config,
+        client=FakeClient(),
+        crate_downloader=FakeDownloader(),
+    )
 
     prepare_started = asyncio.Event()
     prepare_done = asyncio.Event()
