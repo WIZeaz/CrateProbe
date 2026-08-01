@@ -1,66 +1,128 @@
-"""Crates.io API client for fetching crate metadata and downloads."""
+"""Crates.io API client for fetching crate metadata."""
 
 import asyncio
-from pathlib import Path
+import logging
+import os
 from typing import Optional
+
 import httpx
+
+from runner.cache import TTLCache
+from runner.rate_limiter import AsyncTokenBucket
+
+logger = logging.getLogger(__name__)
 
 
 class CrateNotFoundError(Exception):
     """Raised when a crate is not found on crates.io."""
 
-    pass
-
 
 class VersionNotFoundError(Exception):
     """Raised when a specific version of a crate is not found."""
 
-    pass
-
 
 class CratesAPI:
-    """Client for interacting with the crates.io API."""
+    """Client for interacting with the crates.io API metadata endpoints."""
 
     BASE_URL = "https://crates.io/api/v1"
-    DOWNLOAD_URL = "https://static.crates.io/crates"
+    DEFAULT_USER_AGENT = "crateprobe-runner"
     MAX_RETRIES = 3
-    RETRY_DELAY = 2
 
-    def __init__(self):
-        """Initialize the API client."""
-        self.client = httpx.AsyncClient()
+    def __init__(
+        self,
+        user_agent: Optional[str] = None,
+        client: Optional[httpx.AsyncClient] = None,
+        rate_limiter: Optional[AsyncTokenBucket] = None,
+        cache: Optional[TTLCache] = None,
+    ):
+        self.user_agent = (
+            user_agent
+            or os.environ.get("CRATES_IO_USER_AGENT")
+            or self.DEFAULT_USER_AGENT
+        )
+        self.client = client or httpx.AsyncClient(
+            headers={"User-Agent": self.user_agent}
+        )
+        self.rate_limiter = rate_limiter or AsyncTokenBucket(rate=1.0)
+        self.cache = cache or TTLCache(ttl_seconds=300.0)
 
-    async def close(self):
+    async def close(self) -> None:
         """Close the HTTP session."""
         await self.client.aclose()
 
-    async def _request_with_retry(self, url: str, **kwargs) -> httpx.Response:
-        """Make HTTP request with retry logic.
+    @staticmethod
+    def _parse_retry_after(response: httpx.Response) -> Optional[float]:
+        value = response.headers.get("Retry-After")
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except ValueError:
+            return None
 
-        Args:
-            url: URL to request
-            **kwargs: Additional arguments to pass to client.get()
+    async def _request(self, url: str) -> httpx.Response:
+        cache_key = ("api", url)
+        cached = self.cache.get(*cache_key)
+        if cached is not None:
+            logger.debug(
+                "crates.io api cache hit",
+                extra={"url": url, "user_agent": self.user_agent},
+            )
+            return cached
 
-        Returns:
-            Response object
+        wait_seconds = await self.rate_limiter.acquire()
+        logger.debug(
+            "crates.io api request",
+            extra={
+                "url": url,
+                "user_agent": self.user_agent,
+                "wait_seconds": wait_seconds,
+            },
+        )
 
-        Raises:
-            httpx.HTTPError: If all retries fail
-        """
-        last_error = None
+        last_error: Optional[Exception] = None
+        backoff = 1.0
+        max_backoff = 60.0
 
         for attempt in range(self.MAX_RETRIES):
             try:
-                response = await self.client.get(url, **kwargs)
+                response = await self.client.get(
+                    url, headers={"User-Agent": self.user_agent}
+                )
+                if response.status_code == 429:
+                    retry_after = self._parse_retry_after(response)
+                    sleep_time = (
+                        retry_after
+                        if retry_after is not None
+                        else min(backoff, max_backoff)
+                    )
+                    logger.warning(
+                        "crates.io rate limited",
+                        extra={
+                            "url": url,
+                            "attempt": attempt + 1,
+                            "retry_after": retry_after,
+                            "backoff_seconds": sleep_time,
+                        },
+                    )
+                    if attempt < self.MAX_RETRIES - 1:
+                        await asyncio.sleep(sleep_time)
+                        backoff *= 2
+                    continue
+
+                if response.status_code == 404:
+                    return response
+
                 response.raise_for_status()
+                self.cache.set(response, *cache_key)
                 return response
             except httpx.HTTPError as e:
                 last_error = e
                 if attempt < self.MAX_RETRIES - 1:
-                    await asyncio.sleep(self.RETRY_DELAY)
-                continue
+                    await asyncio.sleep(min(backoff, max_backoff))
+                    backoff *= 2
 
-        raise last_error
+        raise last_error or RuntimeError(f"request to {url} failed")
 
     async def get_latest_version(self, crate_name: str) -> str:
         """Get the latest version of a crate.
@@ -75,26 +137,11 @@ class CratesAPI:
             CrateNotFoundError: If crate doesn't exist
         """
         url = f"{self.BASE_URL}/crates/{crate_name}"
-        headers = {"User-Agent": "experiment-platform"}
-
-        last_error = None
-        for attempt in range(self.MAX_RETRIES):
-            try:
-                response = await self.client.get(url, headers=headers)
-                response.raise_for_status()
-                data = response.json()
-                return data["crate"]["max_version"]
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 404:
-                    raise CrateNotFoundError(f"Crate '{crate_name}' not found")
-                raise
-            except httpx.HTTPError as e:
-                last_error = e
-                if attempt < self.MAX_RETRIES - 1:
-                    await asyncio.sleep(self.RETRY_DELAY)
-                continue
-
-        raise last_error
+        response = await self._request(url)
+        if response.status_code == 404:
+            raise CrateNotFoundError(f"Crate '{crate_name}' not found")
+        data = response.json()
+        return data["crate"]["max_version"]
 
     async def verify_version_exists(self, crate_name: str, version: str) -> bool:
         """Verify if a specific version of a crate exists.
@@ -105,58 +152,14 @@ class CratesAPI:
 
         Returns:
             True if version exists, False otherwise
-        """
-        url = f"{self.BASE_URL}/crates/{crate_name}"
-        headers = {"User-Agent": "experiment-platform"}
-
-        try:
-            response = await self.client.get(url, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-            versions = [v["num"] for v in data["versions"]]
-            return version in versions
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                raise CrateNotFoundError(f"Crate '{crate_name}' not found")
-            raise
-
-    async def download_crate(
-        self, crate_name: str, version: str, output_path: Path
-    ) -> None:
-        """Download a specific version of a crate.
-
-        Args:
-            crate_name: Name of the crate
-            version: Version to download
-            output_path: Where to save the downloaded file
 
         Raises:
-            VersionNotFoundError: If version doesn't exist (404)
-            RuntimeError: If download fails after all retries
+            CrateNotFoundError: If crate doesn't exist
         """
-        url = f"{self.DOWNLOAD_URL}/{crate_name}/{crate_name}-{version}.crate"
-        headers = {"User-Agent": "experiment-platform"}
-        last_error = None
-
-        for attempt in range(self.MAX_RETRIES):
-            try:
-                response = await self.client.get(url, headers=headers, timeout=30.0)
-                if response.status_code == 404:
-                    raise VersionNotFoundError(
-                        f"Version '{version}' of crate '{crate_name}' not found"
-                    )
-                response.raise_for_status()
-                break
-            except httpx.HTTPError as e:
-                last_error = e
-                if attempt < self.MAX_RETRIES - 1:
-                    await asyncio.sleep(self.RETRY_DELAY)
-                continue
-        else:
-            raise RuntimeError(
-                f"Failed to download {crate_name}@{version} from {url} "
-                f"after {self.MAX_RETRIES} attempts: {last_error}"
-            ) from last_error
-
-        with open(output_path, "wb") as f:
-            f.write(response.content)
+        url = f"{self.BASE_URL}/crates/{crate_name}"
+        response = await self._request(url)
+        if response.status_code == 404:
+            raise CrateNotFoundError(f"Crate '{crate_name}' not found")
+        data = response.json()
+        versions = [v["num"] for v in data["versions"]]
+        return version in versions
