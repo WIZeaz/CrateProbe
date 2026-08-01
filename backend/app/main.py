@@ -22,6 +22,8 @@ from app.config import Config
 from app.database import Database, TaskRecord
 from core.models import TaskStatus
 from runner.crates_api import CratesAPI, CrateNotFoundError
+from runner.rate_limiter import AsyncTokenBucket
+from runner.cache import TTLCache
 from app.services.scheduler import TaskScheduler
 from app.services.system_monitor import SystemMonitor
 from app.services.runner_metrics_store import RunnerMetricsStore, RunnerMetricPoint
@@ -31,6 +33,12 @@ from app.utils.file_utils import FileNotFoundError as CustomFileNotFoundError
 from app.api.websocket import get_manager
 
 logger = logging.getLogger(__name__)
+
+
+# Shared across all API requests to enforce a single process-wide rate limit
+# and metadata cache for crates.io API calls.
+_crates_api_rate_limiter = AsyncTokenBucket(rate=1.0)
+_crates_api_cache = TTLCache(ttl_seconds=300.0)
 
 
 # Request/Response models
@@ -381,7 +389,10 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     @app.post("/api/tasks", response_model=TaskResponse)
     async def create_task(request: CreateTaskRequest):
         """Create a new task"""
-        crates_api = CratesAPI()
+        crates_api = CratesAPI(
+            rate_limiter=_crates_api_rate_limiter,
+            cache=_crates_api_cache,
+        )
 
         try:
             # Get version if not specified

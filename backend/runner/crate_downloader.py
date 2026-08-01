@@ -74,6 +74,7 @@ class CrateDownloader:
                     logger.warning(
                         "static.crates.io rate limited",
                         extra={
+                            "crate_name": crate_name,
                             "url": url,
                             "attempt": attempt + 1,
                             "retry_after": retry_after,
@@ -83,12 +84,26 @@ class CrateDownloader:
                     if attempt < self.MAX_RETRIES - 1:
                         await asyncio.sleep(sleep_time)
                         backoff *= 2
+                    else:
+                        last_error = httpx.HTTPStatusError(
+                            "rate limited",
+                            request=response.request,
+                            response=response,
+                        )
                     continue
 
                 response.raise_for_status()
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 output_path.write_bytes(response.content)
                 return
+            except httpx.HTTPStatusError as e:
+                last_error = e
+                if e.response.status_code >= 500:
+                    if attempt < self.MAX_RETRIES - 1:
+                        await asyncio.sleep(min(backoff, max_backoff))
+                        backoff *= 2
+                    continue
+                raise
             except httpx.HTTPError as e:
                 last_error = e
                 if attempt < self.MAX_RETRIES - 1:

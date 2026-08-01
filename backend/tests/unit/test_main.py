@@ -62,7 +62,7 @@ def create_pending_task(client, monkeypatch, crate_name="serde", version="1.0.0"
         async def close(self):
             pass
 
-    monkeypatch.setattr("app.main.CratesAPI", lambda: MockCratesAPI())
+    monkeypatch.setattr("app.main.CratesAPI", lambda **kwargs: MockCratesAPI())
     response = client.post(
         "/api/tasks",
         json={"crate_name": crate_name, "version": version},
@@ -104,7 +104,7 @@ def test_create_task_returns_existing_task_if_duplicate(client, monkeypatch):
         async def close(self):
             pass
 
-    monkeypatch.setattr("app.main.CratesAPI", lambda: MockCratesAPI())
+    monkeypatch.setattr("app.main.CratesAPI", lambda **kwargs: MockCratesAPI())
 
     # Create first task
     response1 = client.post(
@@ -140,7 +140,7 @@ def test_create_task_running_duplicate_returns_unchanged(client, monkeypatch):
         async def close(self):
             pass
 
-    monkeypatch.setattr("app.main.CratesAPI", lambda: MockCratesAPI())
+    monkeypatch.setattr("app.main.CratesAPI", lambda **kwargs: MockCratesAPI())
 
     task_id = create_pending_task(client, monkeypatch, crate_name="running-crate")
     runner_id, token = create_runner_and_token(client, "runner-running-dup")
@@ -169,7 +169,7 @@ def test_create_task_terminal_duplicate_resets_for_retry(client, monkeypatch):
         async def close(self):
             pass
 
-    monkeypatch.setattr("app.main.CratesAPI", lambda: MockCratesAPI())
+    monkeypatch.setattr("app.main.CratesAPI", lambda **kwargs: MockCratesAPI())
 
     task_id = create_pending_task(client, monkeypatch, crate_name="terminal-crate")
     db = client.app.state.scheduler.db
@@ -211,7 +211,7 @@ def test_create_task_allows_different_versions(client, monkeypatch):
         async def close(self):
             pass
 
-    monkeypatch.setattr("app.main.CratesAPI", lambda: MockCratesAPI())
+    monkeypatch.setattr("app.main.CratesAPI", lambda **kwargs: MockCratesAPI())
 
     # Create task for version 1.0.0
     response1 = client.post(
@@ -244,7 +244,7 @@ def test_create_task_allows_different_crates_same_version(client, monkeypatch):
         async def close(self):
             pass
 
-    monkeypatch.setattr("app.main.CratesAPI", lambda: MockCratesAPI())
+    monkeypatch.setattr("app.main.CratesAPI", lambda **kwargs: MockCratesAPI())
 
     # Create task for crate-a
     response1 = client.post(

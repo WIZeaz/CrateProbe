@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 from typing import Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -60,13 +61,26 @@ class CratesAPI:
         except ValueError:
             return None
 
+    @staticmethod
+    def _url_parts(url: str):
+        parsed = urlparse(url)
+        endpoint = parsed.path
+        crate_name = endpoint.split("/")[-1] if endpoint else ""
+        return crate_name, endpoint
+
     async def _request(self, url: str) -> httpx.Response:
+        crate_name, endpoint = self._url_parts(url)
         cache_key = ("api", url)
         cached = self.cache.get(*cache_key)
         if cached is not None:
             logger.debug(
                 "crates.io api cache hit",
-                extra={"url": url, "user_agent": self.user_agent},
+                extra={
+                    "crate_name": crate_name,
+                    "endpoint": endpoint,
+                    "user_agent": self.user_agent,
+                    "cache_hit": True,
+                },
             )
             return cached
 
@@ -74,8 +88,10 @@ class CratesAPI:
         logger.debug(
             "crates.io api request",
             extra={
-                "url": url,
+                "crate_name": crate_name,
+                "endpoint": endpoint,
                 "user_agent": self.user_agent,
+                "cache_hit": False,
                 "wait_seconds": wait_seconds,
             },
         )
@@ -99,7 +115,8 @@ class CratesAPI:
                     logger.warning(
                         "crates.io rate limited",
                         extra={
-                            "url": url,
+                            "crate_name": crate_name,
+                            "endpoint": endpoint,
                             "attempt": attempt + 1,
                             "retry_after": retry_after,
                             "backoff_seconds": sleep_time,
@@ -108,6 +125,12 @@ class CratesAPI:
                     if attempt < self.MAX_RETRIES - 1:
                         await asyncio.sleep(sleep_time)
                         backoff *= 2
+                    else:
+                        last_error = httpx.HTTPStatusError(
+                            "rate limited",
+                            request=response.request,
+                            response=response,
+                        )
                     continue
 
                 if response.status_code == 404:
@@ -116,6 +139,14 @@ class CratesAPI:
                 response.raise_for_status()
                 self.cache.set(response, *cache_key)
                 return response
+            except httpx.HTTPStatusError as e:
+                last_error = e
+                if e.response.status_code >= 500:
+                    if attempt < self.MAX_RETRIES - 1:
+                        await asyncio.sleep(min(backoff, max_backoff))
+                        backoff *= 2
+                    continue
+                raise
             except httpx.HTTPError as e:
                 last_error = e
                 if attempt < self.MAX_RETRIES - 1:
