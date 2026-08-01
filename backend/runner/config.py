@@ -22,6 +22,10 @@ class RunnerConfig:
     docker_pull_policy: str = "if-not-present"
     docker_mounts: List[str] = field(default_factory=list)
     workspace_dir: str = "/workspace"
+    crates_io_user_agent: str = "crateprobe-runner"
+    crates_io_rate_limit_rps: float = 1.0
+    crates_io_cache_ttl_seconds: float = 300.0
+    crates_io_max_concurrent_downloads: int = 3
 
     @classmethod
     def from_env(cls) -> "RunnerConfig":
@@ -48,6 +52,16 @@ class RunnerConfig:
         )
         mounts_raw = os.environ.get("RUNNER_DOCKER_MOUNTS", "")
         workspace_dir = os.environ.get("RUNNER_WORKSPACE_DIR", "/workspace")
+        crates_io_user_agent = os.environ.get(
+            "CRATES_IO_USER_AGENT", "crateprobe-runner"
+        )
+        crates_io_rate_limit_rps_raw = os.environ.get("CRATES_IO_RATE_LIMIT_RPS", "1.0")
+        crates_io_cache_ttl_seconds_raw = os.environ.get(
+            "CRATES_IO_CACHE_TTL_SECONDS", "300.0"
+        )
+        crates_io_max_concurrent_downloads_raw = os.environ.get(
+            "CRATES_IO_MAX_CONCURRENT_DOWNLOADS", str(max_jobs_raw)
+        )
 
         missing = []
         if not server_url:
@@ -109,4 +123,15 @@ class RunnerConfig:
             docker_pull_policy=docker_pull_policy,
             docker_mounts=docker_mounts,
             workspace_dir=workspace_dir,
+            crates_io_user_agent=crates_io_user_agent,
+            crates_io_rate_limit_rps=_float(
+                "CRATES_IO_RATE_LIMIT_RPS", crates_io_rate_limit_rps_raw
+            ),
+            crates_io_cache_ttl_seconds=_float(
+                "CRATES_IO_CACHE_TTL_SECONDS", crates_io_cache_ttl_seconds_raw
+            ),
+            crates_io_max_concurrent_downloads=_int(
+                "CRATES_IO_MAX_CONCURRENT_DOWNLOADS",
+                crates_io_max_concurrent_downloads_raw,
+            ),
         )
