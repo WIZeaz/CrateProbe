@@ -41,6 +41,10 @@ RUNNER_SERVER_URL=http://localhost:8080 \
 | `RUNNER_DOCKER_PULL_POLICY` | `if-not-present` | Image pull policy: `always`, `if-not-present`, or `never` |
 | `RUNNER_DOCKER_MOUNTS` | *(empty)* | Comma-separated extra Docker volume mounts (e.g. `/host:/container:ro`) |
 | `RUNNER_WORKSPACE_DIR` | `/workspace` | Host directory where logs, repos, and task workspaces are stored |
+| `CRATES_IO_USER_AGENT` | `crateprobe-runner` | `User-Agent` header sent to crates.io (should identify your app; see [crates.io Data Access Policy](https://crates.io/data-access)) |
+| `CRATES_IO_RATE_LIMIT_RPS` | `1.0` | Max crates.io API metadata requests per second |
+| `CRATES_IO_CACHE_TTL_SECONDS` | `300` | How long to cache crate metadata from crates.io API |
+| `CRATES_IO_MAX_CONCURRENT_DOWNLOADS` | same as `RUNNER_MAX_JOBS` | Max concurrent `.crate` file downloads from `static.crates.io` |
 
 ## Workspace Layout
 
