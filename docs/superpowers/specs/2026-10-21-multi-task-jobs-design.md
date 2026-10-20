@@ -84,7 +84,7 @@ RUSTFLAGS = "-Z unstable-options"
 `jobs` 表（由旧 `tasks` 表演化）：
 - **删除列**：`case_count`、`poc_count`、`compile_failed`、`workspace_path`、`stdout_log`、`stderr_log`（日志路径改为按 job id 约定派生，见下文；现有的 `resolve_log_path` 本来就忽略这几列）。
 - **新增列**：`task_id INTEGER NOT NULL REFERENCES tasks(id)`、`task_name TEXT NOT NULL`（快照）、`task_sha256 TEXT NOT NULL`（快照）、`task_spec TEXT NOT NULL`（快照，创建时存整份解析后的 task.toml JSON）。快照保证 task 被删除后历史 job 依然完整可读（JobDetail 的 cmd / image 等摘要直接读快照，不依赖 tasks 表）。
-- 其余列与索引保持不变；`task_log_chunk_sequences` 改名 `job_log_chunk_sequences`（语义不变，按 id 对应）。
+- 其余列与索引保持不变；`task_log_chunk_sequences` 改名 `job_file_chunk_sequences`，键由 `(task_id, log_type)` 变为 `(job_id, path)`（语义不变）。
 
 ### 迁移步骤（随 `init_db` 执行，幂等）
 
@@ -93,7 +93,7 @@ RUSTFLAGS = "-Z unstable-options"
    - 创建新 `tasks` 表。
 2. 创建 dummy task：生成一个只含占位 task.toml 的最小 zip（`name="legacy"`、`desc="遗留数据占位 task，内容待补充"`、`image="none"`、`cmd="true"`、`workspace="/workspace"`），计算 sha256，落盘到 `workspace/tasks/{sha256}.zip` 并插入 `tasks` 行。若同 hash 已存在则复用。**dummy task 的具体内容用户后续自行补充**；历史 job 不会再次执行，runner 永远不会拉取它。
 3. 重建 `jobs` 表（SQLite 表重建模式：建新表 → INSERT SELECT → 删旧表 → 改名），回填 `task_id` / `task_name` / `task_sha256` / `task_spec` 指向 dummy task。
-4. 迁移日志文件：`workspace/logs/{id}-{type}.log` 移动到 `workspace/jobs/{id}/logs/{type}.log`（目标已存在则跳过）。
+4. 迁移日志文件：`workspace/logs/{id}-{type}.log` 移动到 `workspace/jobs/{id}/files/{type}.log`（目标已存在则跳过）。
 5. 全新部署（无旧表）时直接按新 schema 建表，不创建 dummy task。
 
 ## Backend 变更
@@ -104,13 +104,12 @@ RUSTFLAGS = "-Z unstable-options"
 workspace/
 ├── tasks/{sha256}.zip                  # 上传的 task zip
 ├── jobs/{job_id}/
-│   ├── logs/{stdout,stderr,runner}.log # runner 推送的日志（含迁移来的历史日志）
-│   ├── watch/{相对路径}                 # watch 文件，每次推送全量覆盖
+│   ├── files/{相对路径}                 # runner 推送的所有文件：stdout.log / stderr.log / runner.log（append 追加）与 watch 文件（full 覆盖），路径即 runner workspace 相对路径
 │   └── artifacts/{相对路径}             # 结束后上传的 artifacts
 └── tasks.db
 ```
 
-`resolve_log_path` 改为 `workspace/jobs/{id}/logs/{log_type}.log`；`RUNNER_LOG_TYPES` 收缩为 `{stdout, stderr, runner}`。
+日志与 watch 文件统一存于 `files/` 下，`resolve_log_path` 等路径解析改为 `workspace/jobs/{id}/files/{path}`；`RUNNER_LOG_TYPES` 概念取消。chunk 序号表按 `(job_id, path)` 键控。
 
 ### API
 
@@ -125,8 +124,7 @@ workspace/
 **Job（原 `/api/tasks/*` 业务接口整体改名为 `/api/jobs/*`）**
 - `POST /api/jobs`：body `{crate_name, version?, task_id}`。version 缺省走 crates.io 查最新版（逻辑不变）。**不再做 crate-version 去重/复用**，每次新建 job；校验 task_id 存在并快照 name/sha256。
 - `GET /api/jobs`、`GET /api/jobs/{id}`、`POST /api/jobs/{id}/cancel`、`POST /api/jobs/{id}/retry`、`DELETE /api/jobs/{id}`、`POST /api/jobs/batch-retry|batch-delete|batch-priority|batch-cancel`：语义不变，仅改名与去字段。
-- `GET /api/jobs/{id}/logs/{log_name}[/raw]`：不变（路径模板改名）。
-- `GET /api/jobs/{id}/watch`：列出 watch 文件（path / size / 更新时间）；`GET /api/jobs/{id}/watch/{path:path}`：读最新内容。
+- `GET /api/jobs/{id}/files`：列出已推送文件（path / size / 更新时间）；`GET /api/jobs/{id}/files/{path:path}`：读内容（支持 `?lines=N` 取尾部 N 行，`?raw=true` 下载全文）。日志查看与 watch 查看共用此接口（stdout.log / stderr.log / runner.log 只是约定俗成的路径）。
 - `GET /api/jobs/{id}/artifacts`：列出 artifacts（path / size）；`GET /api/jobs/{id}/artifacts/{path:path}`：下载。
 - `GET /api/queue`、`/api/dashboard/*`：不变。
 
@@ -134,11 +132,12 @@ workspace/
 - `POST /api/runners/{id}/claim`：响应字段 `id` 改名 `job_id`，新增 `task_id`、`task_sha256`。`task_sha256` 取 **claim 时刻 tasks 表的当前值**（而非 job 创建时的快照），使 task update 对 pending job 生效；claim 成功时把 job 的 `task_name` / `task_sha256` / `task_spec` 快照刷新为当前值，保证快照语义 = "该 job 实际运行所用的定义"。
 - `GET /api/runners/{id}/tasks/{task_id}/zip`：下载 task zip（bytes）。
 - `POST /api/runners/{id}/jobs/{job_id}/sync`：路径改名；payload 删除 `case_count` / `poc_count` / `compile_failed`。
-- `POST /api/runners/{id}/jobs/{job_id}/logs/{log_type}[/chunks]`：路径改名，语义不变。
-- `POST /api/runners/{id}/jobs/{job_id}/watch`：JSON `{lease_token, path, content}`，全量覆盖写入 `jobs/{id}/watch/{path}`。
+- `POST /api/runners/{id}/jobs/{job_id}/files`：**统一文件推送接口**，JSON `{lease_token, path, mode, content, chunk_seq?}`。`mode="append"`（stdout.log / stderr.log / runner.log 等追加型日志，必带 `chunk_seq` 做有序去重）追加写入；`mode="full"`（watch 文件）全量覆盖。写入落点 `jobs/{id}/files/{path}`。
 - `POST /api/runners/{id}/jobs/{job_id}/artifacts`：multipart 上传（`path` 表单字段 + 文件），写入 `jobs/{id}/artifacts/{path}`；每个 artifact 文件一次请求。
 
-**路径安全**：watch / artifacts 的 `path` 一律做规范化并校验落点必须位于对应目录内（拒绝绝对路径、`..`）。
+`sync` 保持独立：它是有序状态机推进（sync_seq 去重、终态迁移校验、terminal ack 等待），节奏与语义都和文件传输不同，合并只会耦合两者的失败模式。
+
+**路径安全**：files / artifacts 的 `path` 一律做规范化并校验落点必须位于对应目录内（拒绝绝对路径、`..`）。
 
 **WebSocket**：`/ws/tasks/{id}` → `/ws/jobs/{id}`；dashboard 消息类型 `task_*` → `job_*`。
 
@@ -164,7 +163,7 @@ workspace/
 3. 从缓存副本解析 task.toml。
 4. 准备 job 目录：清空重建 `jobs/job{job_id}/`；下载 crate 并解压到该目录（现有 `CrateDownloader` 逻辑不变）；再把 zip 中除 `task.toml` 外的内容**覆盖拷贝**到同一目录（同名文件以 zip 为准；解压时拒绝绝对路径与 `..` 条目）。
 5. 按 spec 构造 per-job `DockerRunner`：`image`、`working_dir = spec.workspace`、job 目录挂载到 `spec.workspace`、`cmd` 用 `sh -c` 包装并把 stdout/stderr 重定向到 `{workspace}/stdout.log` / `{workspace}/stderr.log`（沿用现状）；`env` = spec.env + `TERM=xterm-256color`；`limit` 各项缺失则不加对应 docker 限制；`timeout` 缺失则不设超时。镜像拉取策略沿用 runner 配置。
-6. Reporter：stdout / stderr / runner 三个 chunk 模式日志不变；`watch` 列表中的文件以全量模式周期性推送到 watch endpoint，周期沿用 `log_flush_interval_seconds`。
+6. Reporter 变为通用文件推送器：`stdout.log` / `stderr.log` / `runner.log` 以 `append` 模式增量推送（沿用 chunk_seq 去重与 `log_flush_interval_seconds` 周期）；`watch` 列表中的文件以 `full` 模式周期推送。全部走统一的 files 接口。
 7. 终态后：按 `artifacts` 列表逐个上传（目录则递归其下文件；缺失路径记 warning 跳过），然后走现有 terminal sync + ack 流程。
 8. 删除 `_count_generated_items` / `_get_compile_failed_count` 及 sync payload 中的对应字段。
 
@@ -178,22 +177,22 @@ workspace/
 - **新增 Task 管理页**（`/tasks`）：上传 zip（成功后展示解析出的 name / cmd / image 等摘要）、task 列表（id / name / desc / sha256 截断显示 / 创建时间 / 更新时间）、更新（上传替换 zip）、删除。
 - **Job 创建**（原 TaskNew / TaskBatch）：增加 task 下拉选择（数据来自 `GET /api/tasks`），其余交互不变；批量页仍逐条调创建接口。
 - **Job 列表**（TaskList → JobList）：删除 cases / pocs / compile_failed 三列，新增 task 列（显示快照名）。
-- **Job 详情**（TaskDetail → JobDetail）：删除三个统计卡片；展示 task 名、cmd、image 等 spec 摘要；保留日志查看（stdout / stderr / runner）；新增 watch 文件查看（列表 + 内容，可刷新）与 artifacts 浏览（列表 + 下载）。
+- **Job 详情**（TaskDetail → JobDetail）：删除三个统计卡片；展示 task 名、cmd、image 等 spec 摘要（读 job 快照，不依赖 tasks 表）；文件查看统一走 files 接口（stdout / stderr / runner.log 日志与 watch 文件，列表 + 尾部刷新）；artifacts 浏览（列表 + 下载）。
 - **Dashboard**：统计口径保持纯状态计数（本就不含 task 特定字段）；清理任何 cases/pocs 展示。
 - **exportXlsx.js**：移除 cases / pocs / compile_failed 相关导出列。
 - api.js 全面改名（task→job + 新增 task 管理接口）；websocket.js 改 `/ws/jobs`；路由与组件文件名随之一并改为 Job*。
 
 ## 我已自行敲定的决定（供审查）
 
-1. watch / artifacts 不复用 `logs/{log_type}` 通道，而是新增独立 endpoint 家族（`log_type` 路径参数无法安全携带任意相对路径），但鉴权（lease）、推送节奏、全量覆盖语义与现有日志通道完全一致。
-2. 容量上限：watch 单文件推送上限 512KB（超出截断尾部），artifacts 单文件上限 200MB，均为 backend config 可配项。
-3. task 上传/删除走 admin token；列表/详情/zip 下载（runner 接口）按各自现有鉴权。
+1. 日志与 watch 文件合并为统一的 `files` 推送/读取接口（`mode` 区分 append/full，`path` 携带相对路径），runner 的 Reporter 成为通用文件推送器；`sync` 不合并（状态机语义不同）；artifacts 因二进制与大小特性保持 multipart 独立接口。
+2. 容量上限：full 模式单文件推送上限 512KB（超出截断尾部），artifacts 单文件上限 200MB，task zip 上传默认 100MB，均为 backend config 可配项。
+3. task 上传/更新/删除走 admin token；列表/详情/zip 下载（runner 接口）按各自现有鉴权。
 4. claim 响应字段 `id` → `job_id`，runner 同步改名（runner 与 backend 一起部署，无兼容负担）。
-5. 后端日志文件迁入 `workspace/jobs/{id}/logs/`，目录结构统一按 job 组织。
+5. 后端按 job 统一组织目录：`workspace/jobs/{id}/files/`（推送文件）与 `workspace/jobs/{id}/artifacts/`（产物）。
 6. 容器默认环境变量只保留 `TERM=xterm-256color`；原硬编码的 `CARGO_TERM_COLOR` 移除，由需要它的 task 在自己的 `[env]` 中声明。
 7. stdout/stderr 仍重定向到容器内 workspace 根下的 `stdout.log` / `stderr.log`，task 作者通过 watch / artifacts 引用它们。
 8. 相同 sha256 重复上传返回已有 task（HTTP 200 + `existed: true`），不视为错误。
-9. job 的 retry 沿用现有 `reset_task_for_retry` 语义（重置状态、清空日志与 chunk 序号），并扩展为同时清空 backend 侧 `jobs/{id}/watch/` 与 `jobs/{id}/artifacts/` 目录，避免上一次尝试的旧产物混入；retry 前置校验 task 仍存在，已删除则返回 400。
+9. job 的 retry 沿用现有 `reset_task_for_retry` 语义（重置状态、清空 chunk 序号），并扩展为同时清空 backend 侧 `jobs/{id}/files/` 与 `jobs/{id}/artifacts/` 目录，避免上一次尝试的旧产物混入；retry 前置校验 task 仍存在，已删除则返回 400。
 10. priority 与四个 batch 操作保留原语义。
 11. task 删除总是允许（用户已确认）；遗留 dummy task 在用户通过 `PUT /api/tasks/{id}` 补充真实内容后，历史 job 的 retry 自然恢复可用，无需特殊处理。
 12. task update 的生效范围：claim 时取 task 当前 sha256 并刷新 job 快照，即 pending job 自动用上新定义；运行中/已结束的 job 不受影响；不同 task 间 sha256 撞车返回 409。
