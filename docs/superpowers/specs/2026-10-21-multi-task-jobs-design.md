@@ -185,7 +185,7 @@ workspace/
 ## 我已自行敲定的决定（供审查）
 
 1. 日志与 watch 文件合并为统一的 `files` 推送/读取接口（`mode` 区分 append/full，`path` 携带相对路径），runner 的 Reporter 成为通用文件推送器；`sync` 不合并（状态机语义不同）；artifacts 因二进制与大小特性保持 multipart 独立接口。
-2. 容量上限：full 模式单文件推送上限 512KB（超出截断尾部），artifacts 单文件上限 200MB，task zip 上传默认 100MB，均为 backend config 可配项。
+2. 容量上限：full 模式单文件推送上限 10MB（超出截断尾部），artifacts 单文件上限 1GB，task zip 上传默认 100MB，均为 backend config 可配项。
 3. task 上传/更新/删除走 admin token；列表/详情/zip 下载（runner 接口）按各自现有鉴权。
 4. claim 响应字段 `id` → `job_id`，runner 同步改名（runner 与 backend 一起部署，无兼容负担）。
 5. 后端按 job 统一组织目录：`workspace/jobs/{id}/files/`（推送文件）与 `workspace/jobs/{id}/artifacts/`（产物）。
