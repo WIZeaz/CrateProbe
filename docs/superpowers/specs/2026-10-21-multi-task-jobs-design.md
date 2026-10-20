@@ -79,6 +79,7 @@ RUSTFLAGS = "-Z unstable-options"
 | zip_path | TEXT NOT NULL | zip 存储路径 |
 | spec | TEXT NOT NULL | 解析后的 task.toml（JSON 字符串），供前端展示 |
 | created_at | TIMESTAMP | |
+| updated_at | TIMESTAMP | 最近一次 update 的时间 |
 
 `jobs` 表（由旧 `tasks` 表演化）：
 - **删除列**：`case_count`、`poc_count`、`compile_failed`、`workspace_path`、`stdout_log`、`stderr_log`（日志路径改为按 job id 约定派生，见下文；现有的 `resolve_log_path` 本来就忽略这几列）。
@@ -118,7 +119,8 @@ workspace/
 - `GET /api/tasks`：列表（id / name / desc / sha256 / created_at）。
 - `GET /api/tasks/{id}`：详情（含 spec）。
 - `DELETE /api/tasks/{id}`：**总是允许删除**（即使存在引用它的 pending/running job），删除行与 zip 文件。下游影响：runner 拉取 zip 得到 404 时，job 以 failed 收场并带明确错误信息（与 sha256 不一致走同一终态路径）；对一个 task 已删除的 job 调 retry 返回 400。历史 job 的可读性由快照列保证。
-- 上传与删除使用 admin token 鉴权（沿用 `require_admin_token`），列表/详情公开。
+- `PUT /api/tasks/{id}`：multipart 上传新 zip，替换旧定义。重新校验 task.toml，计算新 sha256，替换 zip 文件并更新 `sha256` / `spec` / `name` / `desc` / `updated_at`。新 zip 与**另一个** task 的 sha256 相同 → 409 冲突；与自身当前 sha256 相同 → 200 无变化。**pending job 在 claim 时使用 task 的当前定义**（见下文 claim 说明），即更新对已创建但未运行的 job 生效；运行中/已结束的 job 不受影响。这也是补充 dummy task 真实内容的通道。
+- 上传、更新与删除使用 admin token 鉴权（沿用 `require_admin_token`），列表/详情公开。
 
 **Job（原 `/api/tasks/*` 业务接口整体改名为 `/api/jobs/*`）**
 - `POST /api/jobs`：body `{crate_name, version?, task_id}`。version 缺省走 crates.io 查最新版（逻辑不变）。**不再做 crate-version 去重/复用**，每次新建 job；校验 task_id 存在并快照 name/sha256。
@@ -129,7 +131,7 @@ workspace/
 - `GET /api/queue`、`/api/dashboard/*`：不变。
 
 **Runner 面向（runner token + lease 校验不变）**
-- `POST /api/runners/{id}/claim`：响应字段 `id` 改名 `job_id`，新增 `task_id`、`task_sha256`。
+- `POST /api/runners/{id}/claim`：响应字段 `id` 改名 `job_id`，新增 `task_id`、`task_sha256`。`task_sha256` 取 **claim 时刻 tasks 表的当前值**（而非 job 创建时的快照），使 task update 对 pending job 生效；claim 成功时把 job 的 `task_name` / `task_sha256` / `task_spec` 快照刷新为当前值，保证快照语义 = "该 job 实际运行所用的定义"。
 - `GET /api/runners/{id}/tasks/{task_id}/zip`：下载 task zip（bytes）。
 - `POST /api/runners/{id}/jobs/{job_id}/sync`：路径改名；payload 删除 `case_count` / `poc_count` / `compile_failed`。
 - `POST /api/runners/{id}/jobs/{job_id}/logs/{log_type}[/chunks]`：路径改名，语义不变。
@@ -173,7 +175,7 @@ workspace/
 
 ## 前端变更
 
-- **新增 Task 管理页**（`/tasks`）：上传 zip（成功后展示解析出的 name / cmd / image 等摘要）、task 列表（id / name / desc / sha256 截断显示 / 创建时间）、删除。
+- **新增 Task 管理页**（`/tasks`）：上传 zip（成功后展示解析出的 name / cmd / image 等摘要）、task 列表（id / name / desc / sha256 截断显示 / 创建时间 / 更新时间）、更新（上传替换 zip）、删除。
 - **Job 创建**（原 TaskNew / TaskBatch）：增加 task 下拉选择（数据来自 `GET /api/tasks`），其余交互不变；批量页仍逐条调创建接口。
 - **Job 列表**（TaskList → JobList）：删除 cases / pocs / compile_failed 三列，新增 task 列（显示快照名）。
 - **Job 详情**（TaskDetail → JobDetail）：删除三个统计卡片；展示 task 名、cmd、image 等 spec 摘要；保留日志查看（stdout / stderr / runner）；新增 watch 文件查看（列表 + 内容，可刷新）与 artifacts 浏览（列表 + 下载）。
@@ -193,7 +195,8 @@ workspace/
 8. 相同 sha256 重复上传返回已有 task（HTTP 200 + `existed: true`），不视为错误。
 9. job 的 retry 沿用现有 `reset_task_for_retry` 语义（重置状态、清空日志与 chunk 序号），并扩展为同时清空 backend 侧 `jobs/{id}/watch/` 与 `jobs/{id}/artifacts/` 目录，避免上一次尝试的旧产物混入；retry 前置校验 task 仍存在，已删除则返回 400。
 10. priority 与四个 batch 操作保留原语义。
-11. task 删除总是允许（用户已确认）；遗留 dummy task 在用户补充真实内容后，历史 job 的 retry 自然恢复可用，无需特殊处理。
+11. task 删除总是允许（用户已确认）；遗留 dummy task 在用户通过 `PUT /api/tasks/{id}` 补充真实内容后，历史 job 的 retry 自然恢复可用，无需特殊处理。
+12. task update 的生效范围：claim 时取 task 当前 sha256 并刷新 job 快照，即 pending job 自动用上新定义；运行中/已结束的 job 不受影响；不同 task 间 sha256 撞车返回 409。
 
 ## 留给 builder 的部分
 
