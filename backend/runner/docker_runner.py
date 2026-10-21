@@ -4,7 +4,7 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 import time
 import docker
 from docker.errors import ImageNotFound, APIError
@@ -85,11 +85,9 @@ class DockerRunner:
     def __init__(
         self,
         docker_pull_policy: str = "if-not-present",
-        mounts: Optional[List[str]] = None,
         log_sync_interval_seconds: float = 2.0,
     ):
         self.docker_pull_policy = docker_pull_policy
-        self.mounts = mounts or []
         self.log_sync_interval_seconds = log_sync_interval_seconds
         self._client: Optional[docker.DockerClient] = None
 
@@ -255,8 +253,8 @@ class DockerRunner:
         # Build resource limits
         resource_limits = self._build_resource_limits(cpu=cpu, mem=mem)
 
-        # Prepare volume mounts
-        volumes = [f"{workspace_dir.resolve()}:{container_workspace}:rw"] + self.mounts
+        # Mount the job workspace; no additional runner-level mounts exist.
+        volumes = [f"{workspace_dir.resolve()}:{container_workspace}:rw"]
 
         # Compute log paths inside container (relative to container workspace)
         stdout_container_path = f"{container_workspace}/stdout.log"

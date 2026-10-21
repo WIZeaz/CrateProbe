@@ -80,7 +80,6 @@ class TaskExecutor:
         # supplied per run from the task spec.
         docker = DockerRunner(
             docker_pull_policy=self.config.docker_pull_policy,
-            mounts=self.config.docker_mounts,
             log_sync_interval_seconds=self.config.log_sync_interval_seconds,
         )
 

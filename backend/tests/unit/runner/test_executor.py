@@ -35,7 +35,6 @@ def make_config(tmp_path):
         {
             "workspace_dir": str(tmp_path),
             "docker_pull_policy": "if-not-present",
-            "docker_mounts": ["/data:/data:ro"],
             "log_flush_interval_seconds": 3.0,
             "log_sync_interval_seconds": 2.0,
             "state_sync_interval_seconds": 30.0,
@@ -217,7 +216,6 @@ async def test_execute_claimed_job_happy_path(tmp_path, monkeypatch):
     assert docker_factory_calls == [
         {
             "docker_pull_policy": "if-not-present",
-            "mounts": ["/data:/data:ro"],
             "log_sync_interval_seconds": 2.0,
         }
     ]

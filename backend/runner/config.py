@@ -1,6 +1,5 @@
 import os
-from dataclasses import dataclass, field
-from typing import List
+from dataclasses import dataclass
 
 
 @dataclass
@@ -16,7 +15,6 @@ class RunnerConfig:
     state_sync_interval_seconds: float = 30.0
     max_jobs: int = 3
     docker_pull_policy: str = "if-not-present"
-    docker_mounts: List[str] = field(default_factory=list)
     workspace_dir: str = "/workspace"
     crates_io_user_agent: str = "crateprobe-runner"
     crates_io_rate_limit_rps: float = 1.0
@@ -42,7 +40,6 @@ class RunnerConfig:
         docker_pull_policy = os.environ.get(
             "RUNNER_DOCKER_PULL_POLICY", "if-not-present"
         )
-        mounts_raw = os.environ.get("RUNNER_DOCKER_MOUNTS", "")
         workspace_dir = os.environ.get("RUNNER_WORKSPACE_DIR", "/workspace")
         crates_io_user_agent = os.environ.get(
             "CRATES_IO_USER_AGENT", "crateprobe-runner"
@@ -79,8 +76,6 @@ class RunnerConfig:
             except ValueError as exc:
                 raise ValueError(f"{name} must be an integer") from exc
 
-        docker_mounts = [m.strip() for m in mounts_raw.split(",") if m.strip()]
-
         max_jobs = _int("RUNNER_MAX_JOBS", max_jobs_raw)
         if max_jobs < 1:
             raise ValueError("RUNNER_MAX_JOBS must be >= 1")
@@ -109,7 +104,6 @@ class RunnerConfig:
             ),
             max_jobs=max_jobs,
             docker_pull_policy=docker_pull_policy,
-            docker_mounts=docker_mounts,
             workspace_dir=workspace_dir,
             crates_io_user_agent=crates_io_user_agent,
             crates_io_rate_limit_rps=_float(

@@ -15,7 +15,6 @@ import time
 def docker_runner():
     return DockerRunner(
         docker_pull_policy="if-not-present",
-        mounts=[],
         log_sync_interval_seconds=2.0,
     )
 
@@ -39,7 +38,7 @@ def _run_kwargs(workspace, stdout_log, stderr_log, **overrides):
 
 def test_docker_runner_initialization(docker_runner):
     assert docker_runner.docker_pull_policy == "if-not-present"
-    assert docker_runner.mounts == []
+    assert not hasattr(docker_runner, "mounts")
     assert docker_runner.log_sync_interval_seconds == 2.0
 
 
@@ -276,11 +275,8 @@ async def test_run_without_timeout_awaits_container_indefinitely(
 
 
 @pytest.mark.asyncio
-async def test_run_includes_workspace_and_configured_mounts(tmp_path):
-    runner = DockerRunner(
-        docker_pull_policy="if-not-present",
-        mounts=["/host-cache:/cache:ro"],
-    )
+async def test_run_mounts_only_the_job_workspace(tmp_path):
+    runner = DockerRunner(docker_pull_policy="if-not-present")
 
     with patch("docker.from_env") as mock_docker:
         mock_client = Mock()
@@ -297,10 +293,7 @@ async def test_run_includes_workspace_and_configured_mounts(tmp_path):
         result = await runner.run(**_run_kwargs(workspace, stdout_log, stderr_log))
 
         call_kwargs = mock_client.containers.run.call_args_list[0][1]
-        assert call_kwargs["volumes"] == [
-            f"{workspace.resolve()}:/workspace:rw",
-            "/host-cache:/cache:ro",
-        ]
+        assert call_kwargs["volumes"] == [f"{workspace.resolve()}:/workspace:rw"]
         assert result.state == TaskStatus.COMPLETED
 
 
