@@ -8,6 +8,10 @@ class WebSocketService {
     this.currentUrl = '/ws/dashboard'
   }
 
+  get isOpen() {
+    return Boolean(this.ws && this.ws.readyState === WebSocket.OPEN)
+  }
+
   connect(url = '/ws/dashboard') {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       if (this.currentUrl === url) {
