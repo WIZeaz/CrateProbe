@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { formatCount } from './dashboardMath.js'
+import { formatCount } from '../../utils/format.js'
 
 const props = defineProps({
   segments: {

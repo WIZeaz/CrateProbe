@@ -2,6 +2,7 @@
 import { ref, watch } from 'vue'
 import { useSettings } from '../composables/useSettings'
 import api from '../services/api'
+import PageHeader from '../components/ui/PageHeader.vue'
 
 const { settings, updateSetting, saveSettings } = useSettings()
 
@@ -68,71 +69,74 @@ async function handleSave() {
 
 <template>
   <div>
-    <div class="flex items-center justify-between mb-8">
-      <h1 class="text-3xl font-bold text-gray-900">Settings</h1>
-    </div>
+    <PageHeader
+      title="Settings"
+      description="Admin access for runner management."
+    />
 
-    <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
-      <!-- Category sidebar -->
-      <aside class="lg:col-span-1 space-y-2">
-        <div class="bento-card p-4 bg-blue-50 border-blue-200">
-          <h2 class="font-semibold text-gray-900">Security</h2>
-        </div>
+    <div class="grid grid-cols-1 gap-5 lg:grid-cols-4">
+      <aside class="lg:col-span-1">
+        <nav class="instrument-panel p-2" aria-label="Settings categories">
+          <span
+            class="flex min-h-10 items-center border-l-2 border-signal bg-black/[0.03] px-3 text-[13px] font-medium text-ink"
+            aria-current="page"
+          >
+            Security
+          </span>
+        </nav>
       </aside>
 
-      <!-- Form area -->
-      <section class="bento-card lg:col-span-3">
-        <h2 class="text-lg font-semibold text-gray-900 mb-4">Security</h2>
+      <section class="instrument-panel lg:col-span-3">
+        <div class="panel-header">
+          <h2 class="panel-title">Security</h2>
+        </div>
 
-        <div class="space-y-4 max-w-xl">
+        <div class="mt-4 max-w-xl space-y-4">
           <div>
-            <label for="admin-token" class="block text-sm font-medium text-gray-700 mb-1">
-              Admin Token
-            </label>
+            <label for="admin-token" class="ui-label">Admin token</label>
             <div class="relative">
               <input
                 id="admin-token"
                 v-model="tokenInput"
                 :type="showToken ? 'text' : 'password'"
                 placeholder="Enter your admin token"
-                class="w-full px-3 py-2 pr-20 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                class="ui-input pr-20"
                 :disabled="saving"
               />
               <button
                 type="button"
-                @click="showToken = !showToken"
-                class="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 text-xs font-medium text-gray-600 hover:text-gray-900"
+                class="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 text-[11px] font-medium text-muted hover:text-ink disabled:opacity-50"
                 :disabled="saving"
+                @click="showToken = !showToken"
               >
                 {{ showToken ? 'Hide' : 'Show' }}
               </button>
             </div>
-            <p class="mt-1 text-xs text-gray-500">
+            <p class="mt-1 text-[11px] leading-relaxed text-muted">
               Used to access the Runners management API. Set the same value as
-              <code class="bg-gray-100 px-1 rounded">security.admin_token</code> in
-              <code class="bg-gray-100 px-1 rounded">config.toml</code>.
+              <code class="inline-code">security.admin_token</code> in
+              <code class="inline-code">config.toml</code>.
             </p>
           </div>
 
           <div
             v-if="message"
-            class="px-3 py-2 rounded-lg text-sm"
-            :class="messageType === 'success'
-              ? 'bg-green-50 border border-green-200 text-green-800'
-              : 'bg-red-50 border border-red-200 text-red-800'"
+            class="notice"
+            :class="messageType === 'success' ? 'notice--success' : 'notice--error'"
+            role="status"
           >
             {{ message }}
           </div>
 
-          <div class="pt-2">
+          <div class="pt-1">
             <button
               type="button"
-              @click="handleSave"
+              class="btn btn--primary"
               :disabled="saving"
-              class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center gap-2"
+              @click="handleSave"
             >
               <span v-if="saving" class="spinner border-white"></span>
-              {{ saving ? 'Saving...' : 'Save Settings' }}
+              {{ saving ? 'Saving...' : 'Save settings' }}
             </button>
           </div>
         </div>

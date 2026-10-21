@@ -2,6 +2,8 @@
 import { ref, computed, nextTick, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../services/api'
+import PageHeader from '../components/ui/PageHeader.vue'
+import TaskSelect from '../components/ui/TaskSelect.vue'
 
 const router = useRouter()
 const textarea = ref('')
@@ -142,158 +144,177 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="max-w-4xl mx-auto">
-    <h1 class="text-3xl font-bold text-gray-900 mb-8">Batch Create Jobs</h1>
+  <div>
+    <PageHeader
+      title="Batch create jobs"
+      description="Queue many crate versions against one task."
+    />
 
-    <!-- Instructions Card -->
-    <div class="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
-      <h3 class="text-sm font-medium text-blue-900 mb-2">How to use batch create</h3>
-      <ul class="text-sm text-blue-800 space-y-1 list-disc list-inside mb-3">
-        <li>Select the task to run, then enter one crate per line</li>
-        <li>Format 1: <code class="bg-blue-100 px-1 rounded">crate_name</code> (uses latest version)</li>
-        <li>Format 2: <code class="bg-blue-100 px-1 rounded">crate_name, version</code> (specific version)</li>
-        <li>Format 3: <code class="bg-blue-100 px-1 rounded">crate_name version</code> (specific version, space-separated)</li>
-        <li>Empty lines are ignored</li>
-      </ul>
-      <div class="text-xs text-blue-700 bg-blue-100 rounded p-2 font-mono">
-        Example:<br>
-        serde<br>
-        tokio, 1.0.0<br>
-        regex<br>
-        actix-web 4.4.0<br>
-        rayon, 1.5.0
-      </div>
-    </div>
-
-    <!-- Input Area -->
-    <div class="bento-card">
-      <!-- Task Selector -->
-      <div class="mb-4">
-        <label for="task_id" class="block text-sm font-medium text-gray-700 mb-2">
-          Task *
-        </label>
-        <div v-if="tasksLoading" class="flex items-center gap-2 text-sm text-gray-500">
-          <span class="spinner border-blue-500"></span> Loading tasks...
+    <div class="grid grid-cols-1 gap-5 lg:grid-cols-5">
+      <section class="instrument-panel lg:col-span-3">
+        <div class="panel-header">
+          <h2 class="panel-title">Batch input</h2>
         </div>
-        <div
-          v-else-if="tasksError"
-          class="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg text-sm flex items-center justify-between"
-        >
-          <span>Failed to load tasks: {{ tasksError }}</span>
-          <button
-            type="button"
-            @click="fetchTasks"
-            class="ml-4 px-3 py-1 text-sm font-medium text-red-700 bg-red-100 rounded-lg hover:bg-red-200 transition-colors"
+
+        <div class="mt-5 max-w-2xl space-y-5">
+          <TaskSelect
+            v-model="selectedTaskId"
+            label="Task *"
+            :tasks="tasks"
+            :loading="tasksLoading"
+            :error="tasksError"
+            :disabled="loading"
+            @retry="fetchTasks"
+          />
+
+          <div>
+            <div class="mb-1.5 flex items-baseline justify-between gap-3">
+              <label for="crate_list" class="ui-label mb-0">Crate list</label>
+              <span class="font-mono text-[11px] text-muted">
+                {{ inputStats.lines }}
+                {{ inputStats.lines === 1 ? 'line' : 'lines' }} entered
+              </span>
+            </div>
+            <textarea
+              id="crate_list"
+              v-model="textarea"
+              rows="10"
+              placeholder="serde&#10;tokio, 1.0.0&#10;regex&#10;actix-web 4.4.0"
+              class="ui-textarea"
+              :disabled="loading"
+            ></textarea>
+            <p class="mt-1 text-[11px] text-muted">
+              One crate per line. Empty lines are ignored.
+            </p>
+          </div>
+
+          <div
+            v-if="
+              inputStats.hasContent &&
+              !validationResult.valid &&
+              validationResult.errors.length > 0
+            "
+            class="notice notice--error"
+            role="alert"
           >
-            Retry
-          </button>
-        </div>
-        <div
-          v-else-if="tasks.length === 0"
-          class="bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-3 rounded-lg text-sm"
-        >
-          No task definitions found.
-          <router-link to="/tasks" class="font-medium underline hover:text-yellow-900">
-            Create one on the task management page
-          </router-link>
-          first.
-        </div>
-        <select
-          v-else
-          id="task_id"
-          v-model="selectedTaskId"
-          required
-          class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          :disabled="loading"
-        >
-          <option v-for="task in tasks" :key="task.id" :value="task.id">
-            {{ task.name }} (#{{ task.id }})
-          </option>
-        </select>
-      </div>
+            <div class="min-w-0 flex-1">
+              <p class="notice__title">Format errors found.</p>
+              <ul class="mt-1 space-y-0.5 text-[11px] text-muted">
+                <li
+                  v-for="error in validationResult.errors"
+                  :key="error.line"
+                >
+                  Line {{ error.line }}: "{{ error.text }}" ({{ error.reason }})
+                </li>
+              </ul>
+            </div>
+          </div>
 
-      <div class="mb-4">
-        <div class="flex items-center justify-between mb-2">
-          <label for="crate_list" class="block text-sm font-medium text-gray-700">
-            Crate List
-          </label>
-          <span class="text-sm text-gray-500">
-            {{ inputStats.lines }} {{ inputStats.lines === 1 ? 'line' : 'lines' }} entered
-          </span>
-        </div>
-        <textarea
-          id="crate_list"
-          v-model="textarea"
-          rows="12"
-          placeholder="serde&#10;tokio, 1.0.0&#10;regex&#10;actix-web 4.4.0"
-          class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm"
-          :disabled="loading"
-        ></textarea>
-      </div>
+          <div v-if="progress.total > 0">
+            <div class="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+              <span class="text-[12px] font-medium text-ink">
+                {{ loading ? 'Creating jobs...' : 'Done' }}
+              </span>
+              <span class="flex items-center gap-3 font-mono text-[11px] text-muted">
+                <span>{{ progress.current }} / {{ progress.total }}</span>
+                <span
+                  v-if="failedCount > 0"
+                  class="inline-flex items-center gap-1.5"
+                >
+                  <span class="status-dot tone-alarm" aria-hidden="true"></span>
+                  {{ failedCount }} failed
+                </span>
+              </span>
+            </div>
+            <div
+              class="ui-progress"
+              :class="
+                loading
+                  ? ''
+                  : failedCount > 0
+                    ? 'ui-progress--warn'
+                    : 'ui-progress--good'
+              "
+            >
+              <div
+                class="ui-progress__fill"
+                :style="{ width: `${progressPercentage}%` }"
+              ></div>
+            </div>
+            <div
+              ref="logContainer"
+              class="code-block mt-3 max-h-64 overflow-y-auto"
+            >
+              <div
+                v-for="(entry, index) in logs"
+                :key="index"
+                :class="entry.ok ? 'text-[#7bd88f]' : 'text-[#ff7b72]'"
+              >
+                {{ entry.text }}
+              </div>
+              <div v-if="logs.length === 0" class="text-[#8a9698]">
+                Waiting...
+              </div>
+            </div>
+          </div>
 
-      <!-- Format Errors -->
-      <div v-if="inputStats.hasContent && !validationResult.valid && validationResult.errors.length > 0"
-           class="mb-4 bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg">
-        <p class="font-medium mb-2">Format errors found:</p>
-        <ul class="text-sm space-y-1">
-          <li v-for="error in validationResult.errors" :key="error.line">
-            Line {{ error.line }}: "{{ error.text }}" - {{ error.reason }}
-          </li>
-        </ul>
-      </div>
+          <div class="flex items-center justify-end gap-2 border-t border-rule pt-4">
+            <button
+              type="button"
+              class="btn btn--ghost"
+              :disabled="loading"
+              @click="router.push('/jobs')"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              class="btn btn--primary"
+              :disabled="
+                loading ||
+                !validationResult.valid ||
+                !inputStats.hasContent ||
+                !selectedTaskId
+              "
+              @click="createBatchJobs"
+            >
+              Create {{ validationResult.parsed?.length || 0 }}
+              {{ validationResult.parsed?.length === 1 ? 'job' : 'jobs' }}
+            </button>
+          </div>
+        </div>
+      </section>
 
-      <!-- Progress Bar + Creation Log -->
-      <div v-if="progress.total > 0" class="mb-4">
-        <div class="flex items-center justify-between text-sm text-gray-600 mb-2">
-          <span>
-            {{ loading ? 'Creating jobs...' : 'Done' }}
-          </span>
-          <span>
-            {{ progress.current }} / {{ progress.total }}
-            <span v-if="failedCount > 0" class="text-red-600 font-medium">
-              ({{ failedCount }} failed)
-            </span>
-          </span>
-        </div>
-        <div class="w-full bg-gray-200 rounded-full h-3 overflow-hidden mb-3">
-          <div
-            class="h-full transition-all duration-300 ease-out"
-            :class="loading ? 'bg-blue-600' : (failedCount > 0 ? 'bg-yellow-500' : 'bg-green-600')"
-            :style="{ width: `${progressPercentage}%` }"
-          ></div>
-        </div>
-        <div
-          ref="logContainer"
-          class="bg-gray-900 rounded-lg p-3 max-h-64 overflow-y-auto font-mono text-xs leading-relaxed"
-        >
-          <div
-            v-for="(entry, index) in logs"
-            :key="index"
-            :class="entry.ok ? 'text-green-400' : 'text-red-400'"
-          >{{ entry.text }}</div>
-          <div v-if="logs.length === 0" class="text-gray-500">Waiting...</div>
-        </div>
-      </div>
+      <aside class="lg:col-span-2">
+        <section class="instrument-panel lg:sticky lg:top-20">
+          <div class="panel-header">
+            <h2 class="panel-title">Input format</h2>
+          </div>
 
-      <!-- Action Buttons -->
-      <div class="flex items-center justify-between">
-        <button
-          type="button"
-          @click="router.push('/jobs')"
-          class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
-          :disabled="loading"
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          @click="createBatchJobs"
-          class="px-6 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
-          :disabled="loading || !validationResult.valid || !inputStats.hasContent || !selectedTaskId"
-        >
-          Create {{ validationResult.parsed?.length || 0 }} {{ validationResult.parsed?.length === 1 ? 'Job' : 'Jobs' }}
-        </button>
-      </div>
+          <ul class="mt-4 space-y-2 text-[12px] leading-relaxed text-muted">
+            <li>
+              <code class="inline-code">crate_name</code> uses the latest
+              version.
+            </li>
+            <li>
+              <code class="inline-code">crate_name, version</code> pins a
+              version.
+            </li>
+            <li>
+              <code class="inline-code">crate_name version</code> also pins a
+              version.
+            </li>
+            <li>Empty lines are ignored; large batches are submitted in chunks.</li>
+          </ul>
+
+          <p class="panel-kicker mt-5">Example</p>
+          <pre class="code-block mt-2">serde
+tokio, 1.0.0
+regex
+actix-web 4.4.0
+rayon, 1.5.0</pre>
+        </section>
+      </aside>
     </div>
   </div>
 </template>

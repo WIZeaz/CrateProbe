@@ -26,7 +26,7 @@ const props = defineProps({
   },
   stroke: {
     type: String,
-    default: '#2563eb',
+    default: '#1f55d8',
   },
 })
 
@@ -221,29 +221,34 @@ function clearHover() {
 </script>
 
 <template>
-  <svg ref="svgRef" :viewBox="`0 0 ${width} ${height}`" class="w-full h-32">
+  <svg
+    ref="svgRef"
+    :viewBox="`0 0 ${width} ${height}`"
+    class="w-full h-32"
+    font-family="'IBM Plex Mono', ui-monospace, monospace"
+  >
     <g v-for="tick in yTicks" :key="`y-${tick}`">
       <line
         :x1="plot.left"
         :x2="plot.right"
         :y1="yForValue(tick)"
         :y2="yForValue(tick)"
-        stroke="#e2e8f0"
+        stroke="#d8e0de"
         stroke-width="1"
       />
       <text
         :x="plot.left - 6"
         :y="yForValue(tick) + 4"
         font-size="10"
-        fill="#64748b"
+        fill="#5d6c6f"
         text-anchor="end"
       >
         {{ formatYTick(tick) }}
       </text>
     </g>
 
-    <line :x1="plot.left" :x2="plot.right" :y1="plot.bottom" :y2="plot.bottom" stroke="#cbd5e1" stroke-width="1" />
-    <line :x1="plot.left" :x2="plot.left" :y1="plot.top" :y2="plot.bottom" stroke="#cbd5e1" stroke-width="1" />
+    <line :x1="plot.left" :x2="plot.right" :y1="plot.bottom" :y2="plot.bottom" stroke="#c9d3d1" stroke-width="1" />
+    <line :x1="plot.left" :x2="plot.left" :y1="plot.top" :y2="plot.bottom" stroke="#c9d3d1" stroke-width="1" />
 
     <g v-for="tick in xTicks" :key="`x-${tick.index}`">
       <line
@@ -251,14 +256,14 @@ function clearHover() {
         :x2="xForIndex(tick.index)"
         :y1="plot.bottom"
         :y2="plot.bottom + 4"
-        stroke="#cbd5e1"
+        stroke="#c9d3d1"
         stroke-width="1"
       />
       <text
         :x="xForIndex(tick.index)"
         :y="plot.bottom + 16"
         font-size="10"
-        fill="#64748b"
+        fill="#5d6c6f"
         :text-anchor="tick.index === 0 ? 'start' : tick.index === points.length - 1 ? 'end' : 'middle'"
       >
         {{ tick.label }}
@@ -281,25 +286,25 @@ function clearHover() {
         :x2="hoverData.x"
         :y1="plot.top"
         :y2="plot.bottom"
-        stroke="#94a3b8"
+        stroke="#8a9698"
         stroke-width="1"
         stroke-dasharray="3 3"
       />
-      <circle :cx="hoverData.x" :cy="hoverData.y" r="3.5" :fill="stroke" stroke="#ffffff" stroke-width="1.5" />
+      <circle :cx="hoverData.x" :cy="hoverData.y" r="3.5" :fill="stroke" stroke="#f7f9f7" stroke-width="1.5" />
       <g>
         <rect
           :x="hoverData.tooltip.x"
           :y="hoverData.tooltip.y"
           :width="tooltipWidth"
           :height="tooltipHeight"
-          rx="6"
-          fill="#0f172a"
-          fill-opacity="0.95"
+          rx="4"
+          fill="#10191b"
+          fill-opacity="0.96"
         />
-        <text :x="hoverData.tooltip.x + 8" :y="hoverData.tooltip.y + 16" font-size="10" fill="#cbd5e1">
+        <text :x="hoverData.tooltip.x + 8" :y="hoverData.tooltip.y + 16" font-size="10" fill="#c9d3d1">
           {{ hoverData.timeText }}
         </text>
-        <text :x="hoverData.tooltip.x + 8" :y="hoverData.tooltip.y + 33" font-size="12" font-weight="600" fill="#f8fafc">
+        <text :x="hoverData.tooltip.x + 8" :y="hoverData.tooltip.y + 33" font-size="12" font-weight="600" fill="#f7f9f7">
           {{ hoverData.valueText }}
         </text>
       </g>

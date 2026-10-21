@@ -4,6 +4,10 @@ import { useRouter } from 'vue-router'
 import api from '../services/api'
 import websocket from '../services/websocket'
 import RunnerIdBadge from '../components/RunnerIdBadge.vue'
+import PageHeader from '../components/ui/PageHeader.vue'
+import EmptyState from '../components/ui/EmptyState.vue'
+import StatusMark from '../components/ui/StatusMark.vue'
+import { formatDuration } from '../utils/format.js'
 
 const router = useRouter()
 const runningJobs = ref([])
@@ -68,7 +72,11 @@ function togglePendingSelect(jobId) {
   selectedPendingIds.value = next
 }
 
-async function fetchQueue() {
+async function fetchQueue({ showLoading = false } = {}) {
+  if (showLoading) {
+    loading.value = true
+  }
+  error.value = ''
   try {
     const data = await api.getQueue()
     runningJobs.value = data.running
@@ -115,26 +123,13 @@ async function handleCancelSelected() {
   }
 }
 
-function formatDuration(startStr, endStr) {
-  if (!startStr) return 'N/A'
-  const start = new Date(startStr)
-  const end = endStr ? new Date(endStr) : new Date()
-  const diff = Math.floor((end - start) / 1000)
-  if (diff < 60) return `${diff}s`
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ${diff % 60}s`
-  const hours = Math.floor(diff / 3600)
-  const minutes = Math.floor((diff % 3600) / 60)
-  return `${hours}h ${minutes}m`
-}
-
 function getOrdinalSuffix(n) {
   const s = ['th', 'st', 'nd', 'rd']
   const v = n % 100
   return s[(v - 20) % 10] || s[v] || s[0]
 }
 
-function getQueuePosition(job, index) {
-  if (job.priority > 0) return '⭐ Pinned'
+function getQueuePosition(index) {
   return `${index + 1}${getOrdinalSuffix(index + 1)}`
 }
 
@@ -159,122 +154,363 @@ onUnmounted(() => {
 
 <template>
   <div>
-    <div class="flex items-center justify-between mb-8">
-      <h1 class="text-3xl font-bold text-gray-900">Job Queue</h1>
-      <div class="flex gap-3">
+    <PageHeader
+      title="Job queue"
+      description="Running jobs and the pending queue."
+    >
+      <template #actions>
         <button
           v-if="pendingSelectedCount > 0"
+          class="btn btn--warn-ghost btn--sm"
           @click="handlePinSelected"
-          class="px-4 py-2 text-sm font-medium text-white bg-orange-500 rounded-lg hover:bg-orange-600 transition-colors"
         >
-          Pin Selected ({{ pendingSelectedCount }})
+          Pin selected ({{ pendingSelectedCount }})
         </button>
         <button
           v-if="runningSelectedCount > 0"
+          class="btn btn--danger-ghost btn--sm"
           @click="handleCancelSelected"
-          class="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
         >
-          Cancel Selected ({{ runningSelectedCount }})
+          Cancel selected ({{ runningSelectedCount }})
+        </button>
+      </template>
+    </PageHeader>
+
+    <section class="instrument-panel">
+      <div class="panel-header">
+        <h2 class="panel-title">Queue</h2>
+        <div class="flex items-center gap-4 font-mono text-[11px] text-muted">
+          <span class="inline-flex items-center gap-1.5">
+            <StatusMark status="running" />
+            {{ runningJobs.length }}
+          </span>
+          <span class="inline-flex items-center gap-1.5">
+            <StatusMark status="pending" />
+            {{ pendingJobs.length }}
+          </span>
+        </div>
+      </div>
+
+      <div
+        v-if="loading"
+        class="mt-4 space-y-3"
+        aria-busy="true"
+        aria-label="Loading job queue"
+      >
+        <div v-for="index in 4" :key="index" class="flex items-center gap-4">
+          <div class="skeleton h-3 w-6"></div>
+          <div class="skeleton h-3 w-14"></div>
+          <div class="skeleton h-3 flex-1"></div>
+          <div class="skeleton h-3 w-20"></div>
+        </div>
+      </div>
+
+      <div v-else-if="error" class="notice notice--error mt-4" role="alert">
+        <div class="min-w-0 flex-1">
+          <p class="notice__title">Couldn't load the queue.</p>
+          <p class="notice__detail">{{ error }}</p>
+        </div>
+        <button
+          class="btn btn--ghost btn--sm"
+          @click="fetchQueue({ showLoading: true })"
+        >
+          Try again
         </button>
       </div>
-    </div>
 
-    <div class="mb-4 flex items-center justify-between text-sm text-gray-600">
-      <span>{{ runningJobs.length }} Running | {{ pendingJobs.length }} Pending</span>
-    </div>
+      <EmptyState
+        v-else-if="runningJobs.length === 0 && pendingJobs.length === 0"
+        title="Queue is clear"
+        description="No jobs are running or pending."
+      >
+        <router-link to="/jobs" class="btn btn--ghost btn--sm">
+          View all jobs
+        </router-link>
+      </EmptyState>
 
-    <div v-if="loading" class="flex justify-center py-12">
-      <div class="spinner border-blue-500"></div>
-    </div>
+      <template v-else>
+        <div class="mt-2 hidden overflow-x-auto lg:block">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th class="w-10"></th>
+                <th class="w-16">ID</th>
+                <th>Crate</th>
+                <th class="w-24">Version</th>
+                <th class="w-32">Task</th>
+                <th class="w-28">Status</th>
+                <th class="w-32">Runner</th>
+                <th class="w-28">Queue position</th>
+                <th class="w-24 text-right">Runtime</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template v-if="runningJobs.length > 0">
+                <tr class="border-t border-rule">
+                  <td class="py-2" @click.stop>
+                    <input
+                      type="checkbox"
+                      :checked="allRunningSelected"
+                      :indeterminate="someRunningSelected"
+                      aria-label="Select all running jobs"
+                      @change="toggleSelectAllRunning"
+                    />
+                  </td>
+                  <td colspan="8" class="py-2">
+                    <div class="flex items-center gap-2">
+                      <StatusMark status="running" />
+                      <span class="text-[11px] font-semibold text-ink">
+                        Running jobs
+                      </span>
+                      <span class="font-mono text-[11px] text-muted">
+                        {{ runningJobs.length }}
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+                <tr
+                  v-for="job in runningJobs"
+                  :key="job.id"
+                  class="cursor-pointer"
+                  @click="viewJob(job.id)"
+                >
+                  <td @click.stop>
+                    <input
+                      type="checkbox"
+                      :checked="selectedRunningIds.has(job.id)"
+                      :aria-label="`Select job ${job.id}`"
+                      @change="toggleRunningSelect(job.id)"
+                    />
+                  </td>
+                  <td class="numeric text-muted">#{{ job.id }}</td>
+                  <td class="min-w-0">
+                    <router-link
+                      :to="`/jobs/${job.id}`"
+                      class="block truncate text-[13px] font-medium text-ink hover:text-signal"
+                      @click.stop
+                    >
+                      {{ job.crate_name }}
+                    </router-link>
+                  </td>
+                  <td class="numeric text-muted">{{ job.version }}</td>
+                  <td>
+                    <span
+                      class="block max-w-[140px] truncate text-muted"
+                      :title="job.task_name || ''"
+                    >
+                      {{ job.task_name || '—' }}
+                    </span>
+                  </td>
+                  <td><StatusMark :status="job.status" /></td>
+                  <td class="whitespace-nowrap">
+                    <RunnerIdBadge :runner-id="job.runner_id || ''" />
+                  </td>
+                  <td class="numeric text-muted">—</td>
+                  <td class="numeric text-right">
+                    {{ formatDuration(job.started_at, job.finished_at) }}
+                  </td>
+                </tr>
+              </template>
 
-    <div v-else-if="error" class="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg">
-      Failed to load queue: {{ error }}
-    </div>
+              <template v-if="pendingJobs.length > 0">
+                <tr class="border-t border-rule">
+                  <td class="py-2" @click.stop>
+                    <input
+                      type="checkbox"
+                      :checked="allPendingSelected"
+                      :indeterminate="somePendingSelected"
+                      aria-label="Select all pending jobs"
+                      @change="toggleSelectAllPending"
+                    />
+                  </td>
+                  <td colspan="8" class="py-2">
+                    <div class="flex items-center gap-2">
+                      <StatusMark status="pending" />
+                      <span class="text-[11px] font-semibold text-ink">
+                        Pending queue
+                      </span>
+                      <span class="font-mono text-[11px] text-muted">
+                        {{ pendingJobs.length }}
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+                <tr
+                  v-for="(job, idx) in pendingJobs"
+                  :key="job.id"
+                  class="cursor-pointer"
+                  @click="viewJob(job.id)"
+                >
+                  <td @click.stop>
+                    <input
+                      type="checkbox"
+                      :checked="selectedPendingIds.has(job.id)"
+                      :aria-label="`Select job ${job.id}`"
+                      @change="togglePendingSelect(job.id)"
+                    />
+                  </td>
+                  <td class="numeric text-muted">#{{ job.id }}</td>
+                  <td class="min-w-0">
+                    <router-link
+                      :to="`/jobs/${job.id}`"
+                      class="block truncate text-[13px] font-medium text-ink hover:text-signal"
+                      @click.stop
+                    >
+                      {{ job.crate_name }}
+                    </router-link>
+                  </td>
+                  <td class="numeric text-muted">{{ job.version }}</td>
+                  <td>
+                    <span
+                      class="block max-w-[140px] truncate text-muted"
+                      :title="job.task_name || ''"
+                    >
+                      {{ job.task_name || '—' }}
+                    </span>
+                  </td>
+                  <td><StatusMark :status="job.status" /></td>
+                  <td class="whitespace-nowrap">
+                    <RunnerIdBadge :runner-id="job.runner_id || ''" />
+                  </td>
+                  <td>
+                    <StatusMark
+                      v-if="job.priority > 0"
+                      tone="warn"
+                      label="Pinned"
+                    />
+                    <span v-else class="numeric text-muted">
+                      {{ getQueuePosition(idx) }}
+                    </span>
+                  </td>
+                  <td class="numeric text-right text-muted">—</td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
 
-    <div v-else-if="runningJobs.length === 0 && pendingJobs.length === 0" class="bento-card text-center py-12">
-      <p class="text-gray-500">No jobs in queue.</p>
-    </div>
+        <div class="mt-2 lg:hidden">
+          <template v-if="runningJobs.length > 0">
+            <div class="flex items-center justify-between border-t border-rule py-2">
+              <label class="flex items-center gap-2 text-[11px] font-semibold text-ink">
+                <input
+                  type="checkbox"
+                  :checked="allRunningSelected"
+                  :indeterminate="someRunningSelected"
+                  @change="toggleSelectAllRunning"
+                />
+                Running jobs
+              </label>
+              <span class="font-mono text-[11px] text-muted">
+                {{ runningJobs.length }}
+              </span>
+            </div>
+            <ul>
+              <li
+                v-for="job in runningJobs"
+                :key="job.id"
+                class="cursor-pointer border-b border-rule py-3 last:border-0"
+                @click="viewJob(job.id)"
+              >
+                <div class="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    class="mt-0.5"
+                    :checked="selectedRunningIds.has(job.id)"
+                    :aria-label="`Select job ${job.id}`"
+                    @click.stop
+                    @change="toggleRunningSelect(job.id)"
+                  />
+                  <div class="min-w-0 flex-1">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <StatusMark :status="job.status" />
+                      <span class="font-mono text-[11px] text-muted">#{{ job.id }}</span>
+                    </div>
+                    <router-link
+                      :to="`/jobs/${job.id}`"
+                      class="mt-1 block text-[13px] font-medium text-ink"
+                      @click.stop
+                    >
+                      {{ job.crate_name }}
+                      <span class="font-mono text-[11px] font-normal text-muted">
+                        {{ job.version }}
+                      </span>
+                    </router-link>
+                    <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted">
+                      <span>Task {{ job.task_name || '—' }}</span>
+                      <span class="inline-flex items-center gap-1">
+                        Runner <RunnerIdBadge :runner-id="job.runner_id || ''" />
+                      </span>
+                      <span>Runtime {{ formatDuration(job.started_at, job.finished_at) }}</span>
+                    </div>
+                  </div>
+                </div>
+              </li>
+            </ul>
+          </template>
 
-    <div v-else class="bento-card">
-      <table class="w-full table-fixed divide-y divide-gray-200">
-        <thead>
-          <tr>
-            <th class="px-4 py-3 text-left w-12">
-              <input
-                v-if="runningJobs.length > 0"
-                type="checkbox"
-                :checked="allRunningSelected"
-                :indeterminate="someRunningSelected"
-                @change="toggleSelectAllRunning"
-                class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-            </th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap w-16">ID</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">Crate</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap w-24">Version</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap w-32">Task</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap w-24">Status</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap w-32">Runner ID</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap w-28">Queue Pos</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap w-24">Runtime</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-gray-200">
-          <tr v-if="runningJobs.length > 0" class="bg-green-50">
-            <td colspan="9" class="px-4 py-2 text-sm font-semibold text-green-800">
-              ▶ Running Jobs ({{ runningJobs.length }})
-            </td>
-          </tr>
-          <tr v-for="job in runningJobs" :key="job.id" class="hover:bg-gray-50 transition-colors cursor-pointer" @click="viewJob(job.id)">
-            <td class="px-4 py-3 whitespace-nowrap" @click.stop>
-              <input
-                type="checkbox"
-                :checked="selectedRunningIds.has(job.id)"
-                @change="toggleRunningSelect(job.id)"
-                class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-            </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">#{{ job.id }}</td>
-            <td class="px-4 py-3 text-sm font-medium text-gray-900 truncate">{{ job.crate_name }}</td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">{{ job.version }}</td>
-            <td class="px-4 py-3 text-sm text-gray-500 truncate">{{ job.task_name || '-' }}</td>
-            <td class="px-4 py-3 whitespace-nowrap">
-              <span class="status-badge status-running">{{ job.status }}</span>
-            </td>
-            <td class="px-4 py-3 text-sm text-gray-500 truncate"><RunnerIdBadge :runner-id="job.runner_id || ''" /></td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">-</td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">{{ formatDuration(job.started_at, job.finished_at) }}</td>
-          </tr>
-
-          <tr v-if="pendingJobs.length > 0" class="bg-orange-50">
-            <td colspan="9" class="px-4 py-2 text-sm font-semibold text-orange-800">
-              ⏳ Pending Queue ({{ pendingJobs.length }})
-            </td>
-          </tr>
-          <tr v-for="(job, idx) in pendingJobs" :key="job.id" class="hover:bg-gray-50 transition-colors cursor-pointer" :class="{ 'bg-yellow-50': job.priority > 0 }" @click="viewJob(job.id)">
-            <td class="px-4 py-3 whitespace-nowrap" @click.stop>
-              <input
-                type="checkbox"
-                :checked="selectedPendingIds.has(job.id)"
-                @change="togglePendingSelect(job.id)"
-                class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-            </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">#{{ job.id }}</td>
-            <td class="px-4 py-3 text-sm font-medium text-gray-900 truncate">{{ job.crate_name }}</td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">{{ job.version }}</td>
-            <td class="px-4 py-3 text-sm text-gray-500 truncate">{{ job.task_name || '-' }}</td>
-            <td class="px-4 py-3 whitespace-nowrap">
-              <span class="status-badge status-pending">{{ job.status }}</span>
-            </td>
-            <td class="px-4 py-3 text-sm text-gray-500 truncate"><RunnerIdBadge :runner-id="job.runner_id || ''" /></td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm font-medium" :class="job.priority > 0 ? 'text-orange-600' : 'text-gray-500'">
-              {{ getQueuePosition(job, idx) }}
-            </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">-</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+          <template v-if="pendingJobs.length > 0">
+            <div class="flex items-center justify-between border-t border-rule py-2">
+              <label class="flex items-center gap-2 text-[11px] font-semibold text-ink">
+                <input
+                  type="checkbox"
+                  :checked="allPendingSelected"
+                  :indeterminate="somePendingSelected"
+                  @change="toggleSelectAllPending"
+                />
+                Pending queue
+              </label>
+              <span class="font-mono text-[11px] text-muted">
+                {{ pendingJobs.length }}
+              </span>
+            </div>
+            <ul>
+              <li
+                v-for="(job, idx) in pendingJobs"
+                :key="job.id"
+                class="cursor-pointer border-b border-rule py-3 last:border-0"
+                @click="viewJob(job.id)"
+              >
+                <div class="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    class="mt-0.5"
+                    :checked="selectedPendingIds.has(job.id)"
+                    :aria-label="`Select job ${job.id}`"
+                    @click.stop
+                    @change="togglePendingSelect(job.id)"
+                  />
+                  <div class="min-w-0 flex-1">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <StatusMark :status="job.status" />
+                      <span class="font-mono text-[11px] text-muted">#{{ job.id }}</span>
+                      <StatusMark
+                        v-if="job.priority > 0"
+                        tone="warn"
+                        label="Pinned"
+                      />
+                    </div>
+                    <router-link
+                      :to="`/jobs/${job.id}`"
+                      class="mt-1 block text-[13px] font-medium text-ink"
+                      @click.stop
+                    >
+                      {{ job.crate_name }}
+                      <span class="font-mono text-[11px] font-normal text-muted">
+                        {{ job.version }}
+                      </span>
+                    </router-link>
+                    <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted">
+                      <span>Task {{ job.task_name || '—' }}</span>
+                      <span v-if="job.priority === 0">Queue {{ getQueuePosition(idx) }}</span>
+                    </div>
+                  </div>
+                </div>
+              </li>
+            </ul>
+          </template>
+        </div>
+      </template>
+    </section>
   </div>
 </template>

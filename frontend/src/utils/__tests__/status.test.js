@@ -1,18 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  formatCount,
-  formatDuration,
-  formatPercent,
-  formatRelativeTime,
   groupStatusCounts,
   healthLabel,
   healthTone,
+  isTerminalStatus,
   statusLabel,
   statusTone,
-} from '../dashboardMath.js'
-
-const NOW = new Date('2026-10-21T14:30:00Z').getTime()
+} from '../status.js'
 
 test('statusLabel returns sentence-case labels for known statuses', () => {
   assert.equal(statusLabel('pending'), 'Pending')
@@ -43,60 +38,27 @@ test('statusTone maps each status to a semantic tone', () => {
   assert.equal(statusTone('mystery'), 'neutral')
 })
 
-test('formatCount adds thousands separators and clamps invalid values', () => {
-  assert.equal(formatCount(0), '0')
-  assert.equal(formatCount(1234), '1,234')
-  assert.equal(formatCount(1234567), '1,234,567')
-  assert.equal(formatCount(null), '0')
-  assert.equal(formatCount(undefined), '0')
-  assert.equal(formatCount('nope'), '0')
-  assert.equal(formatCount(-5), '0')
+test('healthLabel and healthTone describe runner states', () => {
+  assert.equal(healthLabel('online'), 'Online')
+  assert.equal(healthLabel('offline'), 'Offline')
+  assert.equal(healthLabel('disabled'), 'Disabled')
+  assert.equal(healthLabel(null), 'Unknown')
+
+  assert.equal(healthTone('online'), 'good')
+  assert.equal(healthTone('offline'), 'alarm')
+  assert.equal(healthTone('disabled'), 'neutral')
+  assert.equal(healthTone('mystery'), 'neutral')
 })
 
-test('formatPercent keeps whole percentages clean and tiny shares readable', () => {
-  assert.equal(formatPercent(0, 0), '0%')
-  assert.equal(formatPercent(70, 100), '70%')
-  assert.equal(formatPercent(1, 3), '33.3%')
-  assert.equal(formatPercent(1, 2000), '<0.1%')
-  assert.equal(formatPercent(2000, 2000), '100%')
-})
-
-test('formatDuration returns an em dash without a valid start time', () => {
-  assert.equal(formatDuration(null, null, NOW), '—')
-  assert.equal(formatDuration('not-a-date', null, NOW), '—')
-})
-
-test('formatDuration formats seconds, minutes and hours', () => {
-  const start = new Date(NOW - 90_000).toISOString()
-  assert.equal(formatDuration(start, null, NOW), '1m 30s')
-
-  const longStart = new Date(NOW - 3_661_000).toISOString()
-  assert.equal(formatDuration(longStart, null, NOW), '1h 1m')
-
-  const shortStart = new Date(NOW - 30_000).toISOString()
-  assert.equal(formatDuration(shortStart, null, NOW), '30s')
-})
-
-test('formatDuration clamps negative and invalid ranges', () => {
-  const future = new Date(NOW + 10_000).toISOString()
-  assert.equal(formatDuration(future, null, NOW), '0s')
-  assert.equal(formatDuration('not-a-date', null, NOW), '—')
-})
-
-test('formatRelativeTime returns readable ages', () => {
-  const at = seconds => new Date(NOW - seconds * 1000).toISOString()
-
-  assert.equal(formatRelativeTime(at(3), NOW), 'just now')
-  assert.equal(formatRelativeTime(at(45), NOW), '45s ago')
-  assert.equal(formatRelativeTime(at(120), NOW), '2m ago')
-  assert.equal(formatRelativeTime(at(7200), NOW), '2h ago')
-  assert.equal(formatRelativeTime(at(172800), NOW), '2d ago')
-})
-
-test('formatRelativeTime handles future, missing and invalid values', () => {
-  assert.equal(formatRelativeTime(new Date(NOW + 5000).toISOString(), NOW), 'just now')
-  assert.equal(formatRelativeTime(null, NOW), '—')
-  assert.equal(formatRelativeTime('not-a-date', NOW), '—')
+test('isTerminalStatus recognizes terminal job states', () => {
+  assert.equal(isTerminalStatus('completed'), true)
+  assert.equal(isTerminalStatus('failed'), true)
+  assert.equal(isTerminalStatus('cancelled'), true)
+  assert.equal(isTerminalStatus('timeout'), true)
+  assert.equal(isTerminalStatus('oom'), true)
+  assert.equal(isTerminalStatus('runner_failed'), true)
+  assert.equal(isTerminalStatus('running'), false)
+  assert.equal(isTerminalStatus('pending'), false)
 })
 
 test('groupStatusCounts derives lifecycle groups and shares from raw stats', () => {
@@ -159,16 +121,4 @@ test('groupStatusCounts returns a fully zeroed structure when stats are missing'
   assert.equal(result.segments.every(segment => segment.share === 0), true)
   assert.equal(result.segments.every(segment => segment.percentLabel === '0%'), true)
   assert.equal(result.groups[2].statuses.length, 4)
-})
-
-test('healthLabel and healthTone describe runner states', () => {
-  assert.equal(healthLabel('online'), 'Online')
-  assert.equal(healthLabel('offline'), 'Offline')
-  assert.equal(healthLabel('disabled'), 'Disabled')
-  assert.equal(healthLabel(null), 'Unknown')
-
-  assert.equal(healthTone('online'), 'good')
-  assert.equal(healthTone('offline'), 'alarm')
-  assert.equal(healthTone('disabled'), 'neutral')
-  assert.equal(healthTone('mystery'), 'neutral')
 })

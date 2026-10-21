@@ -52,7 +52,7 @@ let refreshInterval = null
 
 function renderHtml(text) {
   if (!text || text === 'No content available') {
-    return '<span class="text-gray-400">No content available</span>'
+    return '<span class="log-empty">No content available</span>'
   }
   return ansiUp.ansi_to_html(text)
 }
@@ -188,111 +188,133 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="bento-card">
-    <div class="flex items-center justify-between mb-4">
-      <h3 class="text-lg font-semibold text-gray-900">Watches &amp; Logs</h3>
+  <section class="instrument-panel">
+    <div class="panel-header">
+      <h3 class="panel-title">Watches &amp; logs</h3>
       <div class="flex items-center gap-2">
         <button
           v-if="activeItem.kind === 'watch'"
-          @click="refreshActive"
+          type="button"
+          class="btn btn--ghost btn--sm"
           :disabled="refreshing"
-          class="px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors disabled:opacity-50"
+          @click="refreshActive"
         >
-          {{ refreshing ? 'Refreshing...' : '↻ Refresh' }}
+          {{ refreshing ? 'Refreshing...' : 'Refresh' }}
         </button>
         <button
-          @click="downloadActive"
-          class="px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+          type="button"
+          class="btn btn--ghost btn--sm"
           :title="`Download ${activeItem.label}`"
+          @click="downloadActive"
         >
           Download
         </button>
       </div>
     </div>
 
-    <div class="flex" style="min-height: 400px;">
-      <!-- Left: watched files + standard logs -->
-      <div
-        class="flex flex-col flex-shrink-0 border-r border-gray-200"
-        style="width: 220px;"
-      >
-        <div class="px-3 pt-2 pb-1 text-xs font-medium text-gray-400">
-          Watched files
-        </div>
-        <div class="flex flex-col gap-1 px-2">
+    <div class="mt-4 flex flex-col gap-4 lg:flex-row">
+      <aside class="lg:w-[220px] lg:shrink-0 lg:border-r lg:border-rule lg:pr-4">
+        <p class="panel-kicker">Watched files</p>
+        <div class="mt-1 flex flex-wrap gap-1 lg:flex-col">
           <button
             v-for="item in watchItems"
             :key="item.id"
-            @click="activeId = item.id"
+            type="button"
             :class="[
-              'flex items-center gap-2 px-3 py-2 rounded-lg text-left transition-colors w-full',
-              activeId === item.id
-                ? 'bg-blue-50 border border-blue-200 text-blue-700'
-                : 'text-gray-600 hover:bg-gray-100'
+              'log-tab w-auto lg:w-full',
+              { 'log-tab--active': activeId === item.id },
             ]"
+            @click="activeId = item.id"
           >
-            <span class="w-4 h-4 shrink-0 flex items-center justify-center">
-              <svg class="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <span class="flex h-4 w-4 shrink-0 items-center justify-center">
+              <svg
+                class="h-4 w-4"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                aria-hidden="true"
+              >
                 <path d="M1.5 8s2.4-4 6.5-4 6.5 4 6.5 4-2.4 4-6.5 4S1.5 8 1.5 8Z" />
                 <circle cx="8" cy="8" r="1.75" />
               </svg>
             </span>
-            <span class="truncate font-mono text-xs">{{ item.label }}</span>
+            <span class="truncate font-mono text-[11px]">{{ item.label }}</span>
           </button>
-          <p v-if="watchItems.length === 0" class="px-3 py-1 text-xs text-gray-300">
+          <p v-if="watchItems.length === 0" class="px-2 py-1 text-[11px] text-muted">
             No watched files
           </p>
         </div>
 
-        <div class="px-3 pt-4 pb-1 text-xs font-medium text-gray-400">
-          Logs
-        </div>
-        <div class="flex flex-col gap-1 px-2">
+        <p class="panel-kicker mt-4">Logs</p>
+        <div class="mt-1 flex flex-wrap gap-1 lg:flex-col">
           <button
             v-for="item in logItems"
             :key="item.id"
-            @click="activeId = item.id"
+            type="button"
             :class="[
-              'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-left transition-colors w-full',
-              activeId === item.id
-                ? 'bg-blue-50 border border-blue-200 text-blue-700'
-                : 'text-gray-600 hover:bg-gray-100'
+              'log-tab w-auto lg:w-full',
+              { 'log-tab--active': activeId === item.id },
             ]"
+            @click="activeId = item.id"
           >
-            <span class="w-4 h-4 shrink-0 flex items-center justify-center">
-              <!-- runner: terminal prompt -->
-              <svg v-if="item.id === 'log:runner'" class="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <span class="flex h-4 w-4 shrink-0 items-center justify-center">
+              <svg
+                v-if="item.id === 'log:runner'"
+                class="h-4 w-4"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                aria-hidden="true"
+              >
                 <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5" />
-                <path d="m5 6 2 2-2 2M9 10h2.5" stroke-linecap="round" stroke-linejoin="round" />
+                <path
+                  d="m5 6 2 2-2 2M9 10h2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
               </svg>
-              <!-- stdout / stderr: document -->
-              <svg v-else class="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+              <svg
+                v-else
+                class="h-4 w-4"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                aria-hidden="true"
+              >
                 <path d="M9.5 1.75H4.5a1 1 0 0 0-1 1v10.5a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V4.75l-3-3Z" />
-                <path d="M9.25 1.75v3.25h3.25M5.75 8h4.5M5.75 10.5h4.5" stroke-linecap="round" />
+                <path
+                  d="M9.25 1.75v3.25h3.25M5.75 8h4.5M5.75 10.5h4.5"
+                  stroke-linecap="round"
+                />
               </svg>
             </span>
-            <span class="truncate">{{ item.label }}</span>
+            <span class="truncate text-[11px]">{{ item.label }}</span>
           </button>
         </div>
 
-        <div class="px-3 py-2 text-xs text-gray-400 border-t border-gray-100 mt-2">
-          ↻ Logs refresh every 5s
-        </div>
-      </div>
+        <p class="mt-3 border-t border-rule pt-2 font-mono text-[10px] text-muted">
+          Logs refresh every 5s
+        </p>
+      </aside>
 
-      <!-- Right: file content -->
-      <div class="flex-1 min-w-0">
+      <div class="min-w-0 flex-1">
         <div
           ref="logContainer"
-          class="log-viewer h-full"
-          style="max-height: 500px; overflow-y: auto;"
+          class="log-viewer h-full max-h-[500px] overflow-y-auto"
         >
           <div v-if="loading[activeId]" class="flex justify-center py-8">
             <div class="spinner"></div>
           </div>
-          <pre v-else class="text-sm ansi-color" v-html="html[activeId]"></pre>
+          <pre
+            v-else
+            class="ansi-color text-[11px] leading-relaxed"
+            v-html="html[activeId]"
+          ></pre>
         </div>
       </div>
     </div>
-  </div>
+  </section>
 </template>

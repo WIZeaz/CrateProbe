@@ -1,10 +1,8 @@
 <script setup>
 import { useRouter } from 'vue-router'
-import StatusMark from './StatusMark.vue'
-import {
-  formatDuration,
-  formatRelativeTime,
-} from './dashboardMath.js'
+import EmptyState from '../ui/EmptyState.vue'
+import StatusMark from '../ui/StatusMark.vue'
+import { formatDuration, formatRelativeTime } from '../../utils/format.js'
 
 defineProps({
   jobs: {
@@ -51,27 +49,29 @@ function viewJob(jobId) {
       </div>
     </div>
 
-    <div v-else-if="error" class="flex flex-1 items-center py-6" role="alert">
-      <div>
-        <p class="text-sm text-ink">Couldn't load recent jobs.</p>
-        <p class="mt-1 break-words text-xs text-muted">{{ error }}</p>
-        <button type="button" class="btn btn--ghost mt-4" @click="$emit('retry')">
+    <div v-else-if="error" class="flex flex-1 items-center py-6">
+      <div class="notice notice--error w-full" role="alert">
+        <div class="min-w-0 flex-1">
+          <p class="notice__title">Couldn't load recent jobs.</p>
+          <p class="notice__detail break-words">{{ error }}</p>
+        </div>
+        <button
+          type="button"
+          class="btn btn--ghost btn--sm"
+          @click="$emit('retry')"
+        >
           Try again
         </button>
       </div>
     </div>
 
-    <div v-else-if="jobs.length === 0" class="flex flex-1 items-center py-6">
-      <div>
-        <p class="text-sm text-ink">No recent jobs yet.</p>
-        <p class="mt-1 text-xs text-muted">
-          New jobs will appear here as they are created.
-        </p>
-        <router-link to="/jobs/new" class="text-link mt-3 inline-block">
-          Create a job
-        </router-link>
-      </div>
-    </div>
+    <EmptyState
+      v-else-if="jobs.length === 0"
+      title="No recent jobs yet"
+      description="New jobs will appear here as they are created."
+    >
+      <router-link to="/jobs/new" class="text-link">Create a job</router-link>
+    </EmptyState>
 
     <template v-else>
       <table class="mt-1 hidden w-full table-fixed border-collapse text-left md:table">

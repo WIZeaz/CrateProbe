@@ -1,6 +1,9 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import api from '../services/api'
+import PageHeader from '../components/ui/PageHeader.vue'
+import EmptyState from '../components/ui/EmptyState.vue'
+import { formatDateTime } from '../utils/format.js'
 
 const tasks = ref([])
 const loading = ref(true)
@@ -14,6 +17,7 @@ const uploadResult = ref(null)
 
 // Inline update state: a single hidden file input reused for whichever
 // row the user clicked "Update" on.
+const pendingUpdateId = ref(null)
 const updatingId = ref(null)
 const updateLoading = ref(false)
 const updateError = ref(null)
@@ -100,20 +104,27 @@ async function handleUpload() {
 }
 
 function startUpdate(taskId) {
-  updatingId.value = taskId
+  pendingUpdateId.value = taskId
   updateError.value = null
   updateFileInput.value?.click()
+}
+
+function cancelPendingUpdate() {
+  pendingUpdateId.value = null
 }
 
 async function onUpdateFileChange(event) {
   const file = event.target.files?.[0]
   event.target.value = ''
-  if (!file || updatingId.value === null) return
+  const taskId = pendingUpdateId.value
+  pendingUpdateId.value = null
+  if (!file || taskId === null) return
 
+  updatingId.value = taskId
   updateLoading.value = true
   updateError.value = null
   try {
-    await api.updateTask(updatingId.value, file)
+    await api.updateTask(taskId, file)
     fetchTasks()
   } catch (err) {
     updateError.value = extractError(err)
@@ -138,12 +149,6 @@ async function handleDelete(task) {
   }
 }
 
-function formatDate(dateStr) {
-  if (!dateStr) return 'N/A'
-  const date = new Date(dateStr)
-  return date.toLocaleString()
-}
-
 onMounted(() => {
   fetchTasks()
 })
@@ -151,232 +156,306 @@ onMounted(() => {
 
 <template>
   <div>
-    <header class="mb-6">
-      <h1 class="text-3xl font-bold text-gray-900">Tasks</h1>
-      <p class="mt-1 text-sm text-gray-500">
-        Reusable task definitions. A task is a zip with a <code class="font-mono text-gray-700">task.toml</code> at its root.
-      </p>
-    </header>
+    <PageHeader title="Tasks">
+      <template #description>
+        Reusable task definitions. A task is a zip with a
+        <code class="inline-code">task.toml</code> at its root.
+      </template>
+    </PageHeader>
 
-    <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_24rem] gap-6 items-start">
-      <!-- Left column: upload + task list -->
-      <div class="min-w-0 space-y-6">
-        <!-- Upload form -->
-        <div class="bento-card">
-          <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
-            <h2 class="text-lg font-semibold text-gray-900">Upload Task Definition</h2>
+    <div
+      class="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]"
+    >
+      <div class="min-w-0 space-y-5">
+        <section class="instrument-panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Upload task definition</h2>
             <a
               href="/api/tasks/example"
               download="example-task.zip"
-              class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors"
+              class="btn btn--ghost btn--sm"
             >
-              <svg class="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                <path d="M8 2v8m0 0 3-3m-3 3L5 7" stroke-linecap="round" stroke-linejoin="round" />
-                <path d="M2.5 11.5v1a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-1" stroke-linecap="round" />
-              </svg>
-              Download example task
+              Download example
             </a>
           </div>
 
-          <div class="flex flex-wrap items-center gap-3">
+          <div class="mt-4 flex flex-wrap items-center gap-3">
             <input
               id="task-upload-file"
               type="file"
               accept=".zip"
+              class="ui-file min-w-0 flex-1"
               @change="onUploadFileChange"
-              class="block w-72 max-w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-600 hover:file:bg-blue-100"
             />
             <button
-              @click="handleUpload"
+              class="btn btn--primary"
               :disabled="uploadLoading || !uploadFile"
-              class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              @click="handleUpload"
             >
               {{ uploadLoading ? 'Uploading...' : 'Upload' }}
             </button>
           </div>
 
-          <div
-            v-if="uploadError"
-            class="mt-4 bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg"
-          >
+          <div v-if="uploadError" class="notice notice--error mt-3" role="alert">
             Upload failed: {{ uploadError }}
           </div>
 
           <div
             v-if="uploadResult"
-            class="mt-4 bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-lg"
+            class="notice notice--success mt-3"
+            role="status"
           >
-            <p class="font-medium">
-              Task "{{ uploadResult.name }}" uploaded successfully.<span v-if="uploadResult.existed"> (Already existed)</span>
-            </p>
-            <p class="mt-1 text-sm"><span class="font-medium">Image:</span> {{ uploadResult.spec?.image }}</p>
-            <p class="mt-1 text-sm break-all"><span class="font-medium">Command:</span> {{ uploadResult.spec?.cmd }}</p>
+            <div class="min-w-0 flex-1">
+              <p class="notice__title">
+                Task "{{ uploadResult.name }}" uploaded successfully.
+                <span v-if="uploadResult.existed"> It already existed.</span>
+              </p>
+              <p class="notice__detail">
+                Image: {{ uploadResult.spec?.image }}
+              </p>
+              <p class="notice__detail break-all">
+                Command: {{ uploadResult.spec?.cmd }}
+              </p>
+            </div>
           </div>
-        </div>
+        </section>
 
-        <!-- Task list -->
-        <div>
-          <div class="flex items-baseline justify-between mb-3">
-            <h2 class="text-sm font-semibold text-gray-900">Task definitions</h2>
-            <span v-if="!loading && !error" class="text-xs text-gray-500">
+        <section class="instrument-panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Task definitions</h2>
+            <span
+              v-if="!loading && !error"
+              class="font-mono text-[11px] text-muted"
+            >
               {{ tasks.length }} {{ tasks.length === 1 ? 'task' : 'tasks' }}
             </span>
           </div>
 
-          <div
-            v-if="updateError"
-            class="mb-4 bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg"
-          >
+          <div v-if="updateError" class="notice notice--error mt-4" role="alert">
             Update failed: {{ updateError }}
           </div>
-
-          <div
-            v-if="deleteError"
-            class="mb-4 bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg"
-          >
+          <div v-if="deleteError" class="notice notice--error mt-4" role="alert">
             Delete failed: {{ deleteError }}
           </div>
 
-          <!-- Hidden file input for inline updates -->
           <input
             ref="updateFileInput"
             type="file"
             accept=".zip"
             class="hidden"
             @change="onUpdateFileChange"
+            @cancel="cancelPendingUpdate"
           />
 
-          <div v-if="loading" class="flex justify-center py-12">
-            <div class="spinner border-blue-500"></div>
+          <div
+            v-if="loading"
+            class="mt-4 space-y-4"
+            aria-busy="true"
+            aria-label="Loading task definitions"
+          >
+            <div v-for="index in 3" :key="index" class="space-y-2">
+              <div class="skeleton h-4 w-1/3"></div>
+              <div class="skeleton h-3 w-2/3"></div>
+              <div class="skeleton h-3 w-1/2"></div>
+            </div>
           </div>
 
-          <div v-else-if="error" class="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg">
+          <div
+            v-else-if="error"
+            class="notice notice--error mt-4"
+            role="alert"
+          >
             Failed to load tasks: {{ error }}
           </div>
 
-          <div v-else-if="tasks.length === 0" class="bento-card text-center py-12">
-            <p class="text-gray-900 font-medium">No task definitions yet</p>
-            <p class="mt-1 text-sm text-gray-500">
-              Upload a zip above, or download the example task to see the expected structure.
-            </p>
-          </div>
+          <EmptyState
+            v-else-if="tasks.length === 0"
+            title="No task definitions yet"
+            description="Upload a zip above, or download the example task to see the expected structure."
+          />
 
-          <div v-else class="space-y-4">
-            <article v-for="task in tasks" :key="task.id" class="bento-card">
-              <div class="flex items-start justify-between gap-4">
+          <div v-else class="mt-1">
+            <article
+              v-for="task in tasks"
+              :key="task.id"
+              class="border-b border-rule py-4 first:pt-2 last:border-0 last:pb-0"
+            >
+              <div class="flex flex-wrap items-start justify-between gap-3">
                 <div class="min-w-0">
-                  <div class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                    <h3 class="text-base font-semibold text-gray-900 break-words">{{ task.name }}</h3>
-                    <span class="text-xs font-medium text-gray-400">#{{ task.id }}</span>
+                  <div class="flex flex-wrap items-baseline gap-2">
+                    <h3 class="break-words text-[14px] font-semibold text-ink">
+                      {{ task.name }}
+                    </h3>
+                    <span class="ui-tag">#{{ task.id }}</span>
                   </div>
-                  <p class="mt-1 text-sm text-gray-500 break-words">
+                  <p class="mt-1 break-words text-[12px] leading-relaxed text-muted">
                     {{ task.desc || 'No description' }}
                   </p>
                 </div>
-                <div class="flex items-center gap-2 shrink-0">
+
+                <div class="flex flex-wrap items-center gap-2">
                   <a
                     :href="api.taskZipUrl(task.id)"
                     :download="`task-${task.id}.zip`"
-                    class="px-3 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                    class="btn btn--ghost btn--sm"
                   >
                     Download
                   </a>
                   <button
-                    @click="startUpdate(task.id)"
+                    class="btn btn--ghost btn--sm"
                     :disabled="updateLoading"
-                    class="px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 disabled:opacity-50 transition-colors"
+                    @click="startUpdate(task.id)"
                   >
-                    Update
+                    {{
+                      updateLoading && updatingId === task.id
+                        ? 'Updating...'
+                        : 'Update'
+                    }}
                   </button>
                   <button
-                    @click="handleDelete(task)"
+                    class="btn btn--danger-ghost btn--sm"
                     :disabled="deletingId === task.id"
-                    class="px-3 py-1.5 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors"
+                    @click="handleDelete(task)"
                   >
                     {{ deletingId === task.id ? 'Deleting...' : 'Delete' }}
                   </button>
                 </div>
               </div>
 
-              <dl class="mt-4 pt-4 border-t border-gray-100 space-y-2 text-xs">
+              <dl class="mt-3 space-y-1 text-[11px]">
                 <div class="flex gap-3">
-                  <dt class="w-16 shrink-0 text-gray-400">SHA256</dt>
-                  <dd class="font-mono text-gray-600 break-all">{{ task.sha256 }}</dd>
+                  <dt class="w-16 shrink-0 text-muted">SHA256</dt>
+                  <dd class="break-all font-mono text-ink">{{ task.sha256 }}</dd>
                 </div>
-                <div class="flex gap-3">
-                  <dt class="w-16 shrink-0 text-gray-400">Created</dt>
-                  <dd class="text-gray-600">{{ formatDate(task.created_at) }}</dd>
-                </div>
-                <div class="flex gap-3">
-                  <dt class="w-16 shrink-0 text-gray-400">Updated</dt>
-                  <dd class="text-gray-600">{{ task.updated_at ? formatDate(task.updated_at) : 'Never' }}</dd>
+                <div class="grid grid-cols-1 gap-1 sm:grid-cols-2 sm:gap-x-6">
+                  <div class="flex gap-3">
+                    <dt class="w-16 shrink-0 text-muted">Created</dt>
+                    <dd class="text-ink">{{ formatDateTime(task.created_at) }}</dd>
+                  </div>
+                  <div class="flex gap-3">
+                    <dt class="w-16 shrink-0 text-muted">Updated</dt>
+                    <dd class="text-ink">
+                      {{ task.updated_at ? formatDateTime(task.updated_at) : 'Never' }}
+                    </dd>
+                  </div>
                 </div>
               </dl>
 
-              <div class="mt-3 flex flex-wrap items-center gap-2">
-                <button
-                  @click="toggleToml(task)"
-                  class="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
-                >
+              <div class="mt-3">
+                <button class="btn btn--ghost btn--sm" @click="toggleToml(task)">
                   {{ expandedTomlId === task.id ? 'Hide task.toml' : 'View task.toml' }}
                 </button>
               </div>
 
               <div v-if="expandedTomlId === task.id" class="mt-3">
-                <div v-if="tomlLoading === task.id" class="text-xs text-gray-500">
+                <div v-if="tomlLoading === task.id" class="text-[11px] text-muted">
                   Loading task.toml...
                 </div>
-                <div v-else-if="tomlErrors[task.id]" class="text-xs text-red-600">
+                <div
+                  v-else-if="tomlErrors[task.id]"
+                  class="notice notice--error text-[11px]"
+                  role="alert"
+                >
                   Failed to load task.toml: {{ tomlErrors[task.id] }}
                 </div>
-                <pre
-                  v-else
-                  class="bg-gray-900 text-gray-100 text-xs rounded-lg p-3 overflow-x-auto whitespace-pre"
-                >{{ tomlContents[task.id] }}</pre>
+                <pre v-else class="code-block">{{ tomlContents[task.id] }}</pre>
               </div>
             </article>
           </div>
-        </div>
+        </section>
       </div>
 
-      <!-- Rules card -->
-      <aside class="lg:sticky lg:top-6">
-        <div class="bento-card">
-          <h2 class="text-lg font-semibold text-gray-900 mb-3">Task Rules</h2>
+      <aside class="lg:sticky lg:top-20">
+        <section
+          class="instrument-panel lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto"
+        >
+          <div class="panel-header">
+            <h2 class="panel-title">Task rules</h2>
+          </div>
 
-          <h3 class="text-sm font-semibold text-gray-800 mb-1">Zip layout</h3>
-          <ul class="text-xs text-gray-600 space-y-1 list-disc list-inside">
-            <li><code class="bg-gray-100 px-1 rounded">task.toml</code> must sit at the zip root</li>
-            <li>Every other entry is copied into the job workspace (zip wins name conflicts)</li>
-            <li>Absolute paths and <code class="bg-gray-100 px-1 rounded">..</code> entries are rejected</li>
-            <li>sha256 of the zip is the task fingerprint; re-uploading identical content is a no-op</li>
+          <h3 class="mt-4 text-[12px] font-semibold text-ink">Zip layout</h3>
+          <ul
+            class="mt-1.5 list-inside list-disc space-y-1.5 text-[11px] leading-relaxed text-muted"
+          >
+            <li>
+              <code class="inline-code">task.toml</code> must sit at the zip
+              root.
+            </li>
+            <li>
+              Every other entry is copied into the job workspace; the zip wins
+              name conflicts.
+            </li>
+            <li>
+              Absolute paths and <code class="inline-code">..</code> entries are
+              rejected.
+            </li>
+            <li>
+              sha256 of the zip is the task fingerprint; re-uploading identical
+              content is a no-op.
+            </li>
           </ul>
 
-          <h3 class="text-sm font-semibold text-gray-800 mt-4 mb-1">task.toml fields</h3>
-          <ul class="text-xs text-gray-600 space-y-1 list-disc list-inside">
-            <li><code class="bg-gray-100 px-1 rounded">name</code>, <code class="bg-gray-100 px-1 rounded">image</code>, <code class="bg-gray-100 px-1 rounded">cmd</code>, <code class="bg-gray-100 px-1 rounded">workspace</code> — required</li>
-            <li><code class="bg-gray-100 px-1 rounded">desc</code> — optional description</li>
-            <li><code class="bg-gray-100 px-1 rounded">artifacts</code> — paths collected when the job ends</li>
-            <li><code class="bg-gray-100 px-1 rounded">watch</code> — paths viewable live during the run</li>
-            <li><code class="bg-gray-100 px-1 rounded">[limit]</code> cpu / mem / timeout — all optional, missing = unlimited</li>
-            <li><code class="bg-gray-100 px-1 rounded">[env]</code> — extra container environment variables</li>
+          <h3 class="mt-4 text-[12px] font-semibold text-ink">
+            task.toml fields
+          </h3>
+          <ul
+            class="mt-1.5 list-inside list-disc space-y-1.5 text-[11px] leading-relaxed text-muted"
+          >
+            <li>
+              <code class="inline-code">name</code>,
+              <code class="inline-code">image</code>,
+              <code class="inline-code">cmd</code>,
+              <code class="inline-code">workspace</code> are required.
+            </li>
+            <li>
+              <code class="inline-code">desc</code> is an optional description.
+            </li>
+            <li>
+              <code class="inline-code">artifacts</code> lists paths collected
+              when the job ends.
+            </li>
+            <li>
+              <code class="inline-code">watch</code> lists paths viewable live
+              during the run.
+            </li>
+            <li>
+              <code class="inline-code">[limit]</code> cpu, mem and timeout are
+              optional; missing means unlimited.
+            </li>
+            <li>
+              <code class="inline-code">[env]</code> adds container environment
+              variables.
+            </li>
           </ul>
 
-          <h3 class="text-sm font-semibold text-gray-800 mt-4 mb-1">Execution</h3>
-          <ul class="text-xs text-gray-600 space-y-1 list-disc list-inside">
-            <li>The crate source is downloaded into a per-job directory, then mounted at <code class="bg-gray-100 px-1 rounded">workspace</code></li>
-            <li><code class="bg-gray-100 px-1 rounded">cmd</code> runs via <code class="bg-gray-100 px-1 rounded">sh -c</code> with <code class="bg-gray-100 px-1 rounded">workspace</code> as the working directory</li>
-            <li>stdout/stderr are redirected to <code class="bg-gray-100 px-1 rounded">stdout.log</code> / <code class="bg-gray-100 px-1 rounded">stderr.log</code> in the workspace — list them in <code class="bg-gray-100 px-1 rounded">watch</code> or <code class="bg-gray-100 px-1 rounded">artifacts</code> to inspect them</li>
-            <li>artifacts/watch paths are relative to <code class="bg-gray-100 px-1 rounded">workspace</code></li>
+          <h3 class="mt-4 text-[12px] font-semibold text-ink">Execution</h3>
+          <ul
+            class="mt-1.5 list-inside list-disc space-y-1.5 text-[11px] leading-relaxed text-muted"
+          >
+            <li>
+              The crate source is downloaded into a per-job directory, then
+              mounted at <code class="inline-code">workspace</code>.
+            </li>
+            <li>
+              <code class="inline-code">cmd</code> runs via
+              <code class="inline-code">sh -c</code> with
+              <code class="inline-code">workspace</code> as the working
+              directory.
+            </li>
+            <li>
+              stdout/stderr are redirected to
+              <code class="inline-code">stdout.log</code> /
+              <code class="inline-code">stderr.log</code>; list them in
+              <code class="inline-code">watch</code> or
+              <code class="inline-code">artifacts</code> to inspect them.
+            </li>
+            <li>
+              artifacts/watch paths are relative to
+              <code class="inline-code">workspace</code>.
+            </li>
           </ul>
-        </div>
+        </section>
       </aside>
     </div>
   </div>
 </template>
-
-<style scoped>
-.bento-card {
-  width: 100%;
-}
-</style>

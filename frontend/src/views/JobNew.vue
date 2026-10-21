@@ -2,6 +2,8 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../services/api'
+import PageHeader from '../components/ui/PageHeader.vue'
+import TaskSelect from '../components/ui/TaskSelect.vue'
 
 const router = useRouter()
 const form = ref({
@@ -62,132 +64,123 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="max-w-2xl mx-auto">
-    <h1 class="text-3xl font-bold text-gray-900 mb-8">Create New Job</h1>
+  <div>
+    <PageHeader
+      title="New job"
+      description="Run a task against a crate version."
+    />
 
-    <div class="bento-card">
-      <form @submit.prevent="createJob" class="space-y-6">
-        <!-- Task Selector -->
-        <div>
-          <label for="task_id" class="block text-sm font-medium text-gray-700 mb-2">
-            Task *
-          </label>
-          <div v-if="tasksLoading" class="flex items-center gap-2 text-sm text-gray-500">
-            <span class="spinner border-blue-500"></span> Loading tasks...
+    <div class="grid grid-cols-1 gap-5 lg:grid-cols-5">
+      <section class="instrument-panel lg:col-span-3">
+        <div class="panel-header">
+          <h2 class="panel-title">Job configuration</h2>
+        </div>
+
+        <form class="mt-5 max-w-2xl space-y-5" @submit.prevent="createJob">
+          <div>
+            <TaskSelect
+              v-model="form.task_id"
+              label="Task *"
+              :tasks="tasks"
+              :loading="tasksLoading"
+              :error="tasksError"
+              :disabled="loading"
+              @retry="fetchTasks"
+            />
+            <p class="mt-1 text-[11px] text-muted">
+              The task definition that will execute this job.
+            </p>
           </div>
-          <div
-            v-else-if="tasksError"
-            class="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg text-sm flex items-center justify-between"
-          >
-            <span>Failed to load tasks: {{ tasksError }}</span>
+
+          <div>
+            <label for="crate_name" class="ui-label">Crate name *</label>
+            <input
+              id="crate_name"
+              v-model="form.crate_name"
+              type="text"
+              required
+              placeholder="e.g., serde, tokio, regex"
+              class="ui-input"
+              :disabled="loading"
+            />
+            <p class="mt-1 text-[11px] text-muted">
+              Enter the name of the Rust crate from crates.io.
+            </p>
+          </div>
+
+          <div>
+            <label for="version" class="ui-label">Version (optional)</label>
+            <input
+              id="version"
+              v-model="form.version"
+              type="text"
+              placeholder="e.g., 1.0.0 (leave empty for latest)"
+              class="ui-input"
+              :disabled="loading"
+            />
+            <p class="mt-1 text-[11px] text-muted">
+              Leave empty to use the latest version.
+            </p>
+          </div>
+
+          <div v-if="error" class="notice notice--error" role="alert">
+            {{ error }}
+          </div>
+
+          <div class="flex items-center justify-end gap-2 border-t border-rule pt-4">
             <button
               type="button"
-              @click="fetchTasks"
-              class="ml-4 px-3 py-1 text-sm font-medium text-red-700 bg-red-100 rounded-lg hover:bg-red-200 transition-colors"
+              class="btn btn--ghost"
+              :disabled="loading"
+              @click="router.push('/jobs')"
             >
-              Retry
+              Cancel
+            </button>
+            <button
+              type="submit"
+              class="btn btn--primary"
+              :disabled="loading || tasks.length === 0"
+            >
+              <span v-if="loading" class="spinner border-white"></span>
+              {{ loading ? 'Creating...' : 'Create job' }}
             </button>
           </div>
-          <div
-            v-else-if="tasks.length === 0"
-            class="bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-3 rounded-lg text-sm"
-          >
-            No task definitions found.
-            <router-link to="/tasks" class="font-medium underline hover:text-yellow-900">
-              Create one on the task management page
-            </router-link>
-            first.
+        </form>
+      </section>
+
+      <aside class="lg:col-span-2">
+        <section class="instrument-panel lg:sticky lg:top-20">
+          <div class="panel-header">
+            <h2 class="panel-title">What happens next</h2>
           </div>
-          <select
-            v-else
-            id="task_id"
-            v-model="form.task_id"
-            required
-            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            :disabled="loading"
-          >
-            <option v-for="task in tasks" :key="task.id" :value="task.id">
-              {{ task.name }} (#{{ task.id }})
-            </option>
-          </select>
-          <p class="mt-1 text-sm text-gray-500">
-            The task definition that will execute this job
-          </p>
-        </div>
-
-        <!-- Crate Name -->
-        <div>
-          <label for="crate_name" class="block text-sm font-medium text-gray-700 mb-2">
-            Crate Name *
-          </label>
-          <input
-            id="crate_name"
-            v-model="form.crate_name"
-            type="text"
-            required
-            placeholder="e.g., serde, tokio, regex"
-            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            :disabled="loading"
-          />
-          <p class="mt-1 text-sm text-gray-500">
-            Enter the name of the Rust crate from crates.io
-          </p>
-        </div>
-
-        <!-- Version -->
-        <div>
-          <label for="version" class="block text-sm font-medium text-gray-700 mb-2">
-            Version (optional)
-          </label>
-          <input
-            id="version"
-            v-model="form.version"
-            type="text"
-            placeholder="e.g., 1.0.0 (leave empty for latest)"
-            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            :disabled="loading"
-          />
-          <p class="mt-1 text-sm text-gray-500">
-            Leave empty to use the latest version
-          </p>
-        </div>
-
-        <!-- Error Message -->
-        <div v-if="error" class="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg">
-          {{ error }}
-        </div>
-
-        <!-- Submit Button -->
-        <div class="flex items-center justify-between">
-          <button
-            type="button"
-            @click="router.push('/jobs')"
-            class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
-            :disabled="loading"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            class="px-6 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center gap-2"
-            :disabled="loading || tasks.length === 0"
-          >
-            <span v-if="loading" class="spinner border-white"></span>
-            {{ loading ? 'Creating...' : 'Create Job' }}
-          </button>
-        </div>
-      </form>
-    </div>
-
-    <!-- Info Card -->
-    <div class="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
-      <h3 class="text-sm font-medium text-blue-900 mb-2">What happens next?</h3>
-      <ul class="text-sm text-blue-800 space-y-1 list-disc list-inside">
-        <li>The job will be queued for an available runner</li>
-        <li>A runner will execute the selected task against the crate</li>
-        <li>Logs, watched files, and artifacts will be available on the job detail page</li>
-        <li>You can monitor progress from the dashboard</li>
-      </ul>
+          <ol class="mt-4 space-y-3">
+            <li class="flex gap-2.5">
+              <span class="mt-1.5 h-1.5 w-1.5 flex-none rounded-full bg-signal"></span>
+              <p class="text-[12px] leading-relaxed text-muted">
+                The job is queued for the next available runner.
+              </p>
+            </li>
+            <li class="flex gap-2.5">
+              <span class="mt-1.5 h-1.5 w-1.5 flex-none rounded-full bg-signal"></span>
+              <p class="text-[12px] leading-relaxed text-muted">
+                A runner executes the selected task against the crate.
+              </p>
+            </li>
+            <li class="flex gap-2.5">
+              <span class="mt-1.5 h-1.5 w-1.5 flex-none rounded-full bg-signal"></span>
+              <p class="text-[12px] leading-relaxed text-muted">
+                Logs, watched files and artifacts appear on the job page.
+              </p>
+            </li>
+            <li class="flex gap-2.5">
+              <span class="mt-1.5 h-1.5 w-1.5 flex-none rounded-full bg-signal"></span>
+              <p class="text-[12px] leading-relaxed text-muted">
+                Progress is visible on the dashboard and in the queue.
+              </p>
+            </li>
+          </ol>
+        </section>
+      </aside>
     </div>
   </div>
 </template>

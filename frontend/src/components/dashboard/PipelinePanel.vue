@@ -1,8 +1,9 @@
 <script setup>
 import { computed } from 'vue'
 import OutcomeBar from './OutcomeBar.vue'
-import StatusMark from './StatusMark.vue'
-import { formatCount, groupStatusCounts } from './dashboardMath.js'
+import StatusMark from '../ui/StatusMark.vue'
+import { formatCount } from '../../utils/format.js'
+import { groupStatusCounts } from '../../utils/status.js'
 
 const props = defineProps({
   stats: {
@@ -54,13 +55,16 @@ const grouped = computed(() => groupStatusCounts(props.stats))
     </div>
   </div>
 
-  <div v-else-if="error" class="instrument-panel" role="alert">
-    <p class="panel-kicker">Job pipeline</p>
-    <p class="mt-2 text-sm text-ink">Couldn't load job totals.</p>
-    <p class="mt-1 break-words text-xs text-muted">{{ error }}</p>
-    <button type="button" class="btn btn--ghost mt-4" @click="$emit('retry')">
-      Try again
-    </button>
+  <div v-else-if="error" class="instrument-panel">
+    <div class="notice notice--error" role="alert">
+      <div class="min-w-0 flex-1">
+        <p class="notice__title">Couldn't load job totals.</p>
+        <p class="notice__detail">{{ error }}</p>
+      </div>
+      <button type="button" class="btn btn--ghost btn--sm" @click="$emit('retry')">
+        Try again
+      </button>
+    </div>
   </div>
 
   <div

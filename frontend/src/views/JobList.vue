@@ -4,6 +4,15 @@ import { useRouter, useRoute } from 'vue-router'
 import api from '../services/api'
 import websocket from '../services/websocket'
 import RunnerIdBadge from '../components/RunnerIdBadge.vue'
+import PageHeader from '../components/ui/PageHeader.vue'
+import EmptyState from '../components/ui/EmptyState.vue'
+import StatusMark from '../components/ui/StatusMark.vue'
+import {
+  formatCount,
+  formatDateTime,
+  formatDuration,
+  formatRelativeTime,
+} from '../utils/format.js'
 import { exportJobsToXlsx } from '../utils/exportXlsx'
 
 const router = useRouter()
@@ -43,8 +52,8 @@ const statusOptions = [
 const sortOptions = [
   { value: 'created_at:desc', label: 'Newest first' },
   { value: 'created_at:asc', label: 'Oldest first' },
-  { value: 'crate_name:asc', label: 'Crate A → Z' },
-  { value: 'crate_name:desc', label: 'Crate Z → A' },
+  { value: 'crate_name:asc', label: 'Crate, A to Z' },
+  { value: 'crate_name:desc', label: 'Crate, Z to A' },
   { value: 'runtime:desc', label: 'Longest runtime' },
   { value: 'runtime:asc', label: 'Shortest runtime' },
 ]
@@ -170,24 +179,6 @@ function viewJob(jobId) {
   router.push(`/jobs/${jobId}`)
 }
 
-function formatDate(dateStr) {
-  if (!dateStr) return '—'
-  return new Date(dateStr).toLocaleString()
-}
-
-function formatDuration(startStr, endStr) {
-  if (!startStr) return '—'
-  const start = new Date(startStr)
-  const end = endStr ? new Date(endStr) : new Date()
-  const diff = Math.floor((end - start) / 1000)
-
-  if (diff < 60) return `${diff}s`
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ${diff % 60}s`
-  const hours = Math.floor(diff / 3600)
-  const minutes = Math.floor((diff % 3600) / 60)
-  return `${hours}h ${minutes}m`
-}
-
 async function handleBatchRetry() {
   const ids = [...selectedIds.value]
   if (ids.length === 0) return
@@ -285,256 +276,375 @@ onUnmounted(() => {
 
 <template>
   <div>
-    <div class="flex flex-wrap items-center justify-between gap-3 mb-8">
-      <h1 class="text-3xl font-bold text-gray-900">Jobs</h1>
-      <div class="flex gap-3">
+    <PageHeader
+      title="Jobs"
+      description="Every run, filterable by crate and task."
+    >
+      <template #actions>
         <button
-          @click="handleExportXlsx"
+          class="btn btn--ghost"
           :disabled="exporting || loading || total === 0"
-          class="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          @click="handleExportXlsx"
         >
           {{ exporting ? 'Exporting...' : 'Export XLSX' }}
         </button>
-        <router-link
-          to="/jobs/batch"
-          class="px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
-        >
-          Batch Create
+        <router-link to="/jobs/batch" class="btn btn--ghost">
+          Batch create
         </router-link>
-        <router-link
-          to="/jobs/new"
-          class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          + New Job
+        <router-link to="/jobs/new" class="btn btn--primary">
+          New job
         </router-link>
-      </div>
-    </div>
+      </template>
+    </PageHeader>
 
-    <!-- Compound filters -->
-    <div class="mb-4 flex flex-wrap items-end gap-3">
-      <div>
-        <label for="status-filter" class="block text-xs font-medium text-gray-500 mb-1">
-          Status
-        </label>
-        <select
-          id="status-filter"
-          v-model="statusFilter"
-          @change="onStatusChange"
-          class="w-40 px-3 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-        >
-          <option v-for="option in statusOptions" :key="option.value" :value="option.value">
-            {{ option.label }}
-          </option>
-        </select>
-      </div>
+    <section class="instrument-panel p-3">
+      <div class="flex flex-wrap items-end gap-3">
+        <div>
+          <label for="status-filter" class="ui-label">Status</label>
+          <select
+            id="status-filter"
+            v-model="statusFilter"
+            class="ui-select ui-select--sm w-40"
+            @change="onStatusChange"
+          >
+            <option
+              v-for="option in statusOptions"
+              :key="option.value"
+              :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
+        </div>
 
-      <div>
-        <label for="crate-search" class="block text-xs font-medium text-gray-500 mb-1">
-          Crate
-        </label>
-        <input
-          id="crate-search"
-          v-model="crateSearch"
-          @input="scheduleSearch"
-          type="text"
-          placeholder="Search crate name"
-          class="w-52 px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-        />
-      </div>
-
-      <div>
-        <label for="task-search" class="block text-xs font-medium text-gray-500 mb-1">
-          Task
-        </label>
-        <input
-          id="task-search"
-          v-model="taskSearch"
-          @input="scheduleSearch"
-          type="text"
-          placeholder="Search task name"
-          class="w-44 px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-        />
-      </div>
-
-      <div>
-        <label for="sort-select" class="block text-xs font-medium text-gray-500 mb-1">
-          Sort
-        </label>
-        <select
-          id="sort-select"
-          v-model="sortOption"
-          @change="resetAndFetch"
-          class="w-44 px-3 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-        >
-          <option v-for="option in sortOptions" :key="option.value" :value="option.value">
-            {{ option.label }}
-          </option>
-        </select>
-      </div>
-
-      <button
-        v-if="hasFilters"
-        @click="clearFilters"
-        class="px-3 py-1.5 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
-      >
-        Clear filters
-      </button>
-    </div>
-
-    <!-- Selection + batch actions -->
-    <div
-      v-if="!loading && !error && jobs.length > 0"
-      class="mb-3 flex flex-wrap items-center justify-between gap-3"
-    >
-      <label class="flex items-center gap-2 text-sm text-gray-600">
-        <input
-          type="checkbox"
-          :checked="allSelected"
-          :indeterminate="someSelected"
-          @change="toggleSelectAll"
-          class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-        />
-        Select all on this page
-      </label>
-      <div v-if="selectedIds.size > 0" class="flex flex-wrap items-center gap-2">
-        <span class="text-sm text-gray-600">{{ selectedIds.size }} selected</span>
-        <button
-          @click="handleBatchRetry"
-          :disabled="batchLoading"
-          class="px-3 py-1.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
-        >
-          Retry selected
-        </button>
-        <button
-          @click="handleBatchDelete"
-          :disabled="batchLoading"
-          class="px-3 py-1.5 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors"
-        >
-          Delete selected
-        </button>
-      </div>
-    </div>
-
-    <div v-if="loading" class="flex justify-center py-12">
-      <div class="spinner border-blue-500"></div>
-    </div>
-
-    <div
-      v-else-if="error"
-      class="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg"
-    >
-      Failed to load jobs: {{ error }}
-    </div>
-
-    <div v-else-if="jobs.length === 0" class="bento-card text-center py-12">
-      <p class="text-gray-900 font-medium">
-        {{ hasFilters ? 'No jobs match these filters' : 'No jobs yet' }}
-      </p>
-      <p class="mt-1 text-sm text-gray-500">
-        {{
-          hasFilters
-            ? 'Try a different crate name, task name or status.'
-            : 'Create your first job to get started.'
-        }}
-      </p>
-      <button
-        v-if="hasFilters"
-        @click="clearFilters"
-        class="mt-4 px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
-      >
-        Clear filters
-      </button>
-      <router-link
-        v-else
-        to="/jobs/new"
-        class="mt-4 inline-block px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
-      >
-        Create Job
-      </router-link>
-    </div>
-
-    <template v-else>
-      <div class="space-y-2">
-        <article
-          v-for="job in jobs"
-          :key="job.id"
-          :class="[
-            'flex items-center gap-3 rounded-xl border bg-white px-4 py-3 cursor-pointer transition',
-            selectedIds.has(job.id)
-              ? 'border-blue-300 ring-1 ring-blue-200'
-              : 'border-gray-200 hover:border-blue-300 hover:shadow-sm'
-          ]"
-          @click="viewJob(job.id)"
-        >
+        <div>
+          <label for="crate-search" class="ui-label">Crate</label>
           <input
-            v-if="job.status !== 'running'"
-            type="checkbox"
-            :checked="selectedIds.has(job.id)"
-            @change="toggleSelect(job.id)"
-            @click.stop
-            class="h-4 w-4 shrink-0 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            id="crate-search"
+            v-model="crateSearch"
+            type="text"
+            placeholder="Search crate name"
+            class="ui-input ui-input--sm w-52"
+            @input="scheduleSearch"
           />
-          <span v-else class="inline-block h-4 w-4 shrink-0"></span>
+        </div>
 
-          <div class="min-w-0 flex-1">
-            <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span class="text-sm font-semibold text-gray-900 truncate">
-                {{ job.crate_name }}
-              </span>
-              <span class="text-xs text-gray-500">v{{ job.version }}</span>
-              <span :class="['status-badge', `status-${job.status}`]">
-                {{ job.status }}
-              </span>
-            </div>
-            <div class="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500">
-              <span>#{{ job.id }}</span>
-              <span class="truncate">Task: {{ job.task_name || '—' }}</span>
-              <span class="flex items-center gap-1.5">
-                Runner: <RunnerIdBadge :runner-id="job.runner_id || ''" />
-              </span>
-              <span>Started: {{ formatDate(job.started_at) }}</span>
-              <span>Runtime: {{ formatDuration(job.started_at, job.finished_at) }}</span>
-            </div>
-          </div>
+        <div>
+          <label for="task-search" class="ui-label">Task</label>
+          <input
+            id="task-search"
+            v-model="taskSearch"
+            type="text"
+            placeholder="Search task name"
+            class="ui-input ui-input--sm w-44"
+            @input="scheduleSearch"
+          />
+        </div>
 
-          <svg
-            class="w-4 h-4 shrink-0 text-gray-300"
-            viewBox="0 0 16 16"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-            aria-hidden="true"
+        <div>
+          <label for="sort-select" class="ui-label">Sort</label>
+          <select
+            id="sort-select"
+            v-model="sortOption"
+            class="ui-select ui-select--sm w-44"
+            @change="resetAndFetch"
           >
-            <path d="m6 3.5 4.5 4.5L6 12.5" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-        </article>
+            <option
+              v-for="option in sortOptions"
+              :key="option.value"
+              :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
+        </div>
+
+        <button
+          v-if="hasFilters"
+          class="btn btn--ghost btn--sm"
+          @click="clearFilters"
+        >
+          Clear filters
+        </button>
+      </div>
+    </section>
+
+    <section class="instrument-panel mt-5">
+      <div class="panel-header">
+        <h2 class="panel-title">Jobs</h2>
+        <span v-if="!loading && !error" class="font-mono text-[11px] text-muted">
+          {{ formatCount(total) }}
+        </span>
       </div>
 
-      <!-- Pagination -->
-      <div class="mt-4 flex flex-wrap items-center justify-between gap-3">
-        <p class="text-sm text-gray-500">
-          Showing {{ rangeStart }}–{{ rangeEnd }} of {{ total }} jobs
-        </p>
-        <div class="flex items-center gap-2">
+      <div
+        v-if="selectedIds.size > 0"
+        class="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-[3px] border border-rule bg-black/[0.03] px-3 py-2"
+      >
+        <span class="font-mono text-[11px] text-muted">
+          {{ selectedIds.size }} selected
+        </span>
+        <div class="flex flex-wrap items-center gap-2">
           <button
-            @click="goToPage(page - 1)"
-            :disabled="page <= 1"
-            class="px-3 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            class="btn btn--ghost btn--sm"
+            :disabled="batchLoading"
+            @click="handleBatchRetry"
           >
-            Previous
+            Retry selected
           </button>
-          <span class="px-2 text-sm text-gray-600 tabular-nums">
-            Page {{ page }} of {{ totalPages }}
-          </span>
           <button
-            @click="goToPage(page + 1)"
-            :disabled="page >= totalPages"
-            class="px-3 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            class="btn btn--danger-ghost btn--sm"
+            :disabled="batchLoading"
+            @click="handleBatchDelete"
           >
-            Next
+            Delete selected
           </button>
         </div>
       </div>
-    </template>
+
+      <div
+        v-if="loading"
+        class="mt-4 space-y-3"
+        aria-busy="true"
+        aria-label="Loading jobs"
+      >
+        <div v-for="index in 5" :key="index" class="flex items-center gap-4">
+          <div class="skeleton h-3 w-5"></div>
+          <div class="skeleton h-3 w-20"></div>
+          <div class="skeleton h-3 flex-1"></div>
+          <div class="skeleton h-3 w-24"></div>
+          <div class="skeleton h-3 w-12"></div>
+        </div>
+      </div>
+
+      <div v-else-if="error" class="notice notice--error mt-4" role="alert">
+        <div class="min-w-0 flex-1">
+          <p class="notice__title">Couldn't load jobs.</p>
+          <p class="notice__detail">{{ error }}</p>
+        </div>
+        <button class="btn btn--ghost btn--sm" @click="fetchJobs()">
+          Try again
+        </button>
+      </div>
+
+      <EmptyState
+        v-else-if="jobs.length === 0"
+        :title="hasFilters ? 'No jobs match these filters' : 'No jobs yet'"
+        :description="
+          hasFilters
+            ? 'Try a different crate name, task name or status.'
+            : 'Create your first job to start testing crates.'
+        "
+      >
+        <button
+          v-if="hasFilters"
+          class="btn btn--ghost btn--sm"
+          @click="clearFilters"
+        >
+          Clear filters
+        </button>
+        <router-link v-else to="/jobs/new" class="btn btn--primary">
+          Create job
+        </router-link>
+      </EmptyState>
+
+      <template v-else>
+        <div class="mt-2 hidden overflow-x-auto lg:block">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th class="w-9">
+                  <input
+                    type="checkbox"
+                    :checked="allSelected"
+                    :indeterminate="someSelected"
+                    :disabled="selectableJobs.length === 0"
+                    aria-label="Select all selectable jobs"
+                    @change="toggleSelectAll"
+                  />
+                </th>
+                <th class="w-28">Status</th>
+                <th>Crate</th>
+                <th class="w-36">Task</th>
+                <th class="w-28">Runner</th>
+                <th class="w-24 text-right">Started</th>
+                <th class="w-20 text-right">Runtime</th>
+                <th class="w-6"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="job in jobs"
+                :key="job.id"
+                class="cursor-pointer"
+                :class="{ 'is-selected': selectedIds.has(job.id) }"
+                @click="viewJob(job.id)"
+              >
+                <td @click.stop>
+                  <input
+                    v-if="job.status !== 'running'"
+                    type="checkbox"
+                    :checked="selectedIds.has(job.id)"
+                    :aria-label="`Select job ${job.id}`"
+                    @change="toggleSelect(job.id)"
+                  />
+                  <span v-else class="inline-block h-4 w-4"></span>
+                </td>
+                <td><StatusMark :status="job.status" /></td>
+                <td class="min-w-0">
+                  <router-link
+                    :to="`/jobs/${job.id}`"
+                    class="flex min-w-0 items-baseline gap-1.5 text-[13px] font-medium text-ink hover:text-signal"
+                    :title="`${job.crate_name} ${job.version}`"
+                    @click.stop
+                  >
+                    <span class="truncate">{{ job.crate_name }}</span>
+                    <span class="flex-none font-mono text-[11px] font-normal text-muted">
+                      {{ job.version }}
+                    </span>
+                  </router-link>
+                </td>
+                <td>
+                  <span
+                    class="block max-w-[140px] truncate text-muted"
+                    :title="job.task_name || ''"
+                  >
+                    {{ job.task_name || '—' }}
+                  </span>
+                </td>
+                <td class="whitespace-nowrap">
+                  <RunnerIdBadge :runner-id="job.runner_id || ''" />
+                </td>
+                <td
+                  class="numeric text-right text-muted"
+                  :title="formatDateTime(job.started_at)"
+                >
+                  {{ formatRelativeTime(job.started_at) }}
+                </td>
+                <td class="numeric text-right">
+                  {{ formatDuration(job.started_at, job.finished_at) }}
+                </td>
+                <td class="text-muted">
+                  <svg
+                    class="h-3.5 w-3.5"
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="m6 3.5 4.5 4.5L6 12.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="lg:hidden">
+          <div
+            v-if="selectableJobs.length > 0"
+            class="flex items-center justify-between border-t border-rule py-2"
+          >
+            <label class="flex items-center gap-2 text-[11px] font-medium text-ink">
+              <input
+                type="checkbox"
+                :checked="allSelected"
+                :indeterminate="someSelected"
+                @change="toggleSelectAll"
+              />
+              Select all on this page
+            </label>
+            <span class="font-mono text-[11px] text-muted">
+              {{ selectedIds.size }} selected
+            </span>
+          </div>
+
+          <ul>
+            <li
+              v-for="job in jobs"
+              :key="job.id"
+              class="cursor-pointer border-b border-rule py-3 last:border-0"
+              :class="{ 'bg-black/[0.02]': selectedIds.has(job.id) }"
+              @click="viewJob(job.id)"
+            >
+              <div class="flex items-start gap-3">
+                <span class="mt-0.5 flex h-4 w-4 flex-none items-center justify-center">
+                  <input
+                    v-if="job.status !== 'running'"
+                    type="checkbox"
+                    :checked="selectedIds.has(job.id)"
+                    :aria-label="`Select job ${job.id}`"
+                    @click.stop
+                    @change="toggleSelect(job.id)"
+                  />
+                </span>
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <StatusMark :status="job.status" />
+                    <span class="font-mono text-[11px] text-muted">
+                      #{{ job.id }}
+                    </span>
+                  </div>
+                  <router-link
+                    :to="`/jobs/${job.id}`"
+                    class="mt-1 block truncate text-[13px] font-medium text-ink"
+                    @click.stop
+                  >
+                    {{ job.crate_name }}
+                    <span class="font-mono text-[11px] font-normal text-muted">
+                      {{ job.version }}
+                    </span>
+                  </router-link>
+                  <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted">
+                    <span>Task {{ job.task_name || '—' }}</span>
+                    <span class="inline-flex items-center gap-1">
+                      Runner <RunnerIdBadge :runner-id="job.runner_id || ''" />
+                    </span>
+                    <span>Started {{ formatRelativeTime(job.started_at) }}</span>
+                    <span>
+                      Runtime
+                      {{ formatDuration(job.started_at, job.finished_at) }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </li>
+          </ul>
+        </div>
+
+        <div
+          class="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-rule pt-3"
+        >
+          <p class="text-[11px] text-muted">
+            Showing {{ formatCount(rangeStart) }}–{{ formatCount(rangeEnd) }} of
+            {{ formatCount(total) }} jobs
+          </p>
+          <div class="flex items-center gap-2">
+            <button
+              class="btn btn--ghost btn--sm"
+              :disabled="page <= 1"
+              @click="goToPage(page - 1)"
+            >
+              Previous
+            </button>
+            <span class="font-mono text-[11px] text-muted">
+              Page {{ page }} of {{ totalPages }}
+            </span>
+            <button
+              class="btn btn--ghost btn--sm"
+              :disabled="page >= totalPages"
+              @click="goToPage(page + 1)"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </template>
+    </section>
   </div>
 </template>

@@ -5,6 +5,7 @@ import websocket from '../services/websocket'
 import PipelinePanel from '../components/dashboard/PipelinePanel.vue'
 import RecentJobsPanel from '../components/dashboard/RecentJobsPanel.vue'
 import RunnerFleetPanel from '../components/dashboard/RunnerFleetPanel.vue'
+import PageHeader from '../components/ui/PageHeader.vue'
 
 function emptyStats() {
   return {
@@ -211,25 +212,23 @@ onUnmounted(() => {
 
 <template>
   <div class="dashboard-view">
-    <header class="mb-5 flex flex-wrap items-end justify-between gap-3">
-      <h1 class="text-[28px] font-semibold leading-tight tracking-[-0.02em] text-ink">
-        Dashboard
-      </h1>
-
-      <div class="flex items-center gap-3">
-        <span :class="['status-mark', `tone-${connection.tone}`]">
-          <span
-            :class="[
-              'signal-lamp',
-              { 'signal-lamp--pulse': connection.pulse },
-            ]"
-            aria-hidden="true"
-          ></span>
-          <span>{{ connection.label }}</span>
-        </span>
-        <span class="font-mono text-[11px] text-muted">{{ updatedLabel }}</span>
-      </div>
-    </header>
+    <PageHeader title="Dashboard">
+      <template #actions>
+        <div class="flex items-center gap-3">
+          <span :class="['status-mark', `tone-${connection.tone}`]">
+            <span
+              :class="[
+                'signal-lamp',
+                { 'signal-lamp--pulse': connection.pulse },
+              ]"
+              aria-hidden="true"
+            ></span>
+            <span>{{ connection.label }}</span>
+          </span>
+          <span class="font-mono text-[11px] text-muted">{{ updatedLabel }}</span>
+        </div>
+      </template>
+    </PageHeader>
 
     <div class="dashboard-stack">
       <PipelinePanel

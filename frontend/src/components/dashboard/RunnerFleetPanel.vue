@@ -1,11 +1,9 @@
 <script setup>
 import { computed } from 'vue'
-import MeterBar from './MeterBar.vue'
-import {
-  formatRelativeTime,
-  healthLabel,
-  healthTone,
-} from './dashboardMath.js'
+import EmptyState from '../ui/EmptyState.vue'
+import MeterBar from '../ui/MeterBar.vue'
+import { formatRelativeTime } from '../../utils/format.js'
+import { healthLabel, healthTone } from '../../utils/status.js'
 
 const props = defineProps({
   runners: {
@@ -88,34 +86,49 @@ function activeLabel(metrics) {
       </div>
     </div>
 
-    <div v-else-if="error" class="flex flex-1 items-center py-6" role="alert">
-      <div class="w-full">
-        <template v-if="authError">
-          <p class="text-sm text-ink">Runner details need an admin token.</p>
-          <p class="mt-1 text-xs text-muted">{{ error }}</p>
-          <router-link to="/settings" class="btn btn--ghost mt-4">
-            Open Settings
-          </router-link>
-        </template>
-        <template v-else>
-          <p class="text-sm text-ink">Couldn't load runner status.</p>
-          <p class="mt-1 break-words text-xs text-muted">{{ error }}</p>
-          <button type="button" class="btn btn--ghost mt-4" @click="$emit('retry')">
-            Try again
-          </button>
-        </template>
+    <div v-else-if="error" class="flex flex-1 items-center py-6">
+      <div
+        class="notice w-full"
+        :class="authError ? 'notice--warn' : 'notice--error'"
+        role="alert"
+      >
+        <div class="min-w-0 flex-1">
+          <p class="notice__title">
+            {{
+              authError
+                ? 'Runner details need an admin token.'
+                : "Couldn't load runner status."
+            }}
+          </p>
+          <p class="notice__detail break-words">{{ error }}</p>
+        </div>
+        <router-link
+          v-if="authError"
+          to="/settings"
+          class="btn btn--ghost btn--sm"
+        >
+          Open Settings
+        </router-link>
+        <button
+          v-else
+          type="button"
+          class="btn btn--ghost btn--sm"
+          @click="$emit('retry')"
+        >
+          Try again
+        </button>
       </div>
     </div>
 
-    <div v-else-if="runners.length === 0" class="flex flex-1 items-center py-6">
-      <div>
-        <p class="text-sm text-ink">No runners connected.</p>
-        <p class="mt-1 text-xs text-muted">Start a runner to process jobs.</p>
-        <router-link to="/runners" class="btn btn--ghost mt-4">
-          Set up a runner
-        </router-link>
-      </div>
-    </div>
+    <EmptyState
+      v-else-if="runners.length === 0"
+      title="No runners connected"
+      description="Start a runner to process jobs."
+    >
+      <router-link to="/runners" class="btn btn--ghost btn--sm">
+        Set up a runner
+      </router-link>
+    </EmptyState>
 
     <div v-else class="min-h-0 flex-1 overflow-y-auto">
       <article
