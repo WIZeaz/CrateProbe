@@ -308,3 +308,23 @@ def test_upload_at_size_limit_boundary_accepted(tmp_path):
     response = upload(client, zip_bytes)
 
     assert response.status_code == 200
+
+
+def test_download_example_task(client):
+    """GET /api/tasks/example returns a valid example task zip."""
+    from core.task_spec import parse_task_spec
+
+    resp = client.get("/api/tasks/example")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/zip"
+    assert "example-task.zip" in resp.headers.get("content-disposition", "")
+
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+        names = set(zf.namelist())
+        assert "task.toml" in names
+        assert len(names) > 1  # example ships more than just task.toml
+        spec = parse_task_spec(zf.read("task.toml"))
+        assert spec.name
+        assert spec.image
+        assert spec.cmd
+        assert spec.workspace == "/workspace"

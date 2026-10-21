@@ -17,6 +17,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi import Response
 from fastapi.responses import FileResponse, RedirectResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
@@ -32,7 +33,11 @@ from runner.cache import TTLCache
 from app.services.scheduler import TaskScheduler
 from app.services.system_monitor import SystemMonitor
 from app.services.runner_metrics_store import RunnerMetricsStore, RunnerMetricPoint
-from app.services.task_store import TaskStore, ZipValidationError
+from app.services.task_store import (
+    TaskStore,
+    ZipValidationError,
+    build_example_task_zip,
+)
 from app.services.job_files import (
     ArtifactTooLargeError,
     JobFileStore,
@@ -553,6 +558,15 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             TaskDefinitionResponse(**_task_def_fields(record))
             for record in db.list_task_definitions()
         ]
+
+    @app.get("/api/tasks/example")
+    async def download_example_task():
+        """Download an example task zip demonstrating the task structure."""
+        return Response(
+            content=build_example_task_zip(),
+            media_type="application/zip",
+            headers={"Content-Disposition": 'attachment; filename="example-task.zip"'},
+        )
 
     @app.get("/api/tasks/{task_id}", response_model=TaskDefinitionResponse)
     async def get_task(task_id: int):

@@ -25,6 +25,52 @@ class ZipValidationError(ValueError):
     """Raised when an uploaded task zip fails validation."""
 
 
+_EXAMPLE_TASK_TOML = """\
+# Example task definition. A task zip must contain this file (task.toml)
+# at the zip root; every other zip entry is copied into the job workspace.
+
+# ---- Required ----
+name = "example-task"        # Display name shown in the UI
+image = "alpine:latest"      # Docker image the job runs in
+cmd = "sh run.sh"            # Command run in the container (wrapped with sh -c)
+workspace = "/workspace"     # In-container mount point of the job workspace
+
+# ---- Optional ----
+desc = "Demonstrates the task zip structure"
+artifacts = ["output/"]      # Collected when the job finishes (relative to workspace)
+watch = ["progress.log"]     # Viewable live while the job runs (relative to workspace)
+
+[limit]                      # Every key is optional; a missing key means no limit
+cpu = 1                      # CPU cores (float allowed)
+mem = "512m"                 # Docker-style memory limit
+timeout = "10m"              # Duration string (s/m/h) or integer seconds
+
+[env]                        # Extra environment variables for the container
+GREETING = "hello from example task"
+"""
+
+_EXAMPLE_RUN_SH = """\
+#!/bin/sh
+# The workspace (current directory) holds the crate source, overlaid with
+# every zip entry except task.toml (zip entries win on name conflicts).
+echo "$GREETING" > progress.log
+echo "crate files:" >> progress.log
+ls >> progress.log
+mkdir -p output
+echo "example result" > output/result.txt
+echo "done" >> progress.log
+"""
+
+
+def build_example_task_zip() -> bytes:
+    """Build the downloadable example task zip in memory."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("task.toml", _EXAMPLE_TASK_TOML)
+        zf.writestr("run.sh", _EXAMPLE_RUN_SH)
+    return buffer.getvalue()
+
+
 class TaskStore:
     """Storage for task definition zips, keyed by their sha256 fingerprint."""
 

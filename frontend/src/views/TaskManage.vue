@@ -122,7 +122,8 @@ onMounted(() => {
 </script>
 
 <template>
-  <div>
+  <div class="flex flex-col lg:flex-row gap-6 items-start">
+    <div class="flex-1 min-w-0">
     <div class="flex items-center justify-between mb-8">
       <h1 class="text-3xl font-bold text-gray-900">Tasks</h1>
     </div>
@@ -243,6 +244,48 @@ onMounted(() => {
           </tr>
         </tbody>
       </table>
+    </div>
+    </div>
+
+    <!-- Rules card -->
+    <div class="w-full lg:w-96 shrink-0 lg:sticky lg:top-6">
+      <div class="bento-card bg-gray-50 border border-gray-200">
+        <h2 class="text-lg font-semibold text-gray-900 mb-3">Task Rules</h2>
+
+        <a
+          href="/api/tasks/example"
+          download="example-task.zip"
+          class="inline-flex items-center gap-2 px-4 py-2 mb-4 text-sm font-medium text-blue-700 bg-blue-100 rounded-lg hover:bg-blue-200 transition-colors"
+        >
+          Download example task
+        </a>
+
+        <h3 class="text-sm font-semibold text-gray-800 mt-2 mb-1">Zip layout</h3>
+        <ul class="text-xs text-gray-600 space-y-1 list-disc list-inside">
+          <li><code class="bg-gray-200 px-1 rounded">task.toml</code> must sit at the zip root</li>
+          <li>Every other entry is copied into the job workspace (zip wins name conflicts)</li>
+          <li>Absolute paths and <code class="bg-gray-200 px-1 rounded">..</code> entries are rejected</li>
+          <li>sha256 of the zip is the task fingerprint; re-uploading identical content is a no-op</li>
+        </ul>
+
+        <h3 class="text-sm font-semibold text-gray-800 mt-4 mb-1">task.toml fields</h3>
+        <ul class="text-xs text-gray-600 space-y-1 list-disc list-inside">
+          <li><code class="bg-gray-200 px-1 rounded">name</code>, <code class="bg-gray-200 px-1 rounded">image</code>, <code class="bg-gray-200 px-1 rounded">cmd</code>, <code class="bg-gray-200 px-1 rounded">workspace</code> — required</li>
+          <li><code class="bg-gray-200 px-1 rounded">desc</code> — optional description</li>
+          <li><code class="bg-gray-200 px-1 rounded">artifacts</code> — paths collected when the job ends</li>
+          <li><code class="bg-gray-200 px-1 rounded">watch</code> — paths viewable live during the run</li>
+          <li><code class="bg-gray-200 px-1 rounded">[limit]</code> cpu / mem / timeout — all optional, missing = unlimited</li>
+          <li><code class="bg-gray-200 px-1 rounded">[env]</code> — extra container environment variables</li>
+        </ul>
+
+        <h3 class="text-sm font-semibold text-gray-800 mt-4 mb-1">Execution</h3>
+        <ul class="text-xs text-gray-600 space-y-1 list-disc list-inside">
+          <li>The crate source is downloaded into a per-job directory, then mounted at <code class="bg-gray-200 px-1 rounded">workspace</code></li>
+          <li><code class="bg-gray-200 px-1 rounded">cmd</code> runs via <code class="bg-gray-200 px-1 rounded">sh -c</code> with <code class="bg-gray-200 px-1 rounded">workspace</code> as the working directory</li>
+          <li>stdout/stderr are redirected to <code class="bg-gray-200 px-1 rounded">stdout.log</code> / <code class="bg-gray-200 px-1 rounded">stderr.log</code> in the workspace — list them in <code class="bg-gray-200 px-1 rounded">watch</code> or <code class="bg-gray-200 px-1 rounded">artifacts</code> to inspect them</li>
+          <li>artifacts/watch paths are relative to <code class="bg-gray-200 px-1 rounded">workspace</code></li>
+        </ul>
+      </div>
     </div>
   </div>
 </template>

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, nextTick, onMounted } from 'vue'
+import { ref, computed, nextTick, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../services/api'
 
@@ -7,7 +7,8 @@ const router = useRouter()
 const textarea = ref('')
 const loading = ref(false)
 const progress = ref({ current: 0, total: 0 })
-const batchErrors = ref([])
+const logs = ref([])
+const logContainer = ref(null)
 
 // Task selector state
 const tasks = ref([])
@@ -86,6 +87,19 @@ const progressPercentage = computed(() => {
   return Math.round((progress.value.current / progress.value.total) * 100)
 })
 
+const failedCount = computed(() => logs.value.filter(entry => !entry.ok).length)
+
+// Auto-scroll the log window to the newest entry.
+watch(
+  () => logs.value.length,
+  async () => {
+    await nextTick()
+    if (logContainer.value) {
+      logContainer.value.scrollTop = logContainer.value.scrollHeight
+    }
+  }
+)
+
 // Batch create jobs
 async function createBatchJobs() {
   if (!validationResult.value.valid || !selectedTaskId.value) {
@@ -96,38 +110,30 @@ async function createBatchJobs() {
 
   loading.value = true
   progress.value = { current: 0, total: parsed.length }
-  batchErrors.value = []
+  logs.value = []
 
   const CONCURRENCY = 16
 
-  async function runBatch(batch) {
-    await Promise.all(
-      batch.map(async ({ crate_name, version }) => {
-        try {
-          await api.createJob(crate_name, version, selectedTaskId.value)
-        } catch (err) {
-          const message = err.response?.data?.detail || err.message
-          batchErrors.value.push({ crate_name, version, message })
-          console.error(`Failed to create job for ${crate_name}:`, err)
-        }
-      })
-    )
+  async function createOne({ crate_name, version }) {
+    const label = `${crate_name}${version ? `@${version}` : ''}`
+    try {
+      const result = await api.createJob(crate_name, version, selectedTaskId.value)
+      logs.value.push({ ok: true, text: `[OK] ${label} -> job #${result.job_id}` })
+    } catch (err) {
+      const message = err.response?.data?.detail || err.message
+      logs.value.push({ ok: false, text: `[FAIL] ${label}: ${message}` })
+    } finally {
+      progress.value.current += 1
+    }
   }
 
   for (let i = 0; i < parsed.length; i += CONCURRENCY) {
     const batch = parsed.slice(i, i + CONCURRENCY)
-    await runBatch(batch)
-    progress.value.current = Math.min(i + CONCURRENCY, parsed.length)
+    await Promise.all(batch.map(createOne))
   }
 
-  // Wait for the 100% progress bar to render before navigating
-  await nextTick()
   loading.value = false
-
-  if (batchErrors.value.length === 0) {
-    router.push('/jobs')
-  }
-  // If there were failures, stay on the page to show the error summary
+  // Stay on the page so the user can read the creation log.
 }
 
 onMounted(() => {
@@ -236,15 +242,37 @@ onMounted(() => {
         </ul>
       </div>
 
-      <!-- Batch Create Errors -->
-      <div v-if="batchErrors.length > 0"
-           class="mb-4 bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg">
-        <p class="font-medium mb-2">Failed to create {{ batchErrors.length }} job(s):</p>
-        <ul class="text-sm space-y-1 max-h-48 overflow-y-auto">
-          <li v-for="(error, index) in batchErrors" :key="index">
-            {{ error.crate_name }}{{ error.version ? `@${error.version}` : '' }}: {{ error.message }}
-          </li>
-        </ul>
+      <!-- Progress Bar + Creation Log -->
+      <div v-if="progress.total > 0" class="mb-4">
+        <div class="flex items-center justify-between text-sm text-gray-600 mb-2">
+          <span>
+            {{ loading ? 'Creating jobs...' : 'Done' }}
+          </span>
+          <span>
+            {{ progress.current }} / {{ progress.total }}
+            <span v-if="failedCount > 0" class="text-red-600 font-medium">
+              ({{ failedCount }} failed)
+            </span>
+          </span>
+        </div>
+        <div class="w-full bg-gray-200 rounded-full h-3 overflow-hidden mb-3">
+          <div
+            class="h-full transition-all duration-300 ease-out"
+            :class="loading ? 'bg-blue-600' : (failedCount > 0 ? 'bg-yellow-500' : 'bg-green-600')"
+            :style="{ width: `${progressPercentage}%` }"
+          ></div>
+        </div>
+        <div
+          ref="logContainer"
+          class="bg-gray-900 rounded-lg p-3 max-h-64 overflow-y-auto font-mono text-xs leading-relaxed"
+        >
+          <div
+            v-for="(entry, index) in logs"
+            :key="index"
+            :class="entry.ok ? 'text-green-400' : 'text-red-400'"
+          >{{ entry.text }}</div>
+          <div v-if="logs.length === 0" class="text-gray-500">Waiting...</div>
+        </div>
       </div>
 
       <!-- Action Buttons -->
@@ -265,35 +293,6 @@ onMounted(() => {
         >
           Create {{ validationResult.parsed?.length || 0 }} {{ validationResult.parsed?.length === 1 ? 'Job' : 'Jobs' }}
         </button>
-      </div>
-    </div>
-
-    <!-- Progress Overlay -->
-    <div v-if="loading" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div class="bg-white rounded-lg p-8 max-w-md w-full mx-4">
-        <h3 class="text-lg font-semibold text-gray-900 mb-4">Creating Jobs...</h3>
-
-        <!-- Progress Bar -->
-        <div class="mb-4">
-          <div class="flex items-center justify-between text-sm text-gray-600 mb-2">
-            <span>Progress</span>
-            <span>{{ progress.current }} / {{ progress.total }}</span>
-          </div>
-          <div class="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
-            <div
-              class="bg-blue-600 h-full transition-all duration-300 ease-out"
-              :style="{ width: `${progressPercentage}%` }"
-            ></div>
-          </div>
-        </div>
-
-        <!-- Progress Text -->
-        <p class="text-center text-gray-600">
-          {{ progressPercentage }}% complete
-        </p>
-        <p v-if="batchErrors.length > 0" class="text-center text-red-600 mt-2">
-          {{ batchErrors.length }} job(s) failed
-        </p>
       </div>
     </div>
   </div>
