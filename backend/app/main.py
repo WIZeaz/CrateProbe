@@ -9,9 +9,11 @@ from contextlib import asynccontextmanager
 from fastapi import (
     Depends,
     FastAPI,
+    File,
     Header,
     HTTPException,
     Query,
+    UploadFile,
     WebSocket,
     WebSocketDisconnect,
 )
@@ -21,14 +23,16 @@ from typing import Optional, List, Literal
 from pathlib import Path
 import asyncio
 from app.config import Config
-from app.database import Database, JobRecord
+from app.database import Database, JobRecord, TaskDefRecord
 from core.models import TaskStatus
+from core.task_spec import spec_to_dict
 from runner.crates_api import CratesAPI, CrateNotFoundError
 from runner.rate_limiter import AsyncTokenBucket
 from runner.cache import TTLCache
 from app.services.scheduler import TaskScheduler
 from app.services.system_monitor import SystemMonitor
 from app.services.runner_metrics_store import RunnerMetricsStore, RunnerMetricPoint
+from app.services.task_store import TaskStore, ZipValidationError
 from app.security import generate_runner_token, generate_salt, hash_token, verify_token
 from app.utils.file_utils import read_last_n_lines
 from app.utils.file_utils import FileNotFoundError as CustomFileNotFoundError
@@ -52,6 +56,20 @@ class CreateJobRequest(BaseModel):
 
 class BatchJobRequest(BaseModel):
     job_ids: List[int]
+
+
+class TaskDefinitionResponse(BaseModel):
+    id: int
+    name: str
+    desc: Optional[str]
+    sha256: str
+    created_at: str
+    updated_at: Optional[str]
+    spec: dict
+
+
+class TaskUploadResponse(TaskDefinitionResponse):
+    existed: bool
 
 
 class JobResponse(BaseModel):
@@ -200,6 +218,39 @@ def _parse_task_spec(spec: str) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
+_UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1 MiB
+
+
+async def _read_upload_capped(file: UploadFile, max_bytes: int) -> bytes:
+    """Read an UploadFile in chunks, rejecting bodies over ``max_bytes``."""
+    parts = []
+    total = 0
+    while True:
+        chunk = await file.read(_UPLOAD_CHUNK_SIZE)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=413, detail="Task upload exceeds size limit"
+            )
+        parts.append(chunk)
+    return b"".join(parts)
+
+
+def _task_def_fields(record: TaskDefRecord) -> dict:
+    """Serialize a TaskDefRecord into response fields."""
+    return {
+        "id": record.id,
+        "name": record.name,
+        "desc": record.desc,
+        "sha256": record.sha256,
+        "created_at": record.created_at.isoformat(),
+        "updated_at": (record.updated_at.isoformat() if record.updated_at else None),
+        "spec": _parse_task_spec(record.spec),
+    }
+
+
 def create_app(config: Config, db_path: str) -> FastAPI:
     """Create FastAPI application"""
 
@@ -210,6 +261,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     # Create scheduler
     scheduler = TaskScheduler(config, db)
     metrics_store = RunnerMetricsStore(max_age=timedelta(hours=24))
+    task_store = TaskStore(Path(config.workspace_path) / "tasks")
 
     # Get WebSocket manager
     ws_manager = get_manager()
@@ -453,6 +505,148 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(e))
         finally:
             await crates_api.close()
+
+    # ------------------------------------------------------------------
+    # Task definitions
+    # ------------------------------------------------------------------
+
+    async def _ingest_task_upload(file: UploadFile):
+        """Read a task zip upload and validate it; returns (spec, sha256, path)."""
+        zip_bytes = await _read_upload_capped(
+            file, config.task_upload_max_mb * 1024 * 1024
+        )
+        try:
+            return task_store.ingest_zip(zip_bytes)
+        except ZipValidationError as e:
+            logger.warning(
+                "task zip rejected",
+                extra={"reason": str(e)},
+            )
+            raise HTTPException(status_code=422, detail=str(e))
+
+    @app.post(
+        "/api/tasks",
+        response_model=TaskUploadResponse,
+        dependencies=[Depends(require_admin_token)],
+    )
+    async def upload_task(file: UploadFile = File(...)):
+        """Upload a task definition zip; same sha256 returns the existing task."""
+        spec, sha256, zip_path = await _ingest_task_upload(file)
+
+        existing = db.get_task_definition_by_sha256(sha256)
+        if existing is not None:
+            logger.info(
+                "task upload matched existing definition",
+                extra={"task_id": existing.id, "sha256": sha256},
+            )
+            return TaskUploadResponse(**_task_def_fields(existing), existed=True)
+
+        spec_json = json.dumps(spec_to_dict(spec), ensure_ascii=False)
+        task_id = db.create_task_definition(
+            name=spec.name,
+            desc=spec.desc,
+            sha256=sha256,
+            zip_path=str(zip_path),
+            spec=spec_json,
+        )
+        record = db.get_task_definition(task_id)
+        logger.info(
+            "task definition created",
+            extra={"task_id": task_id, "sha256": sha256, "name": spec.name},
+        )
+        return TaskUploadResponse(**_task_def_fields(record), existed=False)
+
+    @app.get("/api/tasks", response_model=List[TaskDefinitionResponse])
+    async def list_tasks():
+        """List all task definitions, newest first."""
+        return [
+            TaskDefinitionResponse(**_task_def_fields(record))
+            for record in db.list_task_definitions()
+        ]
+
+    @app.get("/api/tasks/{task_id}", response_model=TaskDefinitionResponse)
+    async def get_task(task_id: int):
+        """Get a task definition by ID."""
+        record = db.get_task_definition(task_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return TaskDefinitionResponse(**_task_def_fields(record))
+
+    @app.put(
+        "/api/tasks/{task_id}",
+        response_model=TaskDefinitionResponse,
+        dependencies=[Depends(require_admin_token)],
+    )
+    async def update_task(task_id: int, file: UploadFile = File(...)):
+        """Replace a task definition's zip; updates sha256/spec/name/desc."""
+        record = db.get_task_definition(task_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        spec, sha256, zip_path = await _ingest_task_upload(file)
+
+        if sha256 == record.sha256:
+            logger.info(
+                "task update matches current definition; unchanged",
+                extra={"task_id": task_id, "sha256": sha256},
+            )
+            return TaskDefinitionResponse(**_task_def_fields(record))
+
+        conflict = db.get_task_definition_by_sha256(sha256)
+        if conflict is not None and conflict.id != task_id:
+            logger.warning(
+                "task update rejected: sha256 belongs to another task",
+                extra={
+                    "task_id": task_id,
+                    "conflict_task_id": conflict.id,
+                    "sha256": sha256,
+                },
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="Another task already has this zip content",
+            )
+
+        spec_json = json.dumps(spec_to_dict(spec), ensure_ascii=False)
+        updated = db.update_task_definition(
+            task_id,
+            name=spec.name,
+            desc=spec.desc,
+            sha256=sha256,
+            zip_path=str(zip_path),
+            spec=spec_json,
+        )
+        if not updated:
+            raise HTTPException(status_code=404, detail="Task not found")
+        task_store.delete_zip(record.sha256)
+        logger.info(
+            "task definition updated",
+            extra={
+                "task_id": task_id,
+                "old_sha256": record.sha256,
+                "new_sha256": sha256,
+            },
+        )
+        return TaskDefinitionResponse(
+            **_task_def_fields(db.get_task_definition(task_id))
+        )
+
+    @app.delete(
+        "/api/tasks/{task_id}",
+        response_model=TaskDefinitionResponse,
+        dependencies=[Depends(require_admin_token)],
+    )
+    async def delete_task(task_id: int):
+        """Delete a task definition and its stored zip."""
+        record = db.delete_task_definition(task_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        task_store.delete_zip(record.sha256)
+        logger.info(
+            "task definition deleted",
+            extra={"task_id": task_id, "sha256": record.sha256},
+        )
+        return TaskDefinitionResponse(**_task_def_fields(record))
 
     @app.get("/api/jobs", response_model=List[JobDetailResponse])
     async def get_all_jobs():
