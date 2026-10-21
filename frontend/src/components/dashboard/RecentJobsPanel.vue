@@ -77,7 +77,7 @@ function viewJob(jobId) {
       <table class="mt-1 hidden w-full table-fixed border-collapse text-left md:table">
         <thead>
           <tr class="border-b border-rule">
-            <th scope="col" class="w-[120px] py-2 pr-3 text-[11px] font-medium text-muted">
+            <th scope="col" class="w-[120px] py-2 pl-2.5 pr-3 text-[11px] font-medium text-muted">
               Status
             </th>
             <th scope="col" class="py-2 pr-3 text-[11px] font-medium text-muted">
@@ -104,7 +104,7 @@ function viewJob(jobId) {
             class="job-row border-b border-rule last:border-0"
             @click="viewJob(job.id)"
           >
-            <td class="py-3 pr-3 align-middle whitespace-nowrap">
+            <td class="py-3 pl-2.5 pr-3 align-middle whitespace-nowrap">
               <StatusMark :status="job.status" />
             </td>
             <td class="py-3 pr-3 align-middle">
