@@ -359,3 +359,35 @@ def test_download_task_zip_unknown_task_returns_404(client):
 
 def test_get_task_toml_unknown_task_returns_404(client):
     assert client.get("/api/tasks/999/task-toml").status_code == 404
+
+
+def test_get_task_files_lists_zip_entries(client):
+    """GET /api/tasks/{id}/files returns the zip's file and directory entries."""
+    extra = {
+        "assets/": "",
+        "assets/icon.txt": "icon",
+        "scripts/run.sh": "#!/bin/sh\necho hi\n",
+    }
+    task_id = upload(client, task_zip(extra=extra)).json()["id"]
+
+    resp = client.get(f"/api/tasks/{task_id}/files")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    entries = {entry["path"]: entry for entry in body["entries"]}
+
+    assert entries["task.toml"]["is_dir"] is False
+    assert entries["task.toml"]["size"] == len(TASK_A_TOML)
+    assert entries["scripts/run.sh"]["is_dir"] is False
+    assert entries["scripts/run.sh"]["size"] == len(extra["scripts/run.sh"])
+    assert entries["assets/icon.txt"]["size"] == 4
+    assert entries["assets"]["is_dir"] is True
+    assert entries["assets"]["size"] == 0
+    assert body["total_size"] == len(TASK_A_TOML) + 4 + len(
+        extra["scripts/run.sh"]
+    )
+    assert [entry["path"] for entry in body["entries"]] == sorted(entries)
+
+
+def test_get_task_files_unknown_task_returns_404(client):
+    assert client.get("/api/tasks/999/files").status_code == 404

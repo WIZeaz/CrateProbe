@@ -201,6 +201,12 @@ export default {
     return response.data
   },
 
+  // File and directory metadata stored inside a task definition's zip.
+  async getTaskFiles(taskId) {
+    const response = await api.get(`/tasks/${taskId}/files`)
+    return response.data
+  },
+
   // Relative download URL for a task definition zip (for <a :href>).
   taskZipUrl(taskId) {
     return `/api/tasks/${taskId}/zip`

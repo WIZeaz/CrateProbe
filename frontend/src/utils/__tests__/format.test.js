@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  formatBytes,
   formatCount,
   formatDateTime,
   formatDuration,
@@ -83,4 +84,14 @@ test('formatDateTime and formatTime handle missing and invalid values', () => {
   assert.equal(formatTime('not-a-date'), '—')
   assert.notEqual(formatDateTime('2026-10-21T14:30:00Z'), '—')
   assert.notEqual(formatTime('2026-10-21T14:30:00Z'), '—')
+})
+
+test('formatBytes formats file sizes and handles invalid values', () => {
+  assert.equal(formatBytes(0), '0 B')
+  assert.equal(formatBytes(512), '512 B')
+  assert.equal(formatBytes(1024), '1.0 KB')
+  assert.equal(formatBytes(1536), '1.5 KB')
+  assert.equal(formatBytes(1024 * 1024), '1.0 MB')
+  assert.equal(formatBytes(null), '—')
+  assert.equal(formatBytes('nope'), '—')
 })

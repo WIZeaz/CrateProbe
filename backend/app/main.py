@@ -82,6 +82,18 @@ class TaskUploadResponse(TaskDefinitionResponse):
     existed: bool
 
 
+class TaskFileEntryResponse(BaseModel):
+    path: str
+    size: int
+    compressed_size: int
+    is_dir: bool
+
+
+class TaskFilesResponse(BaseModel):
+    entries: List[TaskFileEntryResponse]
+    total_size: int
+
+
 class JobResponse(BaseModel):
     job_id: int
     crate_name: str
@@ -620,6 +632,42 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             media_type="application/zip",
             filename=f"task-{task_id}.zip",
         )
+
+    @app.get("/api/tasks/{task_id}/files", response_model=TaskFilesResponse)
+    async def get_task_definition_files(task_id: int):
+        """List the file and directory entries stored in a task definition zip."""
+        _, zip_path = _task_zip_file(task_id)
+
+        try:
+            with zipfile.ZipFile(zip_path) as zf:
+                entries: List[TaskFileEntryResponse] = []
+                total_size = 0
+                for info in zf.infolist():
+                    is_dir = info.is_dir()
+                    path = info.filename.rstrip("/") if is_dir else info.filename
+                    if not path:
+                        continue
+                    size = 0 if is_dir else info.file_size
+                    total_size += size
+                    entries.append(
+                        TaskFileEntryResponse(
+                            path=path,
+                            size=size,
+                            compressed_size=info.compress_size,
+                            is_dir=is_dir,
+                        )
+                    )
+        except zipfile.BadZipFile as exc:
+            logger.error(
+                "task zip unreadable",
+                extra={"task_id": task_id},
+            )
+            raise HTTPException(
+                status_code=500, detail="Task zip unreadable"
+            ) from exc
+
+        entries.sort(key=lambda entry: entry.path)
+        return TaskFilesResponse(entries=entries, total_size=total_size)
 
     @app.get("/api/tasks/{task_id}/task-toml", response_class=PlainTextResponse)
     async def get_task_definition_toml(task_id: int):
