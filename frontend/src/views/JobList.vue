@@ -377,30 +377,32 @@ onUnmounted(() => {
         </span>
       </div>
 
-      <div
-        v-if="selectedIds.size > 0"
-        class="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-[3px] border border-rule bg-black/[0.03] px-3 py-2"
-      >
-        <span class="font-mono text-[11px] text-muted">
-          {{ selectedIds.size }} selected
-        </span>
-        <div class="flex flex-wrap items-center gap-2">
-          <button
-            class="btn btn--ghost btn--sm"
-            :disabled="batchLoading"
-            @click="handleBatchRetry"
-          >
-            Retry selected
-          </button>
-          <button
-            class="btn btn--danger-ghost btn--sm"
-            :disabled="batchLoading"
-            @click="handleBatchDelete"
-          >
-            Delete selected
-          </button>
+      <Transition name="fade-slide">
+        <div
+          v-if="selectedIds.size > 0"
+          class="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-[3px] border border-rule bg-black/[0.03] px-3 py-2"
+        >
+          <span class="font-mono text-[11px] text-muted">
+            {{ selectedIds.size }} selected
+          </span>
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              class="btn btn--ghost btn--sm"
+              :disabled="batchLoading"
+              @click="handleBatchRetry"
+            >
+              Retry selected
+            </button>
+            <button
+              class="btn btn--danger-ghost btn--sm"
+              :disabled="batchLoading"
+              @click="handleBatchDelete"
+            >
+              Delete selected
+            </button>
+          </div>
         </div>
-      </div>
+      </Transition>
 
       <div
         v-if="loading"
@@ -463,6 +465,7 @@ onUnmounted(() => {
                     @change="toggleSelectAll"
                   />
                 </th>
+                <th class="w-20">Job ID</th>
                 <th class="w-28">Status</th>
                 <th>Crate</th>
                 <th class="w-36">Task</th>
@@ -490,6 +493,7 @@ onUnmounted(() => {
                   />
                   <span v-else class="inline-block h-4 w-4"></span>
                 </td>
+                <td class="numeric text-muted">#{{ job.id }}</td>
                 <td><StatusMark :status="job.status" /></td>
                 <td class="min-w-0">
                   <router-link
@@ -568,7 +572,7 @@ onUnmounted(() => {
             <li
               v-for="job in jobs"
               :key="job.id"
-              class="cursor-pointer border-b border-rule py-3 last:border-0"
+              class="cursor-pointer border-b border-rule py-3 last:border-0 transition-colors"
               :class="{ 'bg-black/[0.02]': selectedIds.has(job.id) }"
               @click="viewJob(job.id)"
             >

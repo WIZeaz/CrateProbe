@@ -161,14 +161,14 @@ onUnmounted(() => {
       <template #actions>
         <button
           v-if="pendingSelectedCount > 0"
-          class="btn btn--warn-ghost btn--sm"
+          class="btn btn--warn-ghost btn--sm action-in"
           @click="handlePinSelected"
         >
           Pin selected ({{ pendingSelectedCount }})
         </button>
         <button
           v-if="runningSelectedCount > 0"
-          class="btn btn--danger-ghost btn--sm"
+          class="btn btn--danger-ghost btn--sm action-in"
           @click="handleCancelSelected"
         >
           Cancel selected ({{ runningSelectedCount }})
@@ -234,7 +234,7 @@ onUnmounted(() => {
             <thead>
               <tr>
                 <th class="w-10"></th>
-                <th class="w-16">ID</th>
+                <th class="w-20">Job ID</th>
                 <th>Crate</th>
                 <th class="w-24">Version</th>
                 <th class="w-32">Task</th>
@@ -246,8 +246,8 @@ onUnmounted(() => {
             </thead>
             <tbody>
               <template v-if="runningJobs.length > 0">
-                <tr class="border-t border-rule">
-                  <td class="py-2" @click.stop>
+                <tr class="group-row group-row--running">
+                  <td @click.stop>
                     <input
                       type="checkbox"
                       :checked="allRunningSelected"
@@ -256,10 +256,10 @@ onUnmounted(() => {
                       @change="toggleSelectAllRunning"
                     />
                   </td>
-                  <td colspan="8" class="py-2">
+                  <td colspan="8">
                     <div class="flex items-center gap-2">
                       <StatusMark status="running" />
-                      <span class="text-[11px] font-semibold text-ink">
+                      <span class="text-[12px] font-semibold text-ink">
                         Running jobs
                       </span>
                       <span class="font-mono text-[11px] text-muted">
@@ -272,6 +272,7 @@ onUnmounted(() => {
                   v-for="job in runningJobs"
                   :key="job.id"
                   class="cursor-pointer"
+                  :class="{ 'is-selected': selectedRunningIds.has(job.id) }"
                   @click="viewJob(job.id)"
                 >
                   <td @click.stop>
@@ -313,8 +314,8 @@ onUnmounted(() => {
               </template>
 
               <template v-if="pendingJobs.length > 0">
-                <tr class="border-t border-rule">
-                  <td class="py-2" @click.stop>
+                <tr class="group-row group-row--pending">
+                  <td @click.stop>
                     <input
                       type="checkbox"
                       :checked="allPendingSelected"
@@ -323,10 +324,10 @@ onUnmounted(() => {
                       @change="toggleSelectAllPending"
                     />
                   </td>
-                  <td colspan="8" class="py-2">
+                  <td colspan="8">
                     <div class="flex items-center gap-2">
                       <StatusMark status="pending" />
-                      <span class="text-[11px] font-semibold text-ink">
+                      <span class="text-[12px] font-semibold text-ink">
                         Pending queue
                       </span>
                       <span class="font-mono text-[11px] text-muted">
@@ -339,6 +340,7 @@ onUnmounted(() => {
                   v-for="(job, idx) in pendingJobs"
                   :key="job.id"
                   class="cursor-pointer"
+                  :class="{ 'is-selected': selectedPendingIds.has(job.id) }"
                   @click="viewJob(job.id)"
                 >
                   <td @click.stop>
@@ -391,8 +393,8 @@ onUnmounted(() => {
 
         <div class="mt-2 lg:hidden">
           <template v-if="runningJobs.length > 0">
-            <div class="flex items-center justify-between border-t border-rule py-2">
-              <label class="flex items-center gap-2 text-[11px] font-semibold text-ink">
+            <div class="mobile-group-header mobile-group-header--running">
+              <label class="flex items-center gap-2 text-[12px] font-semibold text-ink">
                 <input
                   type="checkbox"
                   :checked="allRunningSelected"
@@ -409,7 +411,8 @@ onUnmounted(() => {
               <li
                 v-for="job in runningJobs"
                 :key="job.id"
-                class="cursor-pointer border-b border-rule py-3 last:border-0"
+                class="cursor-pointer border-b border-rule py-3 transition-colors last:border-0"
+                :class="{ 'bg-black/[0.02]': selectedRunningIds.has(job.id) }"
                 @click="viewJob(job.id)"
               >
                 <div class="flex items-start gap-3">
@@ -450,8 +453,8 @@ onUnmounted(() => {
           </template>
 
           <template v-if="pendingJobs.length > 0">
-            <div class="flex items-center justify-between border-t border-rule py-2">
-              <label class="flex items-center gap-2 text-[11px] font-semibold text-ink">
+            <div class="mobile-group-header mobile-group-header--pending">
+              <label class="flex items-center gap-2 text-[12px] font-semibold text-ink">
                 <input
                   type="checkbox"
                   :checked="allPendingSelected"
@@ -468,7 +471,8 @@ onUnmounted(() => {
               <li
                 v-for="(job, idx) in pendingJobs"
                 :key="job.id"
-                class="cursor-pointer border-b border-rule py-3 last:border-0"
+                class="cursor-pointer border-b border-rule py-3 transition-colors last:border-0"
+                :class="{ 'bg-black/[0.02]': selectedPendingIds.has(job.id) }"
                 @click="viewJob(job.id)"
               >
                 <div class="flex items-start gap-3">

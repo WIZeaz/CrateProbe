@@ -504,11 +504,10 @@ onUnmounted(() => {
             <table class="data-table">
               <thead>
                 <tr>
-                  <th>Runner</th>
+                  <th>Runner ID</th>
                   <th class="w-28">Status</th>
                   <th class="w-24">Last seen</th>
                   <th class="w-20">Capacity</th>
-                  <th class="w-40">Tags</th>
                   <th class="w-24">Enabled</th>
                   <th class="w-52 text-right">Actions</th>
                 </tr>
@@ -524,7 +523,10 @@ onUnmounted(() => {
                   @click="selectRunner(runner)"
                 >
                   <td class="min-w-0">
-                    <p class="truncate text-[13px] font-medium text-ink">
+                    <p
+                      class="truncate font-mono text-[12px] font-medium text-ink"
+                      :title="runner.runner_id"
+                    >
                       {{ runner.runner_id }}
                     </p>
                     <p
@@ -533,6 +535,18 @@ onUnmounted(() => {
                     >
                       {{ runner.description }}
                     </p>
+                    <div
+                      v-if="parseTags(runner.tags).length > 0"
+                      class="mt-1 flex flex-wrap gap-1"
+                    >
+                      <span
+                        v-for="tag in parseTags(runner.tags)"
+                        :key="`${runner.runner_id}-${tag}`"
+                        class="ui-tag"
+                      >
+                        {{ tag }}
+                      </span>
+                    </div>
                   </td>
                   <td class="whitespace-nowrap">
                     <StatusMark
@@ -548,21 +562,6 @@ onUnmounted(() => {
                   </td>
                   <td class="numeric whitespace-nowrap text-muted">
                     {{ normalizeCapacity(runner.capacity_total) }}
-                  </td>
-                  <td>
-                    <div
-                      v-if="parseTags(runner.tags).length > 0"
-                      class="flex flex-wrap gap-1"
-                    >
-                      <span
-                        v-for="tag in parseTags(runner.tags)"
-                        :key="`${runner.runner_id}-${tag}`"
-                        class="ui-tag"
-                      >
-                        {{ tag }}
-                      </span>
-                    </div>
-                    <span v-else class="text-[11px] text-muted">—</span>
                   </td>
                   <td>
                     <StatusMark
@@ -618,7 +617,7 @@ onUnmounted(() => {
             <li
               v-for="runner in runners"
               :key="runner.runner_id"
-              class="cursor-pointer border-b border-l-2 border-rule py-3 pl-3 last:border-b-0"
+              class="cursor-pointer border-b border-l-2 border-rule py-3 pl-3 transition-colors last:border-b-0"
               :class="{
                 'bg-black/[0.02]': selectedRunnerId === runner.runner_id,
               }"
@@ -713,7 +712,7 @@ onUnmounted(() => {
       </section>
     </div>
 
-    <section v-if="selectedRunner" class="instrument-panel mt-5" aria-label="Runner details">
+    <section v-if="selectedRunner" class="instrument-panel panel-in mt-5" aria-label="Runner details">
       <div class="panel-header flex-wrap">
         <div>
           <h2 class="panel-title">Runner details</h2>
