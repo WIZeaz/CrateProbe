@@ -274,6 +274,13 @@ onMounted(() => {
                   </p>
                 </div>
                 <div class="flex items-center gap-2 shrink-0">
+                  <a
+                    :href="api.taskZipUrl(task.id)"
+                    :download="`task-${task.id}.zip`"
+                    class="px-3 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                  >
+                    Download
+                  </a>
                   <button
                     @click="startUpdate(task.id)"
                     :disabled="updateLoading"
@@ -313,13 +320,6 @@ onMounted(() => {
                 >
                   {{ expandedTomlId === task.id ? 'Hide task.toml' : 'View task.toml' }}
                 </button>
-                <a
-                  :href="api.taskZipUrl(task.id)"
-                  :download="`task-${task.id}.zip`"
-                  class="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
-                >
-                  Download zip
-                </a>
               </div>
 
               <div v-if="expandedTomlId === task.id" class="mt-3">
