@@ -35,6 +35,7 @@ from app.services.scheduler import TaskScheduler
 from app.services.system_monitor import SystemMonitor
 from app.services.runner_metrics_store import RunnerMetricsStore, RunnerMetricPoint
 from app.services.task_store import (
+    FilePreviewTooLargeError,
     TaskStore,
     ZipValidationError,
     build_example_task_zip,
@@ -662,12 +663,39 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                 "task zip unreadable",
                 extra={"task_id": task_id},
             )
-            raise HTTPException(
-                status_code=500, detail="Task zip unreadable"
-            ) from exc
+            raise HTTPException(status_code=500, detail="Task zip unreadable") from exc
 
         entries.sort(key=lambda entry: entry.path)
         return TaskFilesResponse(entries=entries, total_size=total_size)
+
+    @app.get("/api/tasks/{task_id}/files/{path:path}", response_class=PlainTextResponse)
+    async def get_task_definition_file(task_id: int, path: str):
+        """Return one text file from a task definition zip for previewing."""
+        _, zip_path = _task_zip_file(task_id)
+
+        try:
+            data = TaskStore.read_member(zip_path, path)
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status_code=404, detail="File not found in task zip"
+            ) from exc
+        except IsADirectoryError as exc:
+            raise HTTPException(status_code=400, detail="Path is a directory") from exc
+        except FilePreviewTooLargeError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except (zipfile.BadZipFile, OSError) as exc:
+            logger.error(
+                "task zip unreadable",
+                extra={"task_id": task_id},
+            )
+            raise HTTPException(status_code=500, detail="Task zip unreadable") from exc
+
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(
+                status_code=415, detail="File is not UTF-8 text"
+            ) from exc
 
     @app.get("/api/tasks/{task_id}/task-toml", response_class=PlainTextResponse)
     async def get_task_definition_toml(task_id: int):

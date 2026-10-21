@@ -383,11 +383,48 @@ def test_get_task_files_lists_zip_entries(client):
     assert entries["assets/icon.txt"]["size"] == 4
     assert entries["assets"]["is_dir"] is True
     assert entries["assets"]["size"] == 0
-    assert body["total_size"] == len(TASK_A_TOML) + 4 + len(
-        extra["scripts/run.sh"]
-    )
+    assert body["total_size"] == len(TASK_A_TOML) + 4 + len(extra["scripts/run.sh"])
     assert [entry["path"] for entry in body["entries"]] == sorted(entries)
 
 
 def test_get_task_files_unknown_task_returns_404(client):
     assert client.get("/api/tasks/999/files").status_code == 404
+
+
+def test_get_task_file_returns_content(client):
+    """GET /api/tasks/{id}/files/{path} returns a text member from the zip."""
+    task_id = upload(
+        client,
+        task_zip(extra={"run.sh": "#!/bin/sh\necho hi\n", "sub/data.txt": "hello"}),
+    ).json()["id"]
+
+    resp = client.get(f"/api/tasks/{task_id}/files/run.sh")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/plain")
+    assert resp.text == "#!/bin/sh\necho hi\n"
+
+    nested = client.get(f"/api/tasks/{task_id}/files/sub/data.txt")
+    assert nested.status_code == 200
+    assert nested.text == "hello"
+
+
+def test_get_task_file_unknown_returns_404(client):
+    task_id = upload(client, task_zip()).json()["id"]
+
+    assert client.get(f"/api/tasks/{task_id}/files/missing.txt").status_code == 404
+    assert client.get("/api/tasks/999/files/run.sh").status_code == 404
+
+
+def test_get_task_file_binary_returns_415(client):
+    task_id = upload(client, task_zip(extra={"blob.bin": b"\xff\xfe\x00\x01"})).json()[
+        "id"
+    ]
+
+    assert client.get(f"/api/tasks/{task_id}/files/blob.bin").status_code == 415
+
+
+def test_get_task_file_over_preview_limit_returns_413(client):
+    big = b"x" * (1024 * 1024 + 1)
+    task_id = upload(client, task_zip(extra={"big.txt": big})).json()["id"]
+
+    assert client.get(f"/api/tasks/{task_id}/files/big.txt").status_code == 413

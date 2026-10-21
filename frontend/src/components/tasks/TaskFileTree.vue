@@ -1,7 +1,7 @@
 <script setup>
 import { formatBytes } from '../../utils/format.js'
 
-defineProps({
+const props = defineProps({
   nodes: {
     type: Array,
     default: () => [],
@@ -10,26 +10,37 @@ defineProps({
     type: Number,
     default: 0,
   },
-  highlightPath: {
+  selectedPath: {
     type: String,
-    default: 'task.toml',
+    default: '',
   },
 })
+
+const emit = defineEmits(['select'])
+
+function onNodeClick(node) {
+  if (!node.isDir) {
+    emit('select', node)
+  }
+}
 </script>
 
 <template>
   <ul class="space-y-0.5">
     <li v-for="node in nodes" :key="node.path">
-      <div
-        class="flex items-center gap-2 rounded-[2px] py-1 pr-1 font-mono text-[11px]"
+      <component
+        :is="node.isDir ? 'div' : 'button'"
+        :type="node.isDir ? undefined : 'button'"
+        class="file-tree-row flex w-full items-center gap-2 rounded-[2px] py-1 pr-1 text-left font-mono text-[11px]"
         :class="[
-          node.isDir ? 'font-medium text-ink' : 'text-muted',
+          node.isDir ? 'font-medium text-ink' : 'text-muted file-tree-row--clickable',
           {
             'file-tree-row--highlight':
-              !node.isDir && node.path === highlightPath,
+              !node.isDir && node.path === selectedPath,
           },
         ]"
         :style="{ paddingLeft: `${depth * 14 + 4}px` }"
+        @click="onNodeClick(node)"
       >
         <svg
           v-if="node.isDir"
@@ -67,13 +78,14 @@ defineProps({
         >
           {{ formatBytes(node.size) }}
         </span>
-      </div>
+      </component>
 
       <TaskFileTree
         v-if="node.isDir && node.children.length"
         :nodes="node.children"
         :depth="depth + 1"
-        :highlight-path="highlightPath"
+        :selected-path="selectedPath"
+        @select="emit('select', $event)"
       />
     </li>
   </ul>

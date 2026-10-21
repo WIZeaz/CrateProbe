@@ -207,6 +207,14 @@ export default {
     return response.data
   },
 
+  // Raw text of one file inside a task definition zip.
+  async getTaskFile(taskId, path) {
+    const response = await api.get(`/tasks/${taskId}/files/${encodePath(path)}`, {
+      responseType: 'text',
+    })
+    return response.data
+  },
+
   // Relative download URL for a task definition zip (for <a :href>).
   taskZipUrl(taskId) {
     return `/api/tasks/${taskId}/zip`

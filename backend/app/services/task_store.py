@@ -19,10 +19,19 @@ logger = logging.getLogger(__name__)
 # task.toml is script/config-level content; a decompressed member larger than
 # this indicates a hostile archive rather than a real task definition.
 _TASK_TOML_MAX_BYTES = 1024 * 1024  # 1 MiB
+_FILE_PREVIEW_MAX_BYTES = 1024 * 1024  # 1 MiB
 
 
 class ZipValidationError(ValueError):
     """Raised when an uploaded task zip fails validation."""
+
+
+class FilePreviewTooLargeError(ValueError):
+    """Raised when a zip member exceeds the preview size cap."""
+
+    def __init__(self, max_bytes: int):
+        super().__init__(f"file exceeds preview limit of {max_bytes} bytes")
+        self.max_bytes = max_bytes
 
 
 _EXAMPLE_TASK_TOML = """\
@@ -114,6 +123,31 @@ class TaskStore:
         with zipfile.ZipFile(zip_path) as zf:
             data = zf.read("task.toml")
         return data.decode("utf-8", errors="replace")
+
+    @staticmethod
+    def read_member(
+        zip_path: Path,
+        member: str,
+        max_bytes: int = _FILE_PREVIEW_MAX_BYTES,
+    ) -> bytes:
+        """Read one member from a task zip for previewing.
+
+        Raises ``FileNotFoundError`` when the member is missing,
+        ``IsADirectoryError`` for directory entries, and
+        ``FilePreviewTooLargeError`` past ``max_bytes``.
+        """
+        with zipfile.ZipFile(zip_path) as zf:
+            try:
+                info = zf.getinfo(member)
+            except KeyError as exc:
+                raise FileNotFoundError(member) from exc
+            if info.is_dir():
+                raise IsADirectoryError(member)
+            with zf.open(info) as handle:
+                data = handle.read(max_bytes + 1)
+        if len(data) > max_bytes:
+            raise FilePreviewTooLargeError(max_bytes)
+        return data
 
     @staticmethod
     def _write_zip_atomically(zip_path: Path, zip_bytes: bytes) -> None:

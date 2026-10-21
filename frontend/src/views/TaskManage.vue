@@ -37,14 +37,28 @@ const detailLoading = ref(false)
 const detailError = ref('')
 const tomlContent = ref('')
 const taskFiles = ref({ entries: [], total_size: 0 })
-const highlightedToml = computed(() => highlightToml(tomlContent.value))
 const fileTree = computed(() => buildFileTree(taskFiles.value.entries || []))
 const treeStats = computed(() => countTree(fileTree.value))
 const fileCount = computed(() => treeStats.value.files)
 const folderCount = computed(() => treeStats.value.folders)
-const taskTomlSize = computed(() => {
+
+// File preview inside the detail dialog: task.toml by default, any text
+// file in the zip on click.
+const selectedFilePath = ref('task.toml')
+const filePreviewContent = ref('')
+const filePreviewLoading = ref(false)
+const filePreviewError = ref('')
+let filePreviewRequestId = 0
+
+const selectedFileIsToml = computed(
+  () => selectedFilePath.value === 'task.toml'
+)
+const highlightedPreview = computed(() =>
+  selectedFileIsToml.value ? highlightToml(tomlContent.value) : ''
+)
+const selectedFileSize = computed(() => {
   const entry = (taskFiles.value.entries || []).find(
-    item => item.path === 'task.toml' && !item.is_dir
+    item => item.path === selectedFilePath.value && !item.is_dir
   )
   return entry ? formatBytes(entry.size) : '—'
 })
@@ -106,6 +120,11 @@ async function openDetail(task) {
   detailError.value = ''
   tomlContent.value = ''
   taskFiles.value = { entries: [], total_size: 0 }
+  selectedFilePath.value = 'task.toml'
+  filePreviewContent.value = ''
+  filePreviewLoading.value = false
+  filePreviewError.value = ''
+  filePreviewRequestId += 1
   detailLoading.value = true
 
   if (detailDialog.value && !detailDialog.value.open) {
@@ -133,15 +152,51 @@ async function openDetail(task) {
   }
 }
 
+async function selectTaskFile(node) {
+  if (!detailTask.value) return
+
+  selectedFilePath.value = node.path
+  filePreviewError.value = ''
+  if (node.path === 'task.toml') {
+    filePreviewContent.value = ''
+    filePreviewLoading.value = false
+    filePreviewRequestId += 1
+    return
+  }
+
+  const requestId = ++filePreviewRequestId
+  filePreviewLoading.value = true
+  try {
+    const text = await api.getTaskFile(detailTask.value.id, node.path)
+    if (requestId === filePreviewRequestId) {
+      filePreviewContent.value = text
+    }
+  } catch (err) {
+    if (requestId === filePreviewRequestId) {
+      filePreviewContent.value = ''
+      filePreviewError.value = extractError(err)
+    }
+  } finally {
+    if (requestId === filePreviewRequestId) {
+      filePreviewLoading.value = false
+    }
+  }
+}
+
 function closeDetail() {
   detailDialog.value?.close()
 }
 
 function handleDetailClosed() {
   detailRequestId += 1
+  filePreviewRequestId += 1
   detailTask.value = null
   tomlContent.value = ''
   taskFiles.value = { entries: [], total_size: 0 }
+  selectedFilePath.value = 'task.toml'
+  filePreviewContent.value = ''
+  filePreviewLoading.value = false
+  filePreviewError.value = ''
   detailError.value = ''
   detailLoading.value = false
 }
@@ -723,18 +778,35 @@ onMounted(() => {
                 {{ formatBytes(taskFiles.total_size) }}
               </p>
               <div class="mt-2 max-h-[40vh] overflow-y-auto pr-1">
-                <TaskFileTree :nodes="fileTree" />
+                <TaskFileTree
+                  :nodes="fileTree"
+                  :selected-path="selectedFilePath"
+                  @select="selectTaskFile"
+                />
               </div>
             </section>
 
             <section class="detail-subpanel">
               <div class="flex items-baseline justify-between gap-3">
-                <h3 class="text-[12px] font-semibold text-ink">task.toml</h3>
+                <h3
+                  class="truncate font-mono text-[12px] font-semibold text-ink"
+                  :title="selectedFilePath"
+                >
+                  {{ selectedFilePath }}
+                </h3>
                 <span class="font-mono text-[10px] text-muted">
-                  {{ taskTomlSize }}
+                  {{ selectedFileSize }}
                 </span>
               </div>
-              <pre class="code-block toml-code mt-2"><code v-html="highlightedToml"></code></pre>
+
+              <div v-if="filePreviewLoading" class="mt-3 flex justify-center py-8">
+                <div class="spinner"></div>
+              </div>
+              <div v-else-if="filePreviewError" class="notice notice--error mt-3">
+                <p class="notice__title">Cannot preview this file.</p>
+                <p class="notice__detail">{{ filePreviewError }}</p>
+              </div>
+              <pre v-else class="code-block toml-code mt-2"><code v-if="selectedFileIsToml" v-html="highlightedPreview"></code><code v-else>{{ filePreviewContent }}</code></pre>
             </section>
           </div>
         </div>

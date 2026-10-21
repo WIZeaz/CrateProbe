@@ -492,6 +492,18 @@ body {
     );
   }
 
+  .file-tree-row--clickable {
+    cursor: pointer;
+  }
+
+  .file-tree-row--clickable:hover {
+    background-color: color-mix(
+      in oklab,
+      var(--color-signal) 4%,
+      transparent
+    );
+  }
+
   .file-tree-row--highlight {
     background-color: color-mix(
       in oklab,
