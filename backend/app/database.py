@@ -586,6 +586,71 @@ class Database:
 
         return [self._row_to_job_record(row) for row in rows]
 
+    _JOB_SORT_SQL = {
+        "id": "id",
+        "crate_name": "crate_name",
+        "version": "version",
+        "task_name": "task_name",
+        "status": "status",
+        "started_at": "started_at",
+        "runner_id": "runner_id",
+        "created_at": "created_at",
+        "runtime": "(julianday(COALESCE(finished_at, 'now')) - julianday(started_at))",
+    }
+
+    def query_jobs(
+        self,
+        *,
+        status: Optional[str] = None,
+        crate_name: Optional[str] = None,
+        task_name: Optional[str] = None,
+        sort_by: str = "created_at",
+        sort_dir: str = "desc",
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[int, List[JobRecord]]:
+        """Query jobs with compound filters, sorting and pagination.
+
+        ``crate_name`` and ``task_name`` match case-insensitively as
+        substrings. Returns ``(total_matching, page_items)``.
+        """
+        where: List[str] = []
+        params: List[object] = []
+
+        if status:
+            where.append("status = ?")
+            params.append(status)
+        if crate_name:
+            where.append("crate_name LIKE ? ESCAPE '\\'")
+            params.append(f"%{self._escape_like(crate_name)}%")
+        if task_name:
+            where.append("task_name LIKE ? ESCAPE '\\'")
+            params.append(f"%{self._escape_like(task_name)}%")
+
+        where_sql = f" WHERE {' AND '.join(where)}" if where else ""
+        cursor = self.conn.cursor()
+
+        cursor.execute(f"SELECT COUNT(*) FROM jobs{where_sql}", params)
+        total = cursor.fetchone()[0]
+
+        column = self._JOB_SORT_SQL.get(sort_by, "created_at")
+        direction = "ASC" if sort_dir == "asc" else "DESC"
+        cursor.execute(
+            f"""
+            SELECT * FROM jobs{where_sql}
+            ORDER BY ({column}) IS NULL, {column} {direction}, id DESC
+            LIMIT ? OFFSET ?
+            """,
+            [*params, limit, offset],
+        )
+        rows = cursor.fetchall()
+        return total, [self._row_to_job_record(row) for row in rows]
+
+    @staticmethod
+    def _escape_like(value: str) -> str:
+        """Escape LIKE wildcards so user input matches literally."""
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
     def get_jobs_by_status(self, status: TaskStatus) -> List[JobRecord]:
         """Get jobs filtered by status
 

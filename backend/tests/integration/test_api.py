@@ -136,13 +136,17 @@ def test_create_job_does_not_dedup_crate_version(client, app):
 
 
 def test_get_all_jobs(client, app):
-    """Test retrieving all jobs"""
+    """Test retrieving jobs (paginated envelope)"""
     create_job(client, app)
 
     response = client.get("/api/jobs")
 
     assert response.status_code == 200
-    jobs = response.json()
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["page"] == 1
+    assert payload["page_size"] == 20
+    jobs = payload["items"]
     assert len(jobs) == 1
     assert jobs[0]["crate_name"] == "serde"
     assert "runner_id" in jobs[0]
@@ -150,6 +154,81 @@ def test_get_all_jobs(client, app):
     assert "case_count" not in jobs[0]
     assert "poc_count" not in jobs[0]
     assert "compile_failed" not in jobs[0]
+
+
+def _create_jobs_for_listing(client, app, total: int):
+    """Create one task definition and `total` jobs against it."""
+    task_id = create_task_definition(app)
+    for index in range(total):
+        crate = "serde" if index % 2 == 0 else "tokio"
+        response = client.post(
+            "/api/jobs",
+            json={
+                "crate_name": crate,
+                "version": f"1.0.{index}",
+                "task_id": task_id,
+            },
+        )
+        assert response.status_code == 200
+    return task_id
+
+
+def test_list_jobs_pagination(client, app):
+    _create_jobs_for_listing(client, app, 25)
+
+    first = client.get("/api/jobs", params={"page": 1, "page_size": 20}).json()
+    second = client.get("/api/jobs", params={"page": 2, "page_size": 20}).json()
+
+    assert first["total"] == 25
+    assert len(first["items"]) == 20
+    assert second["total"] == 25
+    assert len(second["items"]) == 5
+
+    first_ids = {job["id"] for job in first["items"]}
+    second_ids = {job["id"] for job in second["items"]}
+    assert first_ids.isdisjoint(second_ids)
+
+
+def test_list_jobs_compound_filter(client, app):
+    _create_jobs_for_listing(client, app, 10)
+
+    response = client.get(
+        "/api/jobs",
+        params={"crate_name": "serde", "status": "pending", "page_size": 100},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 5
+    assert all(job["crate_name"] == "serde" for job in payload["items"])
+    assert all(job["status"] == "pending" for job in payload["items"])
+
+
+def test_list_jobs_filter_by_task_name(client, app):
+    _create_jobs_for_listing(client, app, 3)
+
+    payload = client.get(
+        "/api/jobs", params={"task_name": "cargo-rapx", "page_size": 100}
+    ).json()
+
+    assert payload["total"] == 3
+
+
+def test_list_jobs_invalid_status_returns_422(client):
+    response = client.get("/api/jobs", params={"status": "bogus"})
+    assert response.status_code == 422
+
+
+def test_list_jobs_sort_by_crate_name(client, app):
+    _create_jobs_for_listing(client, app, 4)
+
+    payload = client.get(
+        "/api/jobs",
+        params={"sort_by": "crate_name", "sort_dir": "asc", "page_size": 100},
+    ).json()
+
+    names = [job["crate_name"] for job in payload["items"]]
+    assert names == sorted(names)
 
 
 def test_get_job_by_id(client, app):
@@ -568,3 +647,40 @@ def test_batch_priority_uses_job_ids_key(client, app):
     assert response.status_code == 200
     assert response.json()["updated"] == [job_id]
     assert client.get(f"/api/jobs/{job_id}").json()["priority"] == 5
+
+
+def test_list_jobs_sort_by_runtime(client, app):
+    """Runtime sorting uses finished_at - started_at, NULLs last."""
+    from datetime import datetime, timedelta
+
+    from core.models import TaskStatus
+
+    task_id = create_task_definition(app)
+    db = app.state.scheduler.db
+    base = datetime(2026, 1, 1, 12, 0, 0)
+    runtimes = [3600, 60, 600]
+    ids = []
+    for index, runtime in enumerate(runtimes):
+        response = client.post(
+            "/api/jobs",
+            json={
+                "crate_name": f"crate{index}",
+                "version": "1.0.0",
+                "task_id": task_id,
+            },
+        )
+        job_id = response.json()["job_id"]
+        ids.append(job_id)
+        db.update_job_status(
+            job_id,
+            TaskStatus.COMPLETED,
+            started_at=base,
+            finished_at=base + timedelta(seconds=runtime),
+        )
+
+    payload = client.get(
+        "/api/jobs",
+        params={"sort_by": "runtime", "sort_dir": "asc", "page_size": 100},
+    ).json()
+
+    assert [job["id"] for job in payload["items"]] == [ids[1], ids[2], ids[0]]

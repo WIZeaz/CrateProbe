@@ -55,8 +55,25 @@ export default {
     return response.data
   },
 
-  async getJobs() {
-    const response = await api.get('/jobs')
+  async getJobs({
+    page = 1,
+    pageSize = 20,
+    status = null,
+    crateName = null,
+    taskName = null,
+    sortBy = 'created_at',
+    sortDir = 'desc',
+  } = {}) {
+    const params = {
+      page,
+      page_size: pageSize,
+      sort_by: sortBy,
+      sort_dir: sortDir,
+    }
+    if (status && status !== 'all') params.status = status
+    if (crateName) params.crate_name = crateName
+    if (taskName) params.task_name = taskName
+    const response = await api.get('/jobs', { params })
     return response.data
   },
 

@@ -23,10 +23,10 @@ let refreshInterval = null
 
 async function fetchDashboard(isRefresh = false) {
   try {
-    // Fetch dashboard stats and jobs
-    const [stats, jobs] = await Promise.all([
+    // Fetch dashboard stats and the 10 most recent jobs
+    const [stats, recent] = await Promise.all([
       api.getDashboardStats(),
-      api.getJobs()
+      api.getJobs({ pageSize: 10 }),
     ])
 
     // Map backend field names to frontend expected format
@@ -40,7 +40,7 @@ async function fetchDashboard(isRefresh = false) {
       timeout_jobs: stats.timeout,
       oom_jobs: stats.oom,
       runner_failed_jobs: stats.runner_failed,
-      recent_jobs: jobs.slice(0, 10) // Get 10 most recent jobs
+      recent_jobs: recent.items
     }
     // Only hide loading spinner after initial load
     if (!isRefresh) {

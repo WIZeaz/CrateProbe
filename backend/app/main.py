@@ -108,6 +108,27 @@ class JobDetailResponse(BaseModel):
     task_spec: dict
 
 
+class JobListItemResponse(BaseModel):
+    id: int
+    crate_name: str
+    version: str
+    status: str
+    exit_code: Optional[int]
+    created_at: str
+    started_at: Optional[str]
+    finished_at: Optional[str]
+    runner_id: Optional[str]
+    task_id: int
+    task_name: str
+
+
+class JobListResponse(BaseModel):
+    items: List[JobListItemResponse]
+    total: int
+    page: int
+    page_size: int
+
+
 class BatchPriorityRequest(BaseModel):
     job_ids: List[int]
     priority: int
@@ -689,11 +710,59 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         )
         return TaskDefinitionResponse(**_task_def_fields(record))
 
-    @app.get("/api/jobs", response_model=List[JobDetailResponse])
-    async def get_all_jobs():
-        """Get all jobs"""
-        jobs = db.get_all_jobs()
-        return [_job_to_response(job) for job in jobs]
+    @app.get("/api/jobs", response_model=JobListResponse)
+    async def get_all_jobs(
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=20, ge=1, le=1000),
+        status_filter: Optional[TaskStatus] = Query(default=None, alias="status"),
+        crate_name: Optional[str] = Query(default=None, max_length=200),
+        task_name: Optional[str] = Query(default=None, max_length=200),
+        sort_by: Literal[
+            "id",
+            "crate_name",
+            "version",
+            "task_name",
+            "status",
+            "started_at",
+            "runner_id",
+            "created_at",
+            "runtime",
+        ] = Query(default="created_at"),
+        sort_dir: Literal["asc", "desc"] = Query(default="desc"),
+    ):
+        """List jobs with compound filters, sorting and pagination."""
+        total, jobs = db.query_jobs(
+            status=status_filter.value if status_filter else None,
+            crate_name=crate_name,
+            task_name=task_name,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            limit=page_size,
+            offset=(page - 1) * page_size,
+        )
+        return JobListResponse(
+            items=[
+                JobListItemResponse(
+                    id=job.id,
+                    crate_name=job.crate_name,
+                    version=job.version,
+                    status=job.status.value,
+                    exit_code=job.exit_code,
+                    created_at=job.created_at.isoformat() if job.created_at else None,
+                    started_at=job.started_at.isoformat() if job.started_at else None,
+                    finished_at=(
+                        job.finished_at.isoformat() if job.finished_at else None
+                    ),
+                    runner_id=job.runner_id,
+                    task_id=job.task_id,
+                    task_name=job.task_name,
+                )
+                for job in jobs
+            ],
+            total=total,
+            page=page,
+            page_size=page_size,
+        )
 
     @app.post(
         "/api/admin/runners",
