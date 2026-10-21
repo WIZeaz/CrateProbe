@@ -12,29 +12,34 @@ const routes = [
   },
   {
     path: '/queue',
-    name: 'TaskQueue',
-    component: () => import('../views/TaskQueue.vue')
+    name: 'JobQueue',
+    component: () => import('../views/JobQueue.vue')
+  },
+  {
+    path: '/jobs',
+    name: 'JobList',
+    component: () => import('../views/JobList.vue')
+  },
+  {
+    path: '/jobs/new',
+    name: 'JobNew',
+    component: () => import('../views/JobNew.vue')
+  },
+  {
+    path: '/jobs/batch',
+    name: 'JobBatch',
+    component: () => import('../views/JobBatch.vue')
+  },
+  {
+    path: '/jobs/:id',
+    name: 'JobDetail',
+    component: () => import('../views/JobDetail.vue'),
+    props: true
   },
   {
     path: '/tasks',
-    name: 'TaskList',
-    component: () => import('../views/TaskList.vue')
-  },
-  {
-    path: '/tasks/new',
-    name: 'TaskNew',
-    component: () => import('../views/TaskNew.vue')
-  },
-  {
-    path: '/tasks/batch',
-    name: 'TaskBatch',
-    component: () => import('../views/TaskBatch.vue')
-  },
-  {
-    path: '/tasks/:id',
-    name: 'TaskDetail',
-    component: () => import('../views/TaskDetail.vue'),
-    props: true
+    name: 'TaskManage',
+    component: () => import('../views/TaskManage.vue')
   },
   {
     path: '/runners',
