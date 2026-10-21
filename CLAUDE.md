@@ -15,15 +15,17 @@ This is an **Experiment Platform** - an automated Rust crate testing platform th
 
 **Backend (Python/FastAPI)**
 - `backend/app/main.py` - FastAPI application with REST API and WebSocket endpoints
-- `backend/app/services/scheduler.py` - Task scheduler managing concurrent execution
-- `backend/app/services/task_executor.py` - Downloads crates and executes cargo commands
-- `backend/app/database.py` - SQLite database for task persistence
-- `backend/app/models.py` - TaskStatus enum (pending, running, completed, failed, cancelled, timeout, oom)
+- `backend/app/services/scheduler.py` - Lease reconciliation and stale-job recovery for runner-claimed jobs
+- `backend/app/services/task_store.py` - Stores and validates uploaded task definition zips (`workspace/tasks/{sha256}.zip`)
+- `backend/app/services/job_files.py` - Per-job file store (`workspace/jobs/{job_id}/files/` and `artifacts/`)
+- `backend/app/database.py` - SQLite database for task definitions, jobs, and runners
+- `backend/core/models.py` - TaskStatus enum (pending, running, completed, failed, cancelled, timeout, oom, runner_failed)
+- `backend/core/task_spec.py` - `task.toml` parsing and validation (TaskSpec)
 - `backend/app/config.py` - Configuration loaded from `config.toml`
 
 **Frontend (Vue 3 + Vite)**
 - `frontend/src/` - Vue 3 Composition API components
-- `frontend/src/views/` - Page components (Dashboard, TaskList, TaskNew, TaskDetail)
+- `frontend/src/views/` - Page components (Dashboard, JobList, JobNew, JobDetail, JobQueue, JobBatch, TaskManage, RunnerList, Settings)
 - `frontend/src/services/api.js` - Axios REST client
 - `frontend/src/services/websocket.js` - WebSocket connection manager
 - `frontend/vite.config.js` - Vite dev server with proxy to backend
@@ -92,22 +94,27 @@ cd frontend && npm install && npm run dev
 
 ## Key Design Patterns
 
-**Task Lifecycle**
-Tasks flow through states: `pending` -> `running` -> (`completed` | `failed` | `cancelled` | `timeout` | `oom`)
+**Tasks vs Jobs**
+A **task** is a reusable task definition: an uploaded zip containing a `task.toml` (name, container image, command, in-container workspace path, env, resource limits, watch/artifact paths) plus any overlay files. A **job** is one execution of a task against a specific crate version. Jobs snapshot their task definition at creation time; the snapshot is refreshed from the current definition when a runner claims a still-pending job.
+
+**Job Lifecycle**
+Jobs flow through states: `pending` -> `running` -> (`completed` | `failed` | `cancelled` | `timeout` | `oom` | `runner_failed`)
 
 **Resource Limits**
-Tasks execute with resource constraints via `systemd-run` (preferred) or `resource` module fallback. Limits configured in `config.toml`: `max_memory_gb`, `max_runtime_hours`, `max_jobs` (concurrency).
+Limits are declared per task in `task.toml` under `[limit]` (`cpu`, `mem`, `timeout`) and enforced by Docker on the runner; there are no global memory/runtime limits in `config.toml`. Runner-side concurrency is controlled by the runner's own `RUNNER_MAX_JOBS` env var. Backend `config.toml` only caps upload sizes (`[tasks]` section: `task_upload_max_mb`, `file_push_max_mb`, `artifact_max_mb`).
 
 **WebSocket Updates**
 - `/ws/dashboard` - Real-time dashboard stats
-- `/ws/tasks/{task_id}` - Individual task status updates
+- `/ws/jobs/{job_id}` - Individual job status updates
 
 **Workspace Structure**
 ```
 workspace/
-├── repos/          # Downloaded crate source code
-├── logs/           # stdout/stderr logs per task
-└── tasks.db        # SQLite database
+├── tasks/                  # Uploaded task definition zips, content-addressed ({sha256}.zip)
+├── jobs/{job_id}/
+│   ├── files/              # Files pushed by the runner (stdout.log/stderr.log/runner.log, watch files)
+│   └── artifacts/          # Artifacts uploaded after the job finishes
+└── tasks.db                # SQLite database
 ```
 
 **Testing**
@@ -135,4 +142,4 @@ workspace/
 - Log external command execution with command summary, exit code, duration, and truncated stdout/stderr pointers (store full output in task log files, not DB fields).
 - Use UTC timestamps and consistent formatting across backend and runner logs.
 - Avoid high-volume logging inside tight loops; sample or aggregate when necessary.
-- Ensure logs under `workspace/logs/` are rotated or cleaned up to prevent unbounded disk usage.
+- Ensure files under `workspace/jobs/` are rotated or cleaned up to prevent unbounded disk usage.

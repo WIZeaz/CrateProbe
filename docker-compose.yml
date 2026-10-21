@@ -37,9 +37,6 @@ services:
       - RUNNER_ID=local-runner
       - RUNNER_TOKEN=${RUNNER_TOKEN}
       - RUNNER_MAX_JOBS=3
-      - RUNNER_MAX_MEMORY_GB=20
-      - RUNNER_MAX_RUNTIME_SECONDS=86400
-      - RUNNER_DOCKER_IMAGE=rust-cargo-rapx:latest
       - RUNNER_DOCKER_PULL_POLICY=if-not-present
     depends_on:
       - backend

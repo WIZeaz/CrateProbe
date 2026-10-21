@@ -26,3 +26,11 @@ max_state_sync_interval_seconds = 120
 
 [security]
 admin_token = ""
+
+[tasks]
+# Max size of a task definition zip upload (MB)
+task_upload_max_mb = 100
+# Max size of a single runner file-push payload (MB)
+file_push_max_mb = 10
+# Max size of a single artifact upload (MB)
+artifact_max_mb = 1024
