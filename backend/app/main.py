@@ -2,7 +2,6 @@ import uvicorn
 import logging
 import base64
 import json
-import shutil
 import uuid
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
@@ -10,6 +9,7 @@ from fastapi import (
     Depends,
     FastAPI,
     File,
+    Form,
     Header,
     HTTPException,
     Query,
@@ -17,7 +17,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import RedirectResponse, PlainTextResponse
+from fastapi.responses import FileResponse, RedirectResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
 from pathlib import Path
@@ -33,6 +33,11 @@ from app.services.scheduler import TaskScheduler
 from app.services.system_monitor import SystemMonitor
 from app.services.runner_metrics_store import RunnerMetricsStore, RunnerMetricPoint
 from app.services.task_store import TaskStore, ZipValidationError
+from app.services.job_files import (
+    ArtifactTooLargeError,
+    JobFileStore,
+    PathSafetyError,
+)
 from app.security import generate_runner_token, generate_salt, hash_token, verify_token
 from app.utils.file_utils import read_last_n_lines
 from app.utils.file_utils import FileNotFoundError as CustomFileNotFoundError
@@ -119,14 +124,16 @@ class RunnerCreateResponse(RunnerResponse):
     token_hint: str
 
 
-class ClaimTaskResponse(BaseModel):
-    id: int
+class ClaimJobResponse(BaseModel):
+    job_id: int
     crate_name: str
     version: str
     status: str
     runner_id: Optional[str]
     lease_token: str
     lease_expires_at: Optional[str]
+    task_id: int
+    task_sha256: str
 
 
 class ClaimTaskRequest(BaseModel):
@@ -143,15 +150,12 @@ class RunnerTaskSyncRequest(BaseModel):
     message: Optional[str] = None
 
 
-class RunnerTaskLogChunkRequest(BaseModel):
+class RunnerFilePushRequest(BaseModel):
     lease_token: str
-    chunk_seq: int
+    path: str
+    mode: Literal["append", "full"]
     content: str
-
-
-class RunnerTaskLogRequest(BaseModel):
-    lease_token: str
-    content: str
+    chunk_seq: Optional[int] = None
 
 
 class RunnerMetricsRequest(BaseModel):
@@ -186,28 +190,16 @@ class RunnerMetricsQueryResponse(BaseModel):
     series: List[RunnerLatestMetricsResponse]
 
 
-RUNNER_LOG_TYPES = {"stdout", "stderr", "runner"}
-
-
 def resolve_job_file_path(config: Config, job_id: int, log_type: str) -> Path:
     return (
         Path(config.workspace_path) / "jobs" / str(job_id) / "files" / f"{log_type}.log"
     )
 
 
-def _clear_job_files(job_id: int, db: Database, config: Config) -> None:
-    """Clear pushed files and artifacts for a job.
-
-    Inline implementation for now; Task 4 extracts this into JobFileStore.
-    """
+def _clear_job_files(job_id: int, db: Database, job_files: JobFileStore) -> None:
+    """Reset chunk-sequence state and clear pushed files/artifacts for a job."""
     db.reset_job_file_chunk_sequences(job_id)
-    job_dir = Path(config.workspace_path) / "jobs" / str(job_id)
-    for subdir in ("files", "artifacts"):
-        shutil.rmtree(job_dir / subdir, ignore_errors=True)
-    logger.info(
-        "job files cleared",
-        extra={"job_id": job_id, "path": str(job_dir)},
-    )
+    job_files.clear(job_id)
 
 
 def _parse_task_spec(spec: str) -> dict:
@@ -262,6 +254,11 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     scheduler = TaskScheduler(config, db)
     metrics_store = RunnerMetricsStore(max_age=timedelta(hours=24))
     task_store = TaskStore(Path(config.workspace_path) / "tasks")
+    job_files = JobFileStore(
+        Path(config.workspace_path),
+        config.file_push_max_mb * 1024 * 1024,
+        config.artifact_max_mb * 1024 * 1024,
+    )
 
     # Get WebSocket manager
     ws_manager = get_manager()
@@ -353,19 +350,19 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         *,
         request_id: str,
         sync_seq: Optional[int] = None,
-        log_type: Optional[str] = None,
+        path: Optional[str] = None,
         chunk_seq: Optional[int] = None,
     ) -> JobRecord:
         job = db.get_job(job_id)
         if job is None:
-            if log_type is not None:
+            if path is not None:
                 logger.warning(
-                    "runner job not found for log ingest",
+                    "runner job not found for file ingest",
                     extra={
                         "request_id": request_id,
                         "runner_id": runner_id,
                         "job_id": job_id,
-                        "log_type": log_type,
+                        "path": path,
                         "chunk_seq": chunk_seq,
                     },
                 )
@@ -393,7 +390,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                     "runner_id": runner_id,
                     "job_id": job_id,
                     "sync_seq": sync_seq,
-                    "log_type": log_type,
+                    "path": path,
                     "chunk_seq": chunk_seq,
                 },
             )
@@ -837,7 +834,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
     @app.post(
         "/api/runners/{runner_id}/claim",
-        response_model=ClaimTaskResponse,
+        response_model=ClaimJobResponse,
         responses={204: {"description": "No pending jobs"}},
     )
     async def claim_task(
@@ -883,10 +880,10 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         if job is None:
             return PlainTextResponse(status_code=204, content="")
 
-        _clear_job_files(job.id, db, config)
+        _clear_job_files(job.id, db, job_files)
 
-        return ClaimTaskResponse(
-            id=job.id,
+        return ClaimJobResponse(
+            job_id=job.id,
             crate_name=job.crate_name,
             version=job.version,
             status=job.status.value,
@@ -895,6 +892,8 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             lease_expires_at=(
                 job.lease_expires_at.isoformat() if job.lease_expires_at else None
             ),
+            task_id=job.task_id,
+            task_sha256=job.task_sha256,
         )
 
     @app.post("/api/runners/{runner_id}/jobs/{job_id}/sync")
@@ -971,12 +970,31 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
         return {"synced": applied, "last_sync_seq": last_sync_seq}
 
-    @app.post("/api/runners/{runner_id}/jobs/{job_id}/logs/{log_type}/chunks")
-    async def ingest_runner_job_log_chunk(
+    @app.get("/api/runners/{runner_id}/tasks/{task_id}/zip")
+    async def download_runner_task_zip(
+        runner_id: str,
+        task_id: int,
+        _auth: None = Depends(require_runner_auth),
+    ):
+        record = db.get_task_definition(task_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        zip_path = task_store.zip_path(record.sha256)
+        if not zip_path.is_file():
+            logger.warning(
+                "task zip missing on disk",
+                extra={"task_id": task_id, "sha256": record.sha256},
+            )
+            raise HTTPException(status_code=404, detail="Task zip not found")
+
+        return FileResponse(zip_path, media_type="application/zip")
+
+    @app.post("/api/runners/{runner_id}/jobs/{job_id}/files")
+    async def push_runner_job_file(
         runner_id: str,
         job_id: int,
-        log_type: str,
-        request: RunnerTaskLogChunkRequest,
+        request: RunnerFilePushRequest,
         x_request_id: Optional[str] = Header(default=None, alias="X-Request-ID"),
         _auth: None = Depends(require_runner_auth),
     ):
@@ -987,25 +1005,38 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             runner_id,
             request.lease_token,
             request_id=request_id,
-            log_type=log_type,
+            path=request.path,
             chunk_seq=request.chunk_seq,
         )
 
-        should_append = db.record_job_file_chunk(job_id, log_type, request.chunk_seq)
-        if should_append:
-            log_path = resolve_job_file_path(config, job_id, log_type)
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            with log_path.open("a", encoding="utf-8") as handle:
-                handle.write(request.content)
+        if request.mode == "append" and request.chunk_seq is None:
+            raise HTTPException(
+                status_code=422, detail="chunk_seq is required for append mode"
+            )
 
-        return {"appended": should_append}
+        try:
+            JobFileStore.safe_join(job_files.files_dir(job_id), request.path)
+        except PathSafetyError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
-    @app.post("/api/runners/{runner_id}/jobs/{job_id}/logs/{log_type}")
-    async def ingest_runner_job_log(
+        if request.mode == "append":
+            should_apply = db.record_job_file_chunk(
+                job_id, request.path, request.chunk_seq
+            )
+            if should_apply:
+                job_files.append_file(job_id, request.path, request.content)
+            return {"applied": should_apply}
+
+        job_files.write_full(job_id, request.path, request.content)
+        return {"applied": True}
+
+    @app.post("/api/runners/{runner_id}/jobs/{job_id}/artifacts")
+    async def upload_runner_job_artifact(
         runner_id: str,
         job_id: int,
-        log_type: str,
-        request: RunnerTaskLogRequest,
+        lease_token: str = Form(...),
+        path: str = Form(...),
+        file: UploadFile = File(...),
         x_request_id: Optional[str] = Header(default=None, alias="X-Request-ID"),
         _auth: None = Depends(require_runner_auth),
     ):
@@ -1014,17 +1045,29 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         require_job_lease(
             job_id,
             runner_id,
-            request.lease_token,
+            lease_token,
             request_id=request_id,
-            log_type=log_type,
+            path=path,
         )
 
-        log_path = resolve_job_file_path(config, job_id, log_type)
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open("w", encoding="utf-8") as handle:
-            handle.write(request.content)
+        try:
+            size = job_files.save_artifact(job_id, path, file.file)
+        except PathSafetyError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except ArtifactTooLargeError as e:
+            raise HTTPException(status_code=413, detail=str(e))
 
-        return {"written": True}
+        logger.info(
+            "artifact uploaded",
+            extra={
+                "request_id": request_id,
+                "runner_id": runner_id,
+                "job_id": job_id,
+                "path": path,
+                "size_bytes": size,
+            },
+        )
+        return {"saved": True, "size": size}
 
     @app.get("/api/jobs/{job_id}", response_model=JobDetailResponse)
     async def get_job(job_id: int):
@@ -1064,7 +1107,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
         # Reset job to pending state and clear files/artifacts from prior attempts
         db.reset_job_for_retry(job_id)
-        _clear_job_files(job_id, db, config)
+        _clear_job_files(job_id, db, job_files)
 
         return JobResponse(
             job_id=job_id,
@@ -1104,7 +1147,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                 results["skipped"].append(job_id)
             else:
                 db.reset_job_for_retry(job_id)
-                _clear_job_files(job_id, db, config)
+                _clear_job_files(job_id, db, job_files)
                 results["retried"].append(job_id)
 
         return results

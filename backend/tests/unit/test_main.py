@@ -94,7 +94,7 @@ def claim_job(client, runner_id, token):
     )
     assert response.status_code == 200
     body = response.json()
-    return body["id"], body["lease_token"]
+    return body["job_id"], body["lease_token"]
 
 
 def test_runner_helpers_can_create_and_claim_job(client):
@@ -206,26 +206,32 @@ def test_create_job_allows_different_crates_same_version(client):
     assert job1_id != job2_id
 
 
-def test_log_chunk_missing_job_logs_warning_with_fields(client, caplog):
+def test_file_push_missing_job_logs_warning_with_fields(client, caplog):
     caplog.set_level("WARNING")
     runner_id, token = create_runner_and_token(client, "runner-unknown")
 
     response = client.post(
-        f"/api/runners/{runner_id}/jobs/1/logs/unknown/chunks",
+        f"/api/runners/{runner_id}/jobs/1/files",
         headers=auth_headers(token, request_id="req-unknown"),
-        json={"lease_token": "x", "chunk_seq": 1, "content": "hello"},
+        json={
+            "lease_token": "x",
+            "path": "stdout.log",
+            "mode": "append",
+            "content": "hello",
+            "chunk_seq": 1,
+        },
     )
 
     assert response.status_code == 404
     record = next(
         r
         for r in caplog.records
-        if "runner job not found for log ingest" in r.message.lower()
+        if "runner job not found for file ingest" in r.message.lower()
     )
     assert record.request_id == "req-unknown"
     assert record.runner_id == runner_id
     assert record.job_id == 1
-    assert record.log_type == "unknown"
+    assert record.path == "stdout.log"
     assert record.chunk_seq == 1
 
 
