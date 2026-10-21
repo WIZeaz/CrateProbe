@@ -100,8 +100,34 @@ def test_config_creates_workspace_directory(tmp_path):
     config.ensure_workspace_structure()
 
     assert workspace.exists()
-    assert (workspace / "repos").exists()
-    assert (workspace / "logs").exists()
+    assert (workspace / "tasks").exists()
+    assert (workspace / "jobs").exists()
+    assert not (workspace / "repos").exists()
+    assert not (workspace / "logs").exists()
+
+
+def test_config_defaults_task_limits():
+    config = Config.from_file("nonexistent.toml")
+
+    assert config.task_upload_max_mb == 100
+    assert config.file_push_max_mb == 10
+    assert config.artifact_max_mb == 1024
+
+
+def test_config_loads_task_limits_from_file(tmp_path):
+    config_file = tmp_path / "config.toml"
+    config_file.write_text("""
+[tasks]
+task_upload_max_mb = 50
+file_push_max_mb = 5
+artifact_max_mb = 256
+""")
+
+    config = Config.from_file(str(config_file))
+
+    assert config.task_upload_max_mb == 50
+    assert config.file_push_max_mb == 5
+    assert config.artifact_max_mb == 256
 
 
 def test_config_loads_without_execution_block():

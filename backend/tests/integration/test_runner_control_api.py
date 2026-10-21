@@ -27,6 +27,23 @@ def client(app):
     return TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def mock_crates_api(monkeypatch):
+    """Avoid real crates.io calls in tests."""
+
+    class MockCratesAPI:
+        async def get_latest_version(self, _crate_name):
+            return "1.0.0"
+
+        async def verify_version_exists(self, _crate_name, _version):
+            return True
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr("app.main.CratesAPI", lambda **kwargs: MockCratesAPI())
+
+
 @pytest.fixture
 def short_lease_client(tmp_path):
     cfg = Config(
@@ -59,16 +76,33 @@ def _runner_headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _create_and_claim_task(
+def _create_task_definition(app, name="cargo-rapx") -> int:
+    db = app.state.scheduler.db
+    return db.create_task_definition(
+        name=name,
+        desc="test task",
+        sha256=f"sha256-{name}",
+        zip_path=f"/tmp/{name}.zip",
+        spec='{"name": "%s"}' % name,
+    )
+
+
+def _create_job(client: TestClient, app, crate_name="serde", version="1.0.0") -> int:
+    task_id = _create_task_definition(app, name=f"task-for-{crate_name}")
+    response = client.post(
+        "/api/jobs",
+        json={"crate_name": crate_name, "version": version, "task_id": task_id},
+    )
+    assert response.status_code == 200
+    return response.json()["job_id"]
+
+
+def _create_and_claim_job(
     client: TestClient,
     runner_id: str,
 ) -> tuple[int, str, str]:
     token = _create_runner(client, runner_id)
-    create_task_response = client.post(
-        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
-    )
-    assert create_task_response.status_code == 200
-    task_id = create_task_response.json()["task_id"]
+    job_id = _create_job(client, client.app)
 
     claim_response = client.post(
         f"/api/runners/{runner_id}/claim",
@@ -77,27 +111,27 @@ def _create_and_claim_task(
     )
     assert claim_response.status_code == 200
     lease_token = claim_response.json()["lease_token"]
-    return task_id, token, lease_token
+    return job_id, token, lease_token
 
 
 def _reconcile_until_pending(
     app,
     client: TestClient,
-    task_id: int,
+    job_id: int,
     timeout_seconds: float = 5.0,
     interval_seconds: float = 0.1,
 ):
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         app.state.scheduler.reconcile_expired_leases()
-        response = client.get(f"/api/tasks/{task_id}")
+        response = client.get(f"/api/jobs/{job_id}")
         assert response.status_code == 200
-        task_data = response.json()
-        if task_data["status"] == "pending":
-            return task_data
+        job_data = response.json()
+        if job_data["status"] == "pending":
+            return job_data
         time.sleep(interval_seconds)
 
-    pytest.fail(f"Task {task_id} did not return to pending before timeout")
+    pytest.fail(f"Job {job_id} did not return to pending before timeout")
 
 
 def test_heartbeat_rejects_invalid_token(client):
@@ -111,7 +145,7 @@ def test_heartbeat_rejects_invalid_token(client):
     assert response.status_code == 403
 
 
-def test_claim_returns_204_when_no_pending_tasks(client):
+def test_claim_returns_204_when_no_pending_jobs(client):
     token = _create_runner(client, "runner-claim-empty")
 
     response = client.post(
@@ -124,32 +158,28 @@ def test_claim_returns_204_when_no_pending_tasks(client):
     assert response.text == ""
 
 
-def test_claim_assigns_pending_task_and_returns_lease_token(client):
-    token = _create_runner(client, "runner-claim-task")
-    create_task_response = client.post(
-        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
-    )
-    assert create_task_response.status_code == 200
-    task_id = create_task_response.json()["task_id"]
+def test_claim_assigns_pending_job_and_returns_lease_token(client):
+    token = _create_runner(client, "runner-claim-job")
+    job_id = _create_job(client, client.app)
 
     claim_response = client.post(
-        "/api/runners/runner-claim-task/claim",
+        "/api/runners/runner-claim-job/claim",
         headers=_runner_headers(token),
         json={"jobs": 0, "max_jobs": 1},
     )
 
     assert claim_response.status_code == 200
     claim_data = claim_response.json()
-    assert claim_data["id"] == task_id
+    assert claim_data["id"] == job_id
     assert claim_data["status"] == "running"
-    assert claim_data["runner_id"] == "runner-claim-task"
+    assert claim_data["runner_id"] == "runner-claim-job"
     assert claim_data["lease_token"]
     assert claim_data["lease_expires_at"] is not None
 
-    task_response = client.get(f"/api/tasks/{task_id}")
-    assert task_response.status_code == 200
-    task_data = task_response.json()
-    assert task_data["status"] == "running"
+    job_response = client.get(f"/api/jobs/{job_id}")
+    assert job_response.status_code == 200
+    job_data = job_response.json()
+    assert job_data["status"] == "running"
 
 
 def test_claim_requires_jobs_and_max_jobs_payload(client):
@@ -169,11 +199,7 @@ def test_claim_requires_jobs_and_max_jobs_payload(client):
 
 def test_claim_returns_204_when_runner_reports_capacity_full(client):
     token = _create_runner(client, "runner-claim-capacity-full")
-    create_task_response = client.post(
-        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
-    )
-    assert create_task_response.status_code == 200
-    task_id = create_task_response.json()["task_id"]
+    job_id = _create_job(client, client.app)
 
     claim_response = client.post(
         "/api/runners/runner-claim-capacity-full/claim",
@@ -184,9 +210,9 @@ def test_claim_returns_204_when_runner_reports_capacity_full(client):
     assert claim_response.status_code == 204
     assert claim_response.text == ""
 
-    task_response = client.get(f"/api/tasks/{task_id}")
-    assert task_response.status_code == 200
-    assert task_response.json()["status"] == "pending"
+    job_response = client.get(f"/api/jobs/{job_id}")
+    assert job_response.status_code == 200
+    assert job_response.json()["status"] == "pending"
 
 
 def test_claim_rejects_jobs_greater_than_max_jobs(client):
@@ -249,10 +275,7 @@ def test_claim_ignores_body_runner_id_and_uses_path_runner_id(client):
     token = _create_runner(client, "runner-claim-path-authoritative")
     _create_runner(client, "runner-body-ignored")
 
-    create_task_response = client.post(
-        "/api/tasks", json={"crate_name": "serde", "version": "1.0.0"}
-    )
-    assert create_task_response.status_code == 200
+    _create_job(client, client.app)
 
     claim_response = client.post(
         "/api/runners/runner-claim-path-authoritative/claim",
@@ -264,11 +287,11 @@ def test_claim_ignores_body_runner_id_and_uses_path_runner_id(client):
     assert claim_response.json()["runner_id"] == "runner-claim-path-authoritative"
 
 
-def test_sync_endpoint_persists_runner_counts_and_message(client):
-    task_id, token, lease_token = _create_and_claim_task(client, "runner-counts-1")
+def test_sync_endpoint_persists_status_and_message(client):
+    job_id, token, lease_token = _create_and_claim_job(client, "runner-counts-1")
 
     response = client.post(
-        f"/api/runners/runner-counts-1/tasks/{task_id}/sync",
+        f"/api/runners/runner-counts-1/jobs/{job_id}/sync",
         headers=_runner_headers(token),
         json={
             "lease_token": lease_token,
@@ -276,136 +299,125 @@ def test_sync_endpoint_persists_runner_counts_and_message(client):
             "status": "completed",
             "exit_code": 0,
             "message": "All tests passed",
-            "case_count": 42,
-            "poc_count": 7,
-            "compile_failed": 3,
         },
     )
     assert response.status_code == 200
 
-    task_response = client.get(f"/api/tasks/{task_id}")
-    assert task_response.status_code == 200
-    data = task_response.json()
+    job_response = client.get(f"/api/jobs/{job_id}")
+    assert job_response.status_code == 200
+    data = job_response.json()
     assert data["status"] == "completed"
     assert data["exit_code"] == 0
     assert data["message"] == "All tests passed"
-    assert data["case_count"] == 42
-    assert data["poc_count"] == 7
-    assert data["compile_failed"] == 3
 
 
 def test_sync_endpoint_is_idempotent_for_duplicate_sync_seq(client):
-    task_id, token, lease_token = _create_and_claim_task(client, "runner-events-1")
+    job_id, token, lease_token = _create_and_claim_job(client, "runner-events-1")
 
     started_response = client.post(
-        f"/api/runners/runner-events-1/tasks/{task_id}/sync",
+        f"/api/runners/runner-events-1/jobs/{job_id}/sync",
         headers=_runner_headers(token),
         json={"lease_token": lease_token, "sync_seq": 1, "status": "running"},
     )
     assert started_response.status_code == 200
 
     completed_response = client.post(
-        f"/api/runners/runner-events-1/tasks/{task_id}/sync",
+        f"/api/runners/runner-events-1/jobs/{job_id}/sync",
         headers=_runner_headers(token),
         json={
             "lease_token": lease_token,
             "sync_seq": 2,
             "status": "completed",
-            "case_count": 10,
-            "poc_count": 2,
         },
     )
     assert completed_response.status_code == 200
 
-    before_duplicate = client.get(f"/api/tasks/{task_id}")
+    before_duplicate = client.get(f"/api/jobs/{job_id}")
     assert before_duplicate.status_code == 200
     before_data = before_duplicate.json()
     assert before_data["status"] == "completed"
     assert before_data["finished_at"] is not None
-    assert before_data["case_count"] == 10
 
     duplicate_response = client.post(
-        f"/api/runners/runner-events-1/tasks/{task_id}/sync",
+        f"/api/runners/runner-events-1/jobs/{job_id}/sync",
         headers=_runner_headers(token),
         json={
             "lease_token": lease_token,
             "sync_seq": 2,
             "status": "failed",
-            "case_count": 99,
         },
     )
     assert duplicate_response.status_code == 200
 
-    after_duplicate = client.get(f"/api/tasks/{task_id}")
+    after_duplicate = client.get(f"/api/jobs/{job_id}")
     assert after_duplicate.status_code == 200
     after_data = after_duplicate.json()
     assert after_data["status"] == "completed"
     assert after_data["finished_at"] == before_data["finished_at"]
-    assert after_data["case_count"] == 10
 
 
 def test_logs_endpoint_ignores_duplicate_chunk_seq_and_writes_once(client):
-    task_id, token, lease_token = _create_and_claim_task(client, "runner-logs-1")
+    job_id, token, lease_token = _create_and_claim_job(client, "runner-logs-1")
 
     first_chunk = client.post(
-        f"/api/runners/runner-logs-1/tasks/{task_id}/logs/stdout/chunks",
+        f"/api/runners/runner-logs-1/jobs/{job_id}/logs/stdout/chunks",
         headers=_runner_headers(token),
         json={"lease_token": lease_token, "chunk_seq": 1, "content": "hello\n"},
     )
     assert first_chunk.status_code == 200
 
     duplicate_chunk = client.post(
-        f"/api/runners/runner-logs-1/tasks/{task_id}/logs/stdout/chunks",
+        f"/api/runners/runner-logs-1/jobs/{job_id}/logs/stdout/chunks",
         headers=_runner_headers(token),
         json={"lease_token": lease_token, "chunk_seq": 1, "content": "ignored\n"},
     )
     assert duplicate_chunk.status_code == 200
 
-    raw_log = client.get(f"/api/tasks/{task_id}/logs/stdout/raw")
+    raw_log = client.get(f"/api/jobs/{job_id}/logs/stdout/raw")
     assert raw_log.status_code == 200
     assert raw_log.text == "hello\n"
 
 
 def test_logs_endpoint_full_upload_overwrites_previous_content(client):
-    task_id, token, lease_token = _create_and_claim_task(client, "runner-logs-full-1")
+    job_id, token, lease_token = _create_and_claim_job(client, "runner-logs-full-1")
 
     first_upload = client.post(
-        f"/api/runners/runner-logs-full-1/tasks/{task_id}/logs/stats-yaml",
+        f"/api/runners/runner-logs-full-1/jobs/{job_id}/logs/stdout",
         headers=_runner_headers(token),
-        json={"lease_token": lease_token, "content": "CompileFailed: 1\n"},
+        json={"lease_token": lease_token, "content": "first\n"},
     )
     assert first_upload.status_code == 200
 
     second_upload = client.post(
-        f"/api/runners/runner-logs-full-1/tasks/{task_id}/logs/stats-yaml",
+        f"/api/runners/runner-logs-full-1/jobs/{job_id}/logs/stdout",
         headers=_runner_headers(token),
-        json={"lease_token": lease_token, "content": "CompileFailed: 2\n"},
+        json={"lease_token": lease_token, "content": "second\n"},
     )
     assert second_upload.status_code == 200
 
-    raw_log = client.get(f"/api/tasks/{task_id}/logs/stats-yaml/raw")
+    raw_log = client.get(f"/api/jobs/{job_id}/logs/stdout/raw")
     assert raw_log.status_code == 200
-    assert raw_log.text == "CompileFailed: 2\n"
+    assert raw_log.text == "second\n"
 
 
 def test_retry_clears_old_logs_and_allows_chunk_seq_restart(client):
-    task_id, token, lease_token = _create_and_claim_task(client, "runner-retry-logs")
+    job_id, token, lease_token = _create_and_claim_job(client, "runner-retry-logs")
 
     first_chunk = client.post(
-        f"/api/runners/runner-retry-logs/tasks/{task_id}/logs/stdout/chunks",
+        f"/api/runners/runner-retry-logs/jobs/{job_id}/logs/stdout/chunks",
         headers=_runner_headers(token),
         json={"lease_token": lease_token, "chunk_seq": 1, "content": "old\n"},
     )
     assert first_chunk.status_code == 200
 
     complete_response = client.post(
-        f"/api/runners/runner-retry-logs/tasks/{task_id}/sync",
+        f"/api/runners/runner-retry-logs/jobs/{job_id}/sync",
         headers=_runner_headers(token),
         json={"lease_token": lease_token, "sync_seq": 1, "status": "completed"},
     )
     assert complete_response.status_code == 200
 
-    retry_response = client.post(f"/api/tasks/{task_id}/retry")
+    retry_response = client.post(f"/api/jobs/{job_id}/retry")
     assert retry_response.status_code == 200
 
     second_claim = client.post(
@@ -417,39 +429,42 @@ def test_retry_clears_old_logs_and_allows_chunk_seq_restart(client):
     second_lease_token = second_claim.json()["lease_token"]
 
     second_chunk = client.post(
-        f"/api/runners/runner-retry-logs/tasks/{task_id}/logs/stdout/chunks",
+        f"/api/runners/runner-retry-logs/jobs/{job_id}/logs/stdout/chunks",
         headers=_runner_headers(token),
         json={"lease_token": second_lease_token, "chunk_seq": 1, "content": "new\n"},
     )
     assert second_chunk.status_code == 200
 
-    raw_log = client.get(f"/api/tasks/{task_id}/logs/stdout/raw")
+    raw_log = client.get(f"/api/jobs/{job_id}/logs/stdout/raw")
     assert raw_log.status_code == 200
     assert raw_log.text == "new\n"
 
 
 def test_claim_clears_stale_logs_before_new_attempt(client, config):
-    task_id, token, lease_token = _create_and_claim_task(client, "runner-claim-clear")
+    job_id, token, lease_token = _create_and_claim_job(client, "runner-claim-clear")
 
     first_chunk = client.post(
-        f"/api/runners/runner-claim-clear/tasks/{task_id}/logs/stdout/chunks",
+        f"/api/runners/runner-claim-clear/jobs/{job_id}/logs/stdout/chunks",
         headers=_runner_headers(token),
         json={"lease_token": lease_token, "chunk_seq": 1, "content": "old\n"},
     )
     assert first_chunk.status_code == 200
 
     complete_response = client.post(
-        f"/api/runners/runner-claim-clear/tasks/{task_id}/sync",
+        f"/api/runners/runner-claim-clear/jobs/{job_id}/sync",
         headers=_runner_headers(token),
         json={"lease_token": lease_token, "sync_seq": 1, "status": "completed"},
     )
     assert complete_response.status_code == 200
 
-    retry_response = client.post(f"/api/tasks/{task_id}/retry")
+    retry_response = client.post(f"/api/jobs/{job_id}/retry")
     assert retry_response.status_code == 200
 
-    # Simulate stale content left behind before runner re-claims task.
-    stale_log_path = config.workspace_path / "logs" / "serde-1.0.0-stdout.log"
+    # Simulate stale content left behind before runner re-claims job.
+    stale_log_path = (
+        config.workspace_path / "jobs" / str(job_id) / "files" / "stdout.log"
+    )
+    stale_log_path.parent.mkdir(parents=True, exist_ok=True)
     stale_log_path.write_text("stale-before-claim\n")
 
     second_claim = client.post(
@@ -460,15 +475,15 @@ def test_claim_clears_stale_logs_before_new_attempt(client, config):
     assert second_claim.status_code == 200
 
     # Claim-time cleanup should remove stale content immediately.
-    raw_log = client.get(f"/api/tasks/{task_id}/logs/stdout/raw")
+    raw_log = client.get(f"/api/jobs/{job_id}/logs/stdout/raw")
     assert raw_log.status_code == 404
 
 
 def test_sync_endpoint_returns_409_for_lease_mismatch(client):
-    task_id, token, _lease_token = _create_and_claim_task(client, "runner-lease-1")
+    job_id, token, _lease_token = _create_and_claim_job(client, "runner-lease-1")
 
     response = client.post(
-        f"/api/runners/runner-lease-1/tasks/{task_id}/sync",
+        f"/api/runners/runner-lease-1/jobs/{job_id}/sync",
         headers=_runner_headers(token),
         json={"lease_token": "wrong-lease", "sync_seq": 1, "status": "running"},
     )
@@ -476,10 +491,10 @@ def test_sync_endpoint_returns_409_for_lease_mismatch(client):
     assert response.status_code == 409
 
 
-def test_heartbeat_extends_task_lease(short_lease_client):
-    """Regression test: heartbeat must extend RUNNING task leases to prevent 409 on log uploads."""
+def test_heartbeat_extends_job_lease(short_lease_client):
+    """Regression test: heartbeat must extend RUNNING job leases to prevent 409 on log uploads."""
     app, client = short_lease_client
-    task_id, token, lease_token = _create_and_claim_task(client, "runner-lease-hb")
+    job_id, token, lease_token = _create_and_claim_job(client, "runner-lease-hb")
 
     # Wait long enough that the original 1-second lease would have expired
     time.sleep(1.5)
@@ -491,36 +506,34 @@ def test_heartbeat_extends_task_lease(short_lease_client):
     )
     assert heartbeat_response.status_code == 200
 
-    # Run reconciliation: task should NOT be reset because lease was extended
+    # Run reconciliation: job should NOT be reset because lease was extended
     app.state.scheduler.reconcile_expired_leases()
-    task_response = client.get(f"/api/tasks/{task_id}")
-    assert task_response.status_code == 200
-    task_data = task_response.json()
-    assert task_data["status"] == "running"
+    job_response = client.get(f"/api/jobs/{job_id}")
+    assert job_response.status_code == 200
+    job_data = job_response.json()
+    assert job_data["status"] == "running"
 
     # Log chunk upload should succeed without 409
     chunk_response = client.post(
-        f"/api/runners/runner-lease-hb/tasks/{task_id}/logs/stdout/chunks",
+        f"/api/runners/runner-lease-hb/jobs/{job_id}/logs/stdout/chunks",
         headers=_runner_headers(token),
         json={"lease_token": lease_token, "chunk_seq": 1, "content": "hello\n"},
     )
     assert chunk_response.status_code == 200
 
 
-def test_reclaimed_task_accepts_chunk_seq_restart(short_lease_client):
+def test_reclaimed_job_accepts_chunk_seq_restart(short_lease_client):
     app, client = short_lease_client
-    task_id, token, lease_token = _create_and_claim_task(
-        client, "runner-reclaim-log-seq"
-    )
+    job_id, token, lease_token = _create_and_claim_job(client, "runner-reclaim-log-seq")
 
     first_chunk = client.post(
-        f"/api/runners/runner-reclaim-log-seq/tasks/{task_id}/logs/stdout/chunks",
+        f"/api/runners/runner-reclaim-log-seq/jobs/{job_id}/logs/stdout/chunks",
         headers=_runner_headers(token),
         json={"lease_token": lease_token, "chunk_seq": 1, "content": "first-attempt\n"},
     )
     assert first_chunk.status_code == 200
 
-    _reconcile_until_pending(app, client, task_id)
+    _reconcile_until_pending(app, client, job_id)
 
     second_claim = client.post(
         "/api/runners/runner-reclaim-log-seq/claim",
@@ -531,7 +544,7 @@ def test_reclaimed_task_accepts_chunk_seq_restart(short_lease_client):
     second_lease_token = second_claim.json()["lease_token"]
 
     second_chunk = client.post(
-        f"/api/runners/runner-reclaim-log-seq/tasks/{task_id}/logs/stdout/chunks",
+        f"/api/runners/runner-reclaim-log-seq/jobs/{job_id}/logs/stdout/chunks",
         headers=_runner_headers(token),
         json={
             "lease_token": second_lease_token,
@@ -544,7 +557,7 @@ def test_reclaimed_task_accepts_chunk_seq_restart(short_lease_client):
     chunk_result = second_chunk.json()
     assert chunk_result["appended"] is True
 
-    raw_log = client.get(f"/api/tasks/{task_id}/logs/stdout/raw")
+    raw_log = client.get(f"/api/jobs/{job_id}/logs/stdout/raw")
     assert raw_log.status_code == 200
     assert raw_log.text == "second-attempt\n"
 
@@ -773,7 +786,7 @@ def test_admin_runner_metrics_supports_6h_and_24h_windows(client):
 
     for window in ("6h", "24h"):
         response = client.get(
-            "/api/admin/runners/runner-window-2/metrics",
+            f"/api/admin/runners/runner-window-2/metrics",
             headers=_admin_headers(),
             params={"window": window},
         )
@@ -900,7 +913,7 @@ def test_enable_restores_runner_auth(client):
         ("delete", "delete", "/api/admin/runners/{runner_id}"),
     ],
 )
-def test_action_after_claim_requeues_task_after_lease_expiry(
+def test_action_after_claim_requeues_job_after_lease_expiry(
     short_lease_client,
     action,
     http_method,
@@ -908,7 +921,7 @@ def test_action_after_claim_requeues_task_after_lease_expiry(
 ):
     app, client = short_lease_client
     runner_id = f"runner-{action}-lease"
-    task_id, _token, _lease_token = _create_and_claim_task(client, runner_id)
+    job_id, _token, _lease_token = _create_and_claim_job(client, runner_id)
 
     action_response = getattr(client, http_method)(
         action_path.format(runner_id=runner_id),
@@ -916,21 +929,21 @@ def test_action_after_claim_requeues_task_after_lease_expiry(
     )
     assert action_response.status_code == 200
 
-    before_expiry = client.get(f"/api/tasks/{task_id}")
+    before_expiry = client.get(f"/api/jobs/{job_id}")
     assert before_expiry.status_code == 200
     assert before_expiry.json()["status"] == "running"
 
-    task_data = _reconcile_until_pending(app, client, task_id)
-    assert task_data["runner_id"] is None
-    assert task_data.get("lease_token") is None
-    assert task_data.get("lease_expires_at") is None
+    job_data = _reconcile_until_pending(app, client, job_id)
+    assert job_data["runner_id"] is None
+    assert job_data.get("lease_token") is None
+    assert job_data.get("lease_expires_at") is None
 
 
-def test_task_sync_endpoint_accepts_valid_lease(client):
-    task_id, token, lease_token = _create_and_claim_task(client, "runner-sync-valid")
+def test_job_sync_endpoint_accepts_valid_lease(client):
+    job_id, token, lease_token = _create_and_claim_job(client, "runner-sync-valid")
 
     response = client.post(
-        f"/api/runners/runner-sync-valid/tasks/{task_id}/sync",
+        f"/api/runners/runner-sync-valid/jobs/{job_id}/sync",
         headers=_runner_headers(token),
         json={"lease_token": lease_token, "sync_seq": 1, "status": "running"},
     )
@@ -938,11 +951,11 @@ def test_task_sync_endpoint_accepts_valid_lease(client):
     assert response.json()["synced"] is True
 
 
-def test_task_sync_endpoint_rejects_invalid_lease(client):
-    task_id, token, _lease_token = _create_and_claim_task(client, "runner-sync-invalid")
+def test_job_sync_endpoint_rejects_invalid_lease(client):
+    job_id, token, _lease_token = _create_and_claim_job(client, "runner-sync-invalid")
 
     response = client.post(
-        f"/api/runners/runner-sync-invalid/tasks/{task_id}/sync",
+        f"/api/runners/runner-sync-invalid/jobs/{job_id}/sync",
         headers=_runner_headers(token),
         json={"lease_token": "bad-token", "sync_seq": 1, "status": "running"},
     )

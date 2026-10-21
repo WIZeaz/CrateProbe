@@ -1,6 +1,8 @@
 import uvicorn
 import logging
 import base64
+import json
+import shutil
 import uuid
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
@@ -42,23 +44,24 @@ _crates_api_cache = TTLCache(ttl_seconds=300.0)
 
 
 # Request/Response models
-class CreateTaskRequest(BaseModel):
+class CreateJobRequest(BaseModel):
     crate_name: str
     version: Optional[str] = None
-
-
-class BatchTaskRequest(BaseModel):
-    task_ids: List[int]
-
-
-class TaskResponse(BaseModel):
     task_id: int
+
+
+class BatchJobRequest(BaseModel):
+    job_ids: List[int]
+
+
+class JobResponse(BaseModel):
+    job_id: int
     crate_name: str
     version: str
     status: str
 
 
-class TaskDetailResponse(BaseModel):
+class JobDetailResponse(BaseModel):
     id: int
     crate_name: str
     version: str
@@ -67,17 +70,18 @@ class TaskDetailResponse(BaseModel):
     created_at: str
     started_at: Optional[str]
     finished_at: Optional[str]
-    case_count: int
-    poc_count: int
     error_message: Optional[str]
     message: Optional[str]
-    compile_failed: Optional[int]
     priority: Optional[int]
     runner_id: Optional[str]
+    task_id: int
+    task_name: str
+    task_sha256: str
+    task_spec: dict
 
 
 class BatchPriorityRequest(BaseModel):
-    task_ids: List[int]
+    job_ids: List[int]
     priority: int
 
 
@@ -119,9 +123,6 @@ class RunnerTaskSyncRequest(BaseModel):
     status: str
     exit_code: Optional[int] = None
     message: Optional[str] = None
-    case_count: Optional[int] = None
-    poc_count: Optional[int] = None
-    compile_failed: Optional[int] = None
 
 
 class RunnerTaskLogChunkRequest(BaseModel):
@@ -167,24 +168,36 @@ class RunnerMetricsQueryResponse(BaseModel):
     series: List[RunnerLatestMetricsResponse]
 
 
-RUNNER_LOG_TYPES = {"stdout", "stderr", "runner", "miri_report", "stats-yaml"}
+RUNNER_LOG_TYPES = {"stdout", "stderr", "runner"}
 
 
-def resolve_log_path(task: JobRecord, log_type: str, config: Config) -> Path:
-    return Path(config.workspace_path) / "logs" / f"{task.id}-{log_type}.log"
+def resolve_job_file_path(config: Config, job_id: int, log_type: str) -> Path:
+    return (
+        Path(config.workspace_path) / "jobs" / str(job_id) / "files" / f"{log_type}.log"
+    )
 
 
-def _clear_task_logs(task: JobRecord, db: Database, config: Config) -> None:
-    db.reset_job_file_chunk_sequences(task.id)
-    for log_name in RUNNER_LOG_TYPES:
-        log_path = resolve_log_path(task, log_name, config)
-        if not log_path.exists() or not log_path.is_file():
-            continue
-        log_path.unlink()
-        logger.info(
-            "task log cleared for retry",
-            extra={"task_id": task.id, "log_type": log_name, "path": str(log_path)},
-        )
+def _clear_job_files(job_id: int, db: Database, config: Config) -> None:
+    """Clear pushed files and artifacts for a job.
+
+    Inline implementation for now; Task 4 extracts this into JobFileStore.
+    """
+    db.reset_job_file_chunk_sequences(job_id)
+    job_dir = Path(config.workspace_path) / "jobs" / str(job_id)
+    for subdir in ("files", "artifacts"):
+        shutil.rmtree(job_dir / subdir, ignore_errors=True)
+    logger.info(
+        "job files cleared",
+        extra={"job_id": job_id, "path": str(job_dir)},
+    )
+
+
+def _parse_task_spec(spec: str) -> dict:
+    try:
+        parsed = json.loads(spec)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def create_app(config: Config, db_path: str) -> FastAPI:
@@ -205,7 +218,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     async def lifespan(app: FastAPI):
         # Startup
         config.ensure_workspace_structure()
-        # Recover orphaned tasks from previous server instance
+        # Recover orphaned jobs from previous server instance
         scheduler.recover_orphaned_tasks()
         # Start scheduler in background
         import asyncio
@@ -281,8 +294,8 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         if not verify_token(token, salt, runner.token_hash):
             raise HTTPException(status_code=403, detail="Forbidden")
 
-    def require_task_lease(
-        task_id: int,
+    def require_job_lease(
+        job_id: int,
         runner_id: str,
         lease_token: str,
         *,
@@ -291,42 +304,42 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         log_type: Optional[str] = None,
         chunk_seq: Optional[int] = None,
     ) -> JobRecord:
-        task = db.get_job(task_id)
-        if task is None:
+        job = db.get_job(job_id)
+        if job is None:
             if log_type is not None:
                 logger.warning(
-                    "runner task not found for log ingest",
+                    "runner job not found for log ingest",
                     extra={
                         "request_id": request_id,
                         "runner_id": runner_id,
-                        "task_id": task_id,
+                        "job_id": job_id,
                         "log_type": log_type,
                         "chunk_seq": chunk_seq,
                     },
                 )
             else:
                 logger.warning(
-                    "runner task not found for sync ingest",
+                    "runner job not found for sync ingest",
                     extra={
                         "request_id": request_id,
                         "runner_id": runner_id,
-                        "task_id": task_id,
+                        "job_id": job_id,
                         "sync_seq": sync_seq,
                     },
                 )
-            raise HTTPException(status_code=404, detail="Task not found")
+            raise HTTPException(status_code=404, detail="Job not found")
 
         if (
-            task.runner_id != runner_id
-            or task.lease_token is None
-            or lease_token != task.lease_token
+            job.runner_id != runner_id
+            or job.lease_token is None
+            or lease_token != job.lease_token
         ):
             logger.warning(
                 "lease token mismatch",
                 extra={
                     "request_id": request_id,
                     "runner_id": runner_id,
-                    "task_id": task_id,
+                    "job_id": job_id,
                     "sync_seq": sync_seq,
                     "log_type": log_type,
                     "chunk_seq": chunk_seq,
@@ -334,7 +347,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             )
             raise HTTPException(status_code=409, detail="Lease token mismatch")
 
-        return task
+        return job
 
     def _parse_metric_timestamp(value: Optional[str]) -> datetime:
         if not value:
@@ -386,9 +399,13 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     async def root():
         return RedirectResponse(url="/docs")
 
-    @app.post("/api/tasks", response_model=TaskResponse)
-    async def create_task(request: CreateTaskRequest):
-        """Create a new task"""
+    @app.post("/api/jobs", response_model=JobResponse)
+    async def create_job(request: CreateJobRequest):
+        """Create a new job"""
+        task_def = db.get_task_definition(request.task_id)
+        if task_def is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+
         crates_api = CratesAPI(
             rate_limiter=_crates_api_rate_limiter,
             cache=_crates_api_cache,
@@ -409,78 +426,24 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                         status_code=400, detail=f"Version {version} not found"
                     )
 
-            # Check if a job already exists for this crate and version
-            existing_task = next(
-                (
-                    job
-                    for job in db.get_all_jobs()
-                    if job.crate_name == request.crate_name and job.version == version
-                ),
-                None,
-            )
-            if existing_task:
-                terminal_statuses = {
-                    TaskStatus.COMPLETED,
-                    TaskStatus.FAILED,
-                    TaskStatus.CANCELLED,
-                    TaskStatus.TIMEOUT,
-                    TaskStatus.OOM,
-                    TaskStatus.RUNNER_FAILED,
-                }
-
-                if existing_task.status == TaskStatus.RUNNING:
-                    # Already running: return existing task unchanged
-                    return TaskResponse(
-                        task_id=existing_task.id,
-                        crate_name=existing_task.crate_name,
-                        version=existing_task.version,
-                        status=existing_task.status.value,
-                    )
-
-                if existing_task.status in terminal_statuses:
-                    # Terminal task: reset for re-execution
-                    db.reset_job_for_retry(existing_task.id)
-                    reset_task = db.get_job(existing_task.id)
-                    if reset_task is not None:
-                        payload = _task_to_dict(reset_task)
-                        payload["type"] = "task_created"
-                        await ws_manager.broadcast_dashboard_update(payload)
-                    return TaskResponse(
-                        task_id=existing_task.id,
-                        crate_name=existing_task.crate_name,
-                        version=existing_task.version,
-                        status=TaskStatus.PENDING.value,
-                    )
-
-                # Non-terminal, non-running state (e.g. pending): return existing task
-                return TaskResponse(
-                    task_id=existing_task.id,
-                    crate_name=existing_task.crate_name,
-                    version=existing_task.version,
-                    status=existing_task.status.value,
-                )
-
-            # Create job in database
-            # TODO(multi-task-jobs): Task 3 rewrites this route to accept a
-            # task_id and snapshot the real task definition; the snapshot
-            # columns are placeholders until then.
-            task_id = db.create_job(
+            # Create job in database, snapshotting the task definition
+            job_id = db.create_job(
                 crate_name=request.crate_name,
                 version=version,
-                task_id=0,
-                task_name="",
-                task_sha256="",
-                task_spec="",
+                task_id=task_def.id,
+                task_name=task_def.name,
+                task_sha256=task_def.sha256,
+                task_spec=task_def.spec,
             )
 
-            created_task = db.get_job(task_id)
-            if created_task is not None:
-                payload = _task_to_dict(created_task)
-                payload["type"] = "task_created"
+            created_job = db.get_job(job_id)
+            if created_job is not None:
+                payload = _job_to_dict(created_job)
+                payload["type"] = "job_created"
                 await ws_manager.broadcast_dashboard_update(payload)
 
-            return TaskResponse(
-                task_id=task_id,
+            return JobResponse(
+                job_id=job_id,
                 crate_name=request.crate_name,
                 version=version,
                 status=TaskStatus.PENDING.value,
@@ -491,11 +454,11 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         finally:
             await crates_api.close()
 
-    @app.get("/api/tasks", response_model=List[TaskDetailResponse])
-    async def get_all_tasks():
-        """Get all tasks"""
-        tasks = db.get_all_jobs()
-        return [_task_to_response(task) for task in tasks]
+    @app.get("/api/jobs", response_model=List[JobDetailResponse])
+    async def get_all_jobs():
+        """Get all jobs"""
+        jobs = db.get_all_jobs()
+        return [_job_to_response(job) for job in jobs]
 
     @app.post(
         "/api/admin/runners",
@@ -681,7 +644,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     @app.post(
         "/api/runners/{runner_id}/claim",
         response_model=ClaimTaskResponse,
-        responses={204: {"description": "No pending tasks"}},
+        responses={204: {"description": "No pending jobs"}},
     )
     async def claim_task(
         runner_id: str,
@@ -722,42 +685,42 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         if request.jobs >= request.max_jobs:
             return PlainTextResponse(status_code=204, content="")
 
-        task = db.claim_pending_job(runner_id, config.lease_ttl_seconds)
-        if task is None:
+        job = db.claim_pending_job(runner_id, config.lease_ttl_seconds)
+        if job is None:
             return PlainTextResponse(status_code=204, content="")
 
-        _clear_task_logs(task, db, config)
+        _clear_job_files(job.id, db, config)
 
         return ClaimTaskResponse(
-            id=task.id,
-            crate_name=task.crate_name,
-            version=task.version,
-            status=task.status.value,
-            runner_id=task.runner_id,
-            lease_token=task.lease_token or "",
+            id=job.id,
+            crate_name=job.crate_name,
+            version=job.version,
+            status=job.status.value,
+            runner_id=job.runner_id,
+            lease_token=job.lease_token or "",
             lease_expires_at=(
-                task.lease_expires_at.isoformat() if task.lease_expires_at else None
+                job.lease_expires_at.isoformat() if job.lease_expires_at else None
             ),
         )
 
-    @app.post("/api/runners/{runner_id}/tasks/{task_id}/sync")
-    async def ingest_runner_task_sync(
+    @app.post("/api/runners/{runner_id}/jobs/{job_id}/sync")
+    async def ingest_runner_job_sync(
         runner_id: str,
-        task_id: int,
+        job_id: int,
         request: RunnerTaskSyncRequest,
         x_request_id: Optional[str] = Header(default=None, alias="X-Request-ID"),
         _auth: None = Depends(require_runner_auth),
     ):
         request_id = _request_id_from_header(x_request_id)
-        require_task_lease(
-            task_id,
+        require_job_lease(
+            job_id,
             runner_id,
             request.lease_token,
             request_id=request_id,
             sync_seq=request.sync_seq,
         )
         applied = db.apply_job_sync(
-            task_id,
+            job_id,
             request.sync_seq,
             request.status,
             exit_code=request.exit_code,
@@ -765,40 +728,40 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         )
         if applied is None:
             logger.warning(
-                "runner task not found for sync ingest",
+                "runner job not found for sync ingest",
                 extra={
                     "request_id": request_id,
                     "runner_id": runner_id,
-                    "task_id": task_id,
+                    "job_id": job_id,
                     "sync_seq": request.sync_seq,
                 },
             )
-            raise HTTPException(status_code=404, detail="Task not found")
+            raise HTTPException(status_code=404, detail="Job not found")
 
         if not applied:
             logger.info(
-                "runner task sync not applied",
+                "runner job sync not applied",
                 extra={
                     "request_id": request_id,
                     "runner_id": runner_id,
-                    "task_id": task_id,
+                    "job_id": job_id,
                     "sync_seq": request.sync_seq,
                 },
             )
 
-        task = db.get_job(task_id)
-        last_sync_seq = task.last_sync_seq if task is not None else 0
+        job = db.get_job(job_id)
+        last_sync_seq = job.last_sync_seq if job is not None else 0
 
         if applied:
-            updated_task = db.get_job(task_id)
-            if updated_task is not None:
-                task_payload = _task_to_dict(updated_task)
-                task_payload["type"] = "task_update"
-                await ws_manager.broadcast_task_update(task_id, task_payload)
+            updated_job = db.get_job(job_id)
+            if updated_job is not None:
+                job_payload = _job_to_dict(updated_job)
+                job_payload["type"] = "job_update"
+                await ws_manager.broadcast_job_update(job_id, job_payload)
 
-                dashboard_payload = _task_to_dict(updated_task)
+                dashboard_payload = _job_to_dict(updated_job)
                 dashboard_payload["type"] = (
-                    "task_completed"
+                    "job_completed"
                     if TaskStatus(request.status)
                     in (
                         TaskStatus.COMPLETED,
@@ -808,16 +771,16 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                         TaskStatus.OOM,
                         TaskStatus.RUNNER_FAILED,
                     )
-                    else "task_update"
+                    else "job_update"
                 )
                 await ws_manager.broadcast_dashboard_update(dashboard_payload)
 
         return {"synced": applied, "last_sync_seq": last_sync_seq}
 
-    @app.post("/api/runners/{runner_id}/tasks/{task_id}/logs/{log_type}/chunks")
-    async def ingest_runner_task_log_chunk(
+    @app.post("/api/runners/{runner_id}/jobs/{job_id}/logs/{log_type}/chunks")
+    async def ingest_runner_job_log_chunk(
         runner_id: str,
-        task_id: int,
+        job_id: int,
         log_type: str,
         request: RunnerTaskLogChunkRequest,
         x_request_id: Optional[str] = Header(default=None, alias="X-Request-ID"),
@@ -825,8 +788,8 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     ):
         request_id = _request_id_from_header(x_request_id)
 
-        task = require_task_lease(
-            task_id,
+        require_job_lease(
+            job_id,
             runner_id,
             request.lease_token,
             request_id=request_id,
@@ -834,18 +797,19 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             chunk_seq=request.chunk_seq,
         )
 
-        should_append = db.record_job_file_chunk(task_id, log_type, request.chunk_seq)
+        should_append = db.record_job_file_chunk(job_id, log_type, request.chunk_seq)
         if should_append:
-            log_path = resolve_log_path(task, log_type, config)
+            log_path = resolve_job_file_path(config, job_id, log_type)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
             with log_path.open("a", encoding="utf-8") as handle:
                 handle.write(request.content)
 
         return {"appended": should_append}
 
-    @app.post("/api/runners/{runner_id}/tasks/{task_id}/logs/{log_type}")
-    async def ingest_runner_task_log(
+    @app.post("/api/runners/{runner_id}/jobs/{job_id}/logs/{log_type}")
+    async def ingest_runner_job_log(
         runner_id: str,
-        task_id: int,
+        job_id: int,
         log_type: str,
         request: RunnerTaskLogRequest,
         x_request_id: Optional[str] = Header(default=None, alias="X-Request-ID"),
@@ -853,142 +817,149 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     ):
         request_id = _request_id_from_header(x_request_id)
 
-        task = require_task_lease(
-            task_id,
+        require_job_lease(
+            job_id,
             runner_id,
             request.lease_token,
             request_id=request_id,
             log_type=log_type,
         )
 
-        log_path = resolve_log_path(task, log_type, config)
+        log_path = resolve_job_file_path(config, job_id, log_type)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("w", encoding="utf-8") as handle:
             handle.write(request.content)
 
         return {"written": True}
 
-    @app.get("/api/tasks/{task_id}", response_model=TaskDetailResponse)
-    async def get_task(task_id: int):
-        """Get task by ID"""
-        task = db.get_job(task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail="Task not found")
-        return _task_to_response(task)
+    @app.get("/api/jobs/{job_id}", response_model=JobDetailResponse)
+    async def get_job(job_id: int):
+        """Get job by ID"""
+        job = db.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return _job_to_response(job)
 
-    @app.post("/api/tasks/{task_id}/cancel")
-    async def cancel_running_task(task_id: int):
-        """Cancel a running task (does not delete from database)"""
-        task = db.get_job(task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail="Task not found")
+    @app.post("/api/jobs/{job_id}/cancel")
+    async def cancel_running_job(job_id: int):
+        """Cancel a running job (does not delete from database)"""
+        job = db.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
 
-        if task.status != TaskStatus.RUNNING:
-            raise HTTPException(status_code=400, detail="Task is not running")
+        if job.status != TaskStatus.RUNNING:
+            raise HTTPException(status_code=400, detail="Job is not running")
 
-        await scheduler.cancel_task(task_id)
-        return {"message": "Task cancelled"}
+        await scheduler.cancel_task(job_id)
+        return {"message": "Job cancelled"}
 
-    @app.post("/api/tasks/{task_id}/retry", response_model=TaskResponse)
-    async def retry_task(task_id: int):
-        """Retry/re-execute a task by resetting it to pending state"""
-        task = db.get_job(task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail="Task not found")
+    @app.post("/api/jobs/{job_id}/retry", response_model=JobResponse)
+    async def retry_job(job_id: int):
+        """Retry/re-execute a job by resetting it to pending state"""
+        job = db.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
 
-        # Cannot retry a task that's currently running
-        if task.status == TaskStatus.RUNNING:
-            raise HTTPException(status_code=400, detail="Cannot retry a running task")
+        # Cannot retry a job that's currently running
+        if job.status == TaskStatus.RUNNING:
+            raise HTTPException(status_code=400, detail="Cannot retry a running job")
 
-        # Reset task to pending state
-        db.reset_job_for_retry(task_id)
+        # The backing task definition must still exist
+        if db.get_task_definition(job.task_id) is None:
+            raise HTTPException(status_code=400, detail="Task has been deleted")
 
-        return TaskResponse(
-            task_id=task_id,
-            crate_name=task.crate_name,
-            version=task.version,
+        # Reset job to pending state and clear files/artifacts from prior attempts
+        db.reset_job_for_retry(job_id)
+        _clear_job_files(job_id, db, config)
+
+        return JobResponse(
+            job_id=job_id,
+            crate_name=job.crate_name,
+            version=job.version,
             status=TaskStatus.PENDING.value,
         )
 
-    @app.delete("/api/tasks/{task_id}")
-    async def delete_task(task_id: int):
-        """Delete a task from database (cannot delete running tasks)"""
-        task = db.get_job(task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail="Task not found")
+    @app.delete("/api/jobs/{job_id}")
+    async def delete_job(job_id: int):
+        """Delete a job from database (cannot delete running jobs)"""
+        job = db.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
 
-        if task.status == TaskStatus.RUNNING:
+        if job.status == TaskStatus.RUNNING:
             raise HTTPException(
-                status_code=400, detail="Cannot delete running task. Cancel it first."
+                status_code=400, detail="Cannot delete running job. Cancel it first."
             )
 
-        deleted = db.delete_job(task_id)
+        deleted = db.delete_job(job_id)
         if not deleted:
-            raise HTTPException(status_code=404, detail="Task not found")
+            raise HTTPException(status_code=404, detail="Job not found")
 
-        return {"message": "Task deleted"}
+        return {"message": "Job deleted"}
 
-    @app.post("/api/tasks/batch-retry")
-    async def batch_retry_tasks(request: BatchTaskRequest):
-        """Batch retry multiple tasks"""
+    @app.post("/api/jobs/batch-retry")
+    async def batch_retry_jobs(request: BatchJobRequest):
+        """Batch retry multiple jobs"""
         results = {"retried": [], "skipped": [], "not_found": []}
 
-        for task_id in request.task_ids:
-            task = db.get_job(task_id)
-            if not task:
-                results["not_found"].append(task_id)
-            elif task.status == TaskStatus.RUNNING:
-                results["skipped"].append(task_id)
+        for job_id in request.job_ids:
+            job = db.get_job(job_id)
+            if not job:
+                results["not_found"].append(job_id)
+            elif job.status == TaskStatus.RUNNING:
+                results["skipped"].append(job_id)
             else:
-                db.reset_job_for_retry(task_id)
-                results["retried"].append(task_id)
+                db.reset_job_for_retry(job_id)
+                _clear_job_files(job_id, db, config)
+                results["retried"].append(job_id)
 
         return results
 
-    @app.post("/api/tasks/batch-delete")
-    async def batch_delete_tasks(request: BatchTaskRequest):
-        """Batch delete multiple tasks"""
+    @app.post("/api/jobs/batch-delete")
+    async def batch_delete_jobs(request: BatchJobRequest):
+        """Batch delete multiple jobs"""
         results = {"deleted": [], "skipped": [], "not_found": []}
 
-        for task_id in request.task_ids:
-            task = db.get_job(task_id)
-            if not task:
-                results["not_found"].append(task_id)
-            elif task.status == TaskStatus.RUNNING:
-                results["skipped"].append(task_id)
+        for job_id in request.job_ids:
+            job = db.get_job(job_id)
+            if not job:
+                results["not_found"].append(job_id)
+            elif job.status == TaskStatus.RUNNING:
+                results["skipped"].append(job_id)
             else:
-                db.delete_job(task_id)
-                results["deleted"].append(task_id)
+                db.delete_job(job_id)
+                results["deleted"].append(job_id)
 
         return results
 
-    @app.post("/api/tasks/batch-priority")
+    @app.post("/api/jobs/batch-priority")
     async def batch_set_priority(request: BatchPriorityRequest):
-        """Batch set priority on pending tasks. Skips non-pending tasks."""
+        """Batch set priority on pending jobs. Skips non-pending jobs."""
         results = {"updated": [], "skipped": [], "not_found": []}
-        for task_id in request.task_ids:
-            task = db.get_job(task_id)
-            if not task:
-                results["not_found"].append(task_id)
-            elif task.status != TaskStatus.PENDING:
-                results["skipped"].append(task_id)
+        for job_id in request.job_ids:
+            job = db.get_job(job_id)
+            if not job:
+                results["not_found"].append(job_id)
+            elif job.status != TaskStatus.PENDING:
+                results["skipped"].append(job_id)
             else:
-                db.update_job_priority(task_id, request.priority)
-                results["updated"].append(task_id)
+                db.update_job_priority(job_id, request.priority)
+                results["updated"].append(job_id)
         return results
 
-    @app.post("/api/tasks/batch-cancel")
-    async def batch_cancel_tasks(request: BatchTaskRequest):
-        """Batch cancel running tasks."""
+    @app.post("/api/jobs/batch-cancel")
+    async def batch_cancel_jobs(request: BatchJobRequest):
+        """Batch cancel running jobs."""
         results = {"cancelled": [], "skipped": [], "not_found": []}
-        for task_id in request.task_ids:
-            task = db.get_job(task_id)
-            if not task:
-                results["not_found"].append(task_id)
-            elif task.status != TaskStatus.RUNNING:
-                results["skipped"].append(task_id)
+        for job_id in request.job_ids:
+            job = db.get_job(job_id)
+            if not job:
+                results["not_found"].append(job_id)
+            elif job.status != TaskStatus.RUNNING:
+                results["skipped"].append(job_id)
             else:
-                await scheduler.cancel_task(task_id)
-                results["cancelled"].append(task_id)
+                await scheduler.cancel_task(job_id)
+                results["cancelled"].append(job_id)
         return results
 
     @app.get("/api/queue")
@@ -997,30 +968,26 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         running = db.get_jobs_by_status(TaskStatus.RUNNING)
         pending = db.get_pending_jobs_ordered()
         return {
-            "running": [_task_to_dict(t) for t in running],
-            "pending": [_task_to_dict(t) for t in pending],
+            "running": [_job_to_dict(j) for j in running],
+            "pending": [_job_to_dict(j) for j in pending],
         }
 
     @app.get("/api/dashboard/stats")
     async def get_dashboard_stats():
-        """Get task statistics for dashboard"""
-        all_tasks = db.get_all_jobs()
+        """Get job statistics for dashboard"""
+        all_jobs = db.get_all_jobs()
 
         stats = {
-            "total": len(all_tasks),
-            "pending": len([t for t in all_tasks if t.status == TaskStatus.PENDING]),
-            "running": len([t for t in all_tasks if t.status == TaskStatus.RUNNING]),
-            "completed": len(
-                [t for t in all_tasks if t.status == TaskStatus.COMPLETED]
-            ),
-            "failed": len([t for t in all_tasks if t.status == TaskStatus.FAILED]),
-            "cancelled": len(
-                [t for t in all_tasks if t.status == TaskStatus.CANCELLED]
-            ),
-            "timeout": len([t for t in all_tasks if t.status == TaskStatus.TIMEOUT]),
-            "oom": len([t for t in all_tasks if t.status == TaskStatus.OOM]),
+            "total": len(all_jobs),
+            "pending": len([j for j in all_jobs if j.status == TaskStatus.PENDING]),
+            "running": len([j for j in all_jobs if j.status == TaskStatus.RUNNING]),
+            "completed": len([j for j in all_jobs if j.status == TaskStatus.COMPLETED]),
+            "failed": len([j for j in all_jobs if j.status == TaskStatus.FAILED]),
+            "cancelled": len([j for j in all_jobs if j.status == TaskStatus.CANCELLED]),
+            "timeout": len([j for j in all_jobs if j.status == TaskStatus.TIMEOUT]),
+            "oom": len([j for j in all_jobs if j.status == TaskStatus.OOM]),
             "runner_failed": len(
-                [t for t in all_tasks if t.status == TaskStatus.RUNNER_FAILED]
+                [j for j in all_jobs if j.status == TaskStatus.RUNNER_FAILED]
             ),
         }
 
@@ -1032,17 +999,17 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         monitor = SystemMonitor()
         return monitor.get_system_stats()
 
-    @app.get("/api/tasks/{task_id}/logs/{log_name}")
-    async def get_task_log(
-        task_id: int, log_name: str, lines: int = Query(default=1000, ge=0)
+    @app.get("/api/jobs/{job_id}/logs/{log_name}")
+    async def get_job_log(
+        job_id: int, log_name: str, lines: int = Query(default=1000, ge=0)
     ):
-        """Get last N lines of any task log by name"""
+        """Get last N lines of any job log by name"""
 
-        task = db.get_job(task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail="Task not found")
+        job = db.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
 
-        log_path = resolve_log_path(task, log_name, config)
+        log_path = resolve_job_file_path(config, job_id, log_name)
 
         try:
             log_lines = read_last_n_lines(str(log_path), lines)
@@ -1051,38 +1018,38 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             raise HTTPException(status_code=404, detail="Log file not found")
 
     @app.get(
-        "/api/tasks/{task_id}/logs/{log_name}/raw",
+        "/api/jobs/{job_id}/logs/{log_name}/raw",
         response_class=PlainTextResponse,
     )
-    async def get_task_log_raw(task_id: int, log_name: str):
-        """Download full content of any task log by name"""
+    async def get_job_log_raw(job_id: int, log_name: str):
+        """Download full content of any job log by name"""
 
-        task = db.get_job(task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail="Task not found")
+        job = db.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
 
-        log_path = resolve_log_path(task, log_name, config)
+        log_path = resolve_job_file_path(config, job_id, log_name)
 
         if not log_path.exists():
             raise HTTPException(status_code=404, detail="Log file not found")
 
         return PlainTextResponse(log_path.read_text(encoding="utf-8", errors="replace"))
 
-    @app.websocket("/ws/tasks/{task_id}")
-    async def websocket_task_endpoint(websocket: WebSocket, task_id: int):
-        """WebSocket endpoint for real-time task status updates"""
-        # Check if task exists
-        task = db.get_job(task_id)
-        if not task:
+    @app.websocket("/ws/jobs/{job_id}")
+    async def websocket_job_endpoint(websocket: WebSocket, job_id: int):
+        """WebSocket endpoint for real-time job status updates"""
+        # Check if job exists
+        job = db.get_job(job_id)
+        if not job:
             await websocket.close(code=1000)
             return
 
         # Connect and send initial state
-        await ws_manager.connect_task(task_id, websocket)
+        await ws_manager.connect_job(job_id, websocket)
 
         try:
-            # Send initial task state
-            await websocket.send_json(_task_to_dict(task))
+            # Send initial job state
+            await websocket.send_json(_job_to_dict(job))
 
             # Keep connection alive and wait for client messages or disconnection
             while True:
@@ -1094,7 +1061,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         except Exception:
             pass
         finally:
-            ws_manager.disconnect_task(task_id, websocket)
+            ws_manager.disconnect_job(job_id, websocket)
 
     @app.websocket("/ws/dashboard")
     async def websocket_dashboard_endpoint(websocket: WebSocket):
@@ -1103,28 +1070,22 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
         try:
             # Send initial dashboard stats
-            all_tasks = db.get_all_jobs()
+            all_jobs = db.get_all_jobs()
             stats = {
-                "total": len(all_tasks),
-                "pending": len(
-                    [t for t in all_tasks if t.status == TaskStatus.PENDING]
-                ),
-                "running": len(
-                    [t for t in all_tasks if t.status == TaskStatus.RUNNING]
-                ),
+                "total": len(all_jobs),
+                "pending": len([j for j in all_jobs if j.status == TaskStatus.PENDING]),
+                "running": len([j for j in all_jobs if j.status == TaskStatus.RUNNING]),
                 "completed": len(
-                    [t for t in all_tasks if t.status == TaskStatus.COMPLETED]
+                    [j for j in all_jobs if j.status == TaskStatus.COMPLETED]
                 ),
-                "failed": len([t for t in all_tasks if t.status == TaskStatus.FAILED]),
+                "failed": len([j for j in all_jobs if j.status == TaskStatus.FAILED]),
                 "cancelled": len(
-                    [t for t in all_tasks if t.status == TaskStatus.CANCELLED]
+                    [j for j in all_jobs if j.status == TaskStatus.CANCELLED]
                 ),
-                "timeout": len(
-                    [t for t in all_tasks if t.status == TaskStatus.TIMEOUT]
-                ),
-                "oom": len([t for t in all_tasks if t.status == TaskStatus.OOM]),
+                "timeout": len([j for j in all_jobs if j.status == TaskStatus.TIMEOUT]),
+                "oom": len([j for j in all_jobs if j.status == TaskStatus.OOM]),
                 "runner_failed": len(
-                    [t for t in all_tasks if t.status == TaskStatus.RUNNER_FAILED]
+                    [j for j in all_jobs if j.status == TaskStatus.RUNNER_FAILED]
                 ),
             }
             await websocket.send_json(stats)
@@ -1144,45 +1105,47 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     return app
 
 
-def _task_to_dict(task: JobRecord) -> dict:
+def _job_to_dict(job: JobRecord) -> dict:
     """Convert JobRecord to dictionary for WebSocket"""
     return {
-        "id": task.id,
-        "crate_name": task.crate_name,
-        "version": task.version,
-        "status": task.status.value,
-        "exit_code": task.exit_code,
-        "created_at": task.created_at.isoformat() if task.created_at else None,
-        "started_at": task.started_at.isoformat() if task.started_at else None,
-        "finished_at": task.finished_at.isoformat() if task.finished_at else None,
-        "case_count": getattr(task, "case_count", None) or 0,
-        "poc_count": getattr(task, "poc_count", None) or 0,
-        "error_message": task.error_message,
-        "message": task.message,
-        "compile_failed": getattr(task, "compile_failed", None),
-        "priority": task.priority,
-        "runner_id": task.runner_id,
+        "id": job.id,
+        "crate_name": job.crate_name,
+        "version": job.version,
+        "status": job.status.value,
+        "exit_code": job.exit_code,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+        "error_message": job.error_message,
+        "message": job.message,
+        "priority": job.priority,
+        "runner_id": job.runner_id,
+        "task_id": job.task_id,
+        "task_name": job.task_name,
+        "task_sha256": job.task_sha256,
+        "task_spec": _parse_task_spec(job.task_spec),
     }
 
 
-def _task_to_response(task: JobRecord) -> TaskDetailResponse:
+def _job_to_response(job: JobRecord) -> JobDetailResponse:
     """Convert JobRecord to response model"""
-    return TaskDetailResponse(
-        id=task.id,
-        crate_name=task.crate_name,
-        version=task.version,
-        status=task.status.value,
-        exit_code=task.exit_code,
-        created_at=task.created_at.isoformat() if task.created_at else None,
-        started_at=task.started_at.isoformat() if task.started_at else None,
-        finished_at=task.finished_at.isoformat() if task.finished_at else None,
-        case_count=getattr(task, "case_count", None) or 0,
-        poc_count=getattr(task, "poc_count", None) or 0,
-        error_message=task.error_message,
-        message=task.message,
-        compile_failed=getattr(task, "compile_failed", None),
-        priority=task.priority,
-        runner_id=task.runner_id,
+    return JobDetailResponse(
+        id=job.id,
+        crate_name=job.crate_name,
+        version=job.version,
+        status=job.status.value,
+        exit_code=job.exit_code,
+        created_at=job.created_at.isoformat() if job.created_at else None,
+        started_at=job.started_at.isoformat() if job.started_at else None,
+        finished_at=job.finished_at.isoformat() if job.finished_at else None,
+        error_message=job.error_message,
+        message=job.message,
+        priority=job.priority,
+        runner_id=job.runner_id,
+        task_id=job.task_id,
+        task_name=job.task_name,
+        task_sha256=job.task_sha256,
+        task_spec=_parse_task_spec(job.task_spec),
     )
 
 

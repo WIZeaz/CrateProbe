@@ -24,6 +24,9 @@ class Config:
     state_sync_interval_seconds: int = 30
     max_state_sync_interval_seconds: int = 120
     admin_token: str = ""
+    task_upload_max_mb: int = 100
+    file_push_max_mb: int = 10
+    artifact_max_mb: int = 1024
 
     @classmethod
     def from_file(cls, path: str) -> "Config":
@@ -40,6 +43,7 @@ class Config:
         logging_cfg = data.get("logging", {})
         distributed = data.get("distributed", {})
         security = data.get("security", {})
+        tasks = data.get("tasks", {})
 
         claim_max_jobs_hard_limit = distributed.get("claim_max_jobs_hard_limit", 256)
         if claim_max_jobs_hard_limit < 1:
@@ -64,12 +68,15 @@ class Config:
                 "max_state_sync_interval_seconds", 120
             ),
             admin_token=security.get("admin_token", ""),
+            task_upload_max_mb=tasks.get("task_upload_max_mb", 100),
+            file_push_max_mb=tasks.get("file_push_max_mb", 10),
+            artifact_max_mb=tasks.get("artifact_max_mb", 1024),
         )
 
     def ensure_workspace_structure(self):
         self.workspace_path.mkdir(parents=True, exist_ok=True)
-        (self.workspace_path / "repos").mkdir(exist_ok=True)
-        (self.workspace_path / "logs").mkdir(exist_ok=True)
+        (self.workspace_path / "tasks").mkdir(exist_ok=True)
+        (self.workspace_path / "jobs").mkdir(exist_ok=True)
 
     def get_db_full_path(self) -> Path:
         db_path = Path(self.db_path)

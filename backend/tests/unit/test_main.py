@@ -1,10 +1,7 @@
 import pytest
-from datetime import datetime
 from fastapi.testclient import TestClient
 from app.main import create_app
 from app.config import Config
-import app.main as main_module
-from core.models import TaskStatus
 
 
 @pytest.fixture
@@ -33,6 +30,23 @@ def client(test_config, test_db_path):
     return TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def mock_crates_api(monkeypatch):
+    """Avoid real crates.io calls in tests."""
+
+    class MockCratesAPI:
+        async def get_latest_version(self, _crate_name):
+            return "1.0.0"
+
+        async def verify_version_exists(self, _crate_name, _version):
+            return True
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr("app.main.CratesAPI", lambda **kwargs: MockCratesAPI())
+
+
 def create_runner_and_token(client, runner_id):
     response = client.post(
         "/api/admin/runners",
@@ -51,27 +65,28 @@ def auth_headers(token, request_id=None):
     return headers
 
 
-def create_pending_task(client, monkeypatch, crate_name="serde", version="1.0.0"):
-    class MockCratesAPI:
-        async def get_latest_version(self, _crate_name):
-            return version
+def create_task_definition(client, name="cargo-rapx"):
+    db = client.app.state.scheduler.db
+    return db.create_task_definition(
+        name=name,
+        desc="test task",
+        sha256=f"sha256-{name}",
+        zip_path=f"/tmp/{name}.zip",
+        spec='{"name": "%s"}' % name,
+    )
 
-        async def verify_version_exists(self, _crate_name, _version):
-            return True
 
-        async def close(self):
-            pass
-
-    monkeypatch.setattr("app.main.CratesAPI", lambda **kwargs: MockCratesAPI())
+def create_pending_job(client, crate_name="serde", version="1.0.0"):
+    task_id = create_task_definition(client, name=f"task-for-{crate_name}")
     response = client.post(
-        "/api/tasks",
-        json={"crate_name": crate_name, "version": version},
+        "/api/jobs",
+        json={"crate_name": crate_name, "version": version, "task_id": task_id},
     )
     assert response.status_code == 200
-    return response.json()["task_id"]
+    return response.json()["job_id"]
 
 
-def claim_task(client, runner_id, token):
+def claim_job(client, runner_id, token):
     response = client.post(
         f"/api/runners/{runner_id}/claim",
         headers=auth_headers(token, request_id="req-claim"),
@@ -82,194 +97,121 @@ def claim_task(client, runner_id, token):
     return body["id"], body["lease_token"]
 
 
-def test_runner_helpers_can_create_and_claim_task(client, monkeypatch):
+def test_runner_helpers_can_create_and_claim_job(client):
     runner_id, token = create_runner_and_token(client, "runner-helper")
-    task_id = create_pending_task(client, monkeypatch, crate_name="helper-crate")
-    claimed_task_id, lease_token = claim_task(client, runner_id, token)
-    assert claimed_task_id == task_id
+    job_id = create_pending_job(client, crate_name="helper-crate")
+    claimed_job_id, lease_token = claim_job(client, runner_id, token)
+    assert claimed_job_id == job_id
     assert lease_token
 
 
-def test_create_task_returns_existing_task_if_duplicate(client, monkeypatch):
-    """Test that creating a task with same crate and version returns existing task"""
+def test_create_job_always_creates_new_job_for_same_crate_version(client):
+    """Creating a job twice for the same crate/version yields distinct jobs"""
+    task_id = create_task_definition(client)
 
-    # Mock crates API to avoid external calls
-    class MockCratesAPI:
-        async def get_latest_version(self, crate_name):
-            return "1.0.0"
-
-        async def verify_version_exists(self, crate_name, version):
-            return True
-
-        async def close(self):
-            pass
-
-    monkeypatch.setattr("app.main.CratesAPI", lambda **kwargs: MockCratesAPI())
-
-    # Create first task
     response1 = client.post(
-        "/api/tasks", json={"crate_name": "test-crate", "version": "1.0.0"}
+        "/api/jobs",
+        json={"crate_name": "test-crate", "version": "1.0.0", "task_id": task_id},
     )
     assert response1.status_code == 200
-    task1 = response1.json()
-    task1_id = task1["task_id"]
+    job1_id = response1.json()["job_id"]
 
-    # Create second task with same crate and version
     response2 = client.post(
-        "/api/tasks", json={"crate_name": "test-crate", "version": "1.0.0"}
+        "/api/jobs",
+        json={"crate_name": "test-crate", "version": "1.0.0", "task_id": task_id},
     )
     assert response2.status_code == 200
-    task2 = response2.json()
+    job2_id = response2.json()["job_id"]
 
-    # Should return the same task
-    assert task2["task_id"] == task1_id
-    assert task2["crate_name"] == "test-crate"
-    assert task2["version"] == "1.0.0"
+    assert job1_id != job2_id
 
 
-def test_create_task_running_duplicate_returns_unchanged(client, monkeypatch):
-    """Test that creating a duplicate task while it is running returns it unchanged"""
+def test_create_job_rejects_unknown_task_id(client):
+    response = client.post(
+        "/api/jobs",
+        json={"crate_name": "test-crate", "version": "1.0.0", "task_id": 99999},
+    )
+    assert response.status_code == 404
 
-    class MockCratesAPI:
-        async def get_latest_version(self, crate_name):
-            return "1.0.0"
 
-        async def verify_version_exists(self, crate_name, version):
-            return True
-
-        async def close(self):
-            pass
-
-    monkeypatch.setattr("app.main.CratesAPI", lambda **kwargs: MockCratesAPI())
-
-    task_id = create_pending_task(client, monkeypatch, crate_name="running-crate")
-    runner_id, token = create_runner_and_token(client, "runner-running-dup")
-    claimed_id, _ = claim_task(client, runner_id, token)
-    assert claimed_id == task_id
+def test_create_job_snapshots_task_definition(client):
+    task_id = create_task_definition(client, name="snapshot-task")
 
     response = client.post(
-        "/api/tasks", json={"crate_name": "running-crate", "version": "1.0.0"}
+        "/api/jobs",
+        json={"crate_name": "snap-crate", "version": "1.0.0", "task_id": task_id},
     )
     assert response.status_code == 200
-    body = response.json()
-    assert body["task_id"] == task_id
-    assert body["status"] == "running"
+    job_id = response.json()["job_id"]
+
+    detail = client.get(f"/api/jobs/{job_id}")
+    assert detail.status_code == 200
+    data = detail.json()
+    assert data["task_id"] == task_id
+    assert data["task_name"] == "snapshot-task"
+    assert data["task_sha256"] == "sha256-snapshot-task"
+    assert data["task_spec"] == {"name": "snapshot-task"}
 
 
-def test_create_task_terminal_duplicate_resets_for_retry(client, monkeypatch):
-    """Test that creating a duplicate terminal task resets it to pending"""
+def test_job_detail_has_no_crate_stats_fields(client):
+    job_id = create_pending_job(client, crate_name="stats-free-crate")
 
-    class MockCratesAPI:
-        async def get_latest_version(self, crate_name):
-            return "1.0.0"
-
-        async def verify_version_exists(self, crate_name, version):
-            return True
-
-        async def close(self):
-            pass
-
-    monkeypatch.setattr("app.main.CratesAPI", lambda **kwargs: MockCratesAPI())
-
-    task_id = create_pending_task(client, monkeypatch, crate_name="terminal-crate")
-    db = client.app.state.scheduler.db
-    db.update_task_status(
-        task_id,
-        TaskStatus.FAILED,
-        started_at=datetime.now(),
-        finished_at=datetime.now(),
-        exit_code=1,
-        error_message="boom",
-    )
-
-    response = client.post(
-        "/api/tasks", json={"crate_name": "terminal-crate", "version": "1.0.0"}
-    )
-    assert response.status_code == 200
-    body = response.json()
-    assert body["task_id"] == task_id
-    assert body["status"] == "pending"
-
-    task = db.get_task(task_id)
-    assert task.status == TaskStatus.PENDING
-    assert task.started_at is None
-    assert task.finished_at is None
-    assert task.exit_code is None
-    assert task.error_message is None
+    detail = client.get(f"/api/jobs/{job_id}")
+    assert detail.status_code == 200
+    data = detail.json()
+    assert "case_count" not in data
+    assert "poc_count" not in data
+    assert "compile_failed" not in data
 
 
-def test_create_task_allows_different_versions(client, monkeypatch):
+def test_create_job_allows_different_versions(client):
     """Test that different versions of same crate can be created"""
+    task_id = create_task_definition(client)
 
-    class MockCratesAPI:
-        async def get_latest_version(self, crate_name):
-            return "1.0.0"
-
-        async def verify_version_exists(self, crate_name, version):
-            return True
-
-        async def close(self):
-            pass
-
-    monkeypatch.setattr("app.main.CratesAPI", lambda **kwargs: MockCratesAPI())
-
-    # Create task for version 1.0.0
     response1 = client.post(
-        "/api/tasks", json={"crate_name": "test-crate", "version": "1.0.0"}
+        "/api/jobs",
+        json={"crate_name": "test-crate", "version": "1.0.0", "task_id": task_id},
     )
     assert response1.status_code == 200
-    task1_id = response1.json()["task_id"]
+    job1_id = response1.json()["job_id"]
 
-    # Create task for version 2.0.0
     response2 = client.post(
-        "/api/tasks", json={"crate_name": "test-crate", "version": "2.0.0"}
+        "/api/jobs",
+        json={"crate_name": "test-crate", "version": "2.0.0", "task_id": task_id},
     )
     assert response2.status_code == 200
-    task2_id = response2.json()["task_id"]
+    job2_id = response2.json()["job_id"]
 
-    # Should be different tasks
-    assert task1_id != task2_id
+    assert job1_id != job2_id
 
 
-def test_create_task_allows_different_crates_same_version(client, monkeypatch):
+def test_create_job_allows_different_crates_same_version(client):
     """Test that different crates with same version can be created"""
+    task_id = create_task_definition(client)
 
-    class MockCratesAPI:
-        async def get_latest_version(self, crate_name):
-            return "1.0.0"
-
-        async def verify_version_exists(self, crate_name, version):
-            return True
-
-        async def close(self):
-            pass
-
-    monkeypatch.setattr("app.main.CratesAPI", lambda **kwargs: MockCratesAPI())
-
-    # Create task for crate-a
     response1 = client.post(
-        "/api/tasks", json={"crate_name": "crate-a", "version": "1.0.0"}
+        "/api/jobs",
+        json={"crate_name": "crate-a", "version": "1.0.0", "task_id": task_id},
     )
     assert response1.status_code == 200
-    task1_id = response1.json()["task_id"]
+    job1_id = response1.json()["job_id"]
 
-    # Create task for crate-b
     response2 = client.post(
-        "/api/tasks", json={"crate_name": "crate-b", "version": "1.0.0"}
+        "/api/jobs",
+        json={"crate_name": "crate-b", "version": "1.0.0", "task_id": task_id},
     )
     assert response2.status_code == 200
-    task2_id = response2.json()["task_id"]
+    job2_id = response2.json()["job_id"]
 
-    # Should be different tasks
-    assert task1_id != task2_id
+    assert job1_id != job2_id
 
 
-def test_log_chunk_missing_task_logs_warning_with_fields(client, caplog):
+def test_log_chunk_missing_job_logs_warning_with_fields(client, caplog):
     caplog.set_level("WARNING")
     runner_id, token = create_runner_and_token(client, "runner-unknown")
 
     response = client.post(
-        f"/api/runners/{runner_id}/tasks/1/logs/unknown/chunks",
+        f"/api/runners/{runner_id}/jobs/1/logs/unknown/chunks",
         headers=auth_headers(token, request_id="req-unknown"),
         json={"lease_token": "x", "chunk_seq": 1, "content": "hello"},
     )
@@ -278,57 +220,53 @@ def test_log_chunk_missing_task_logs_warning_with_fields(client, caplog):
     record = next(
         r
         for r in caplog.records
-        if "runner task not found for log ingest" in r.message.lower()
+        if "runner job not found for log ingest" in r.message.lower()
     )
     assert record.request_id == "req-unknown"
     assert record.runner_id == runner_id
-    assert record.task_id == 1
+    assert record.job_id == 1
     assert record.log_type == "unknown"
     assert record.chunk_seq == 1
 
 
-def test_sync_endpoint_updates_status_and_counts(client, monkeypatch):
+def test_sync_endpoint_updates_status(client):
     runner_id, token = create_runner_and_token(client, "runner-sync")
-    task_id = create_pending_task(client, monkeypatch, crate_name="sync-crate")
-    claimed_task_id, lease_token = claim_task(client, runner_id, token)
-    assert claimed_task_id == task_id
+    job_id = create_pending_job(client, crate_name="sync-crate")
+    claimed_job_id, lease_token = claim_job(client, runner_id, token)
+    assert claimed_job_id == job_id
 
     response = client.post(
-        f"/api/runners/{runner_id}/tasks/{task_id}/sync",
+        f"/api/runners/{runner_id}/jobs/{job_id}/sync",
         headers=auth_headers(token),
         json={
             "lease_token": lease_token,
             "sync_seq": 1,
             "status": "running",
-            "case_count": 3,
-            "poc_count": 1,
         },
     )
     assert response.status_code == 200
     assert response.json()["synced"] is True
 
-    task_response = client.get(f"/api/tasks/{task_id}")
-    assert task_response.status_code == 200
-    task_data = task_response.json()
-    assert task_data["status"] == "running"
-    assert task_data["case_count"] == 3
-    assert task_data["poc_count"] == 1
+    job_response = client.get(f"/api/jobs/{job_id}")
+    assert job_response.status_code == 200
+    job_data = job_response.json()
+    assert job_data["status"] == "running"
 
 
-def test_sync_endpoint_terminal_status_sets_finished_at(client, monkeypatch):
+def test_sync_endpoint_terminal_status_sets_finished_at(client):
     runner_id, token = create_runner_and_token(client, "runner-sync-term")
-    task_id = create_pending_task(client, monkeypatch, crate_name="sync-term-crate")
-    claimed_task_id, lease_token = claim_task(client, runner_id, token)
-    assert claimed_task_id == task_id
+    job_id = create_pending_job(client, crate_name="sync-term-crate")
+    claimed_job_id, lease_token = claim_job(client, runner_id, token)
+    assert claimed_job_id == job_id
 
     client.post(
-        f"/api/runners/{runner_id}/tasks/{task_id}/sync",
+        f"/api/runners/{runner_id}/jobs/{job_id}/sync",
         headers=auth_headers(token),
         json={"lease_token": lease_token, "sync_seq": 1, "status": "running"},
     )
 
     response = client.post(
-        f"/api/runners/{runner_id}/tasks/{task_id}/sync",
+        f"/api/runners/{runner_id}/jobs/{job_id}/sync",
         headers=auth_headers(token),
         json={
             "lease_token": lease_token,
@@ -336,69 +274,63 @@ def test_sync_endpoint_terminal_status_sets_finished_at(client, monkeypatch):
             "status": "completed",
             "exit_code": 0,
             "message": "Done",
-            "case_count": 10,
-            "poc_count": 5,
         },
     )
     assert response.status_code == 200
     assert response.json()["synced"] is True
 
-    task_response = client.get(f"/api/tasks/{task_id}")
-    assert task_response.status_code == 200
-    task_data = task_response.json()
-    assert task_data["status"] == "completed"
-    assert task_data["finished_at"] is not None
-    assert task_data["exit_code"] == 0
-    assert task_data["message"] == "Done"
-    assert task_data["case_count"] == 10
+    job_response = client.get(f"/api/jobs/{job_id}")
+    assert job_response.status_code == 200
+    job_data = job_response.json()
+    assert job_data["status"] == "completed"
+    assert job_data["finished_at"] is not None
+    assert job_data["exit_code"] == 0
+    assert job_data["message"] == "Done"
 
 
-def test_sync_endpoint_idempotent_for_duplicate_seq(client, monkeypatch):
+def test_sync_endpoint_idempotent_for_duplicate_seq(client):
     runner_id, token = create_runner_and_token(client, "runner-sync-dup")
-    task_id = create_pending_task(client, monkeypatch, crate_name="sync-dup-crate")
-    claimed_task_id, lease_token = claim_task(client, runner_id, token)
-    assert claimed_task_id == task_id
+    job_id = create_pending_job(client, crate_name="sync-dup-crate")
+    claimed_job_id, lease_token = claim_job(client, runner_id, token)
+    assert claimed_job_id == job_id
 
     first = client.post(
-        f"/api/runners/{runner_id}/tasks/{task_id}/sync",
+        f"/api/runners/{runner_id}/jobs/{job_id}/sync",
         headers=auth_headers(token),
         json={
             "lease_token": lease_token,
             "sync_seq": 1,
             "status": "completed",
-            "case_count": 5,
         },
     )
     assert first.status_code == 200
     assert first.json()["synced"] is True
 
     second = client.post(
-        f"/api/runners/{runner_id}/tasks/{task_id}/sync",
+        f"/api/runners/{runner_id}/jobs/{job_id}/sync",
         headers=auth_headers(token),
         json={
             "lease_token": lease_token,
             "sync_seq": 1,
             "status": "failed",
-            "case_count": 99,
         },
     )
     assert second.status_code == 200
     assert second.json()["synced"] is False
 
-    task_response = client.get(f"/api/tasks/{task_id}")
-    assert task_response.status_code == 200
-    task_data = task_response.json()
-    assert task_data["status"] == "completed"
-    assert task_data["case_count"] == 5
+    job_response = client.get(f"/api/jobs/{job_id}")
+    assert job_response.status_code == 200
+    job_data = job_response.json()
+    assert job_data["status"] == "completed"
 
 
-def test_sync_endpoint_rejects_invalid_lease(client, monkeypatch):
+def test_sync_endpoint_rejects_invalid_lease(client):
     runner_id, token = create_runner_and_token(client, "runner-sync-lease")
-    task_id = create_pending_task(client, monkeypatch, crate_name="sync-lease-crate")
-    claim_task(client, runner_id, token)
+    job_id = create_pending_job(client, crate_name="sync-lease-crate")
+    claim_job(client, runner_id, token)
 
     response = client.post(
-        f"/api/runners/{runner_id}/tasks/{task_id}/sync",
+        f"/api/runners/{runner_id}/jobs/{job_id}/sync",
         headers=auth_headers(token),
         json={
             "lease_token": "invalid-lease",
@@ -410,12 +342,12 @@ def test_sync_endpoint_rejects_invalid_lease(client, monkeypatch):
     assert "lease" in response.json()["detail"].lower()
 
 
-def test_sync_missing_task_logs_warning_with_fields(client, caplog):
+def test_sync_missing_job_logs_warning_with_fields(client, caplog):
     caplog.set_level("WARNING")
     runner_id, token = create_runner_and_token(client, "runner-sync-missing")
 
     response = client.post(
-        f"/api/runners/{runner_id}/tasks/999999/sync",
+        f"/api/runners/{runner_id}/jobs/999999/sync",
         headers=auth_headers(token, request_id="req-sync-missing"),
         json={"lease_token": "x", "sync_seq": 1, "status": "running"},
     )
@@ -424,22 +356,22 @@ def test_sync_missing_task_logs_warning_with_fields(client, caplog):
     record = next(
         r
         for r in caplog.records
-        if "task not found" in r.message.lower() and "sync" in r.message.lower()
+        if "job not found" in r.message.lower() and "sync" in r.message.lower()
     )
     assert record.request_id == "req-sync-missing"
     assert record.runner_id == runner_id
-    assert record.task_id == 999999
+    assert record.job_id == 999999
     assert record.sync_seq == 1
 
 
-def test_task_sync_endpoint_updates_last_state_sync_at(client, monkeypatch):
+def test_job_sync_endpoint_updates_last_state_sync_at(client):
     runner_id, token = create_runner_and_token(client, "runner-sync")
-    task_id = create_pending_task(client, monkeypatch, crate_name="sync-crate")
-    claimed_task_id, lease_token = claim_task(client, runner_id, token)
-    assert claimed_task_id == task_id
+    job_id = create_pending_job(client, crate_name="sync-crate")
+    claimed_job_id, lease_token = claim_job(client, runner_id, token)
+    assert claimed_job_id == job_id
 
     response = client.post(
-        f"/api/runners/{runner_id}/tasks/{task_id}/sync",
+        f"/api/runners/{runner_id}/jobs/{job_id}/sync",
         headers=auth_headers(token),
         json={"lease_token": lease_token, "sync_seq": 1, "status": "running"},
     )
@@ -448,13 +380,13 @@ def test_task_sync_endpoint_updates_last_state_sync_at(client, monkeypatch):
     assert response.json()["synced"] is True
 
 
-def test_task_sync_endpoint_rejects_invalid_lease(client, monkeypatch):
+def test_job_sync_endpoint_rejects_invalid_lease(client):
     runner_id, token = create_runner_and_token(client, "runner-sync-bad")
-    task_id = create_pending_task(client, monkeypatch, crate_name="sync-bad-crate")
-    claim_task(client, runner_id, token)
+    job_id = create_pending_job(client, crate_name="sync-bad-crate")
+    claim_job(client, runner_id, token)
 
     response = client.post(
-        f"/api/runners/{runner_id}/tasks/{task_id}/sync",
+        f"/api/runners/{runner_id}/jobs/{job_id}/sync",
         headers=auth_headers(token),
         json={"lease_token": "invalid-lease", "sync_seq": 1, "status": "running"},
     )
@@ -463,9 +395,9 @@ def test_task_sync_endpoint_rejects_invalid_lease(client, monkeypatch):
     assert "lease" in response.json()["detail"].lower()
 
 
-def test_dashboard_stats_includes_runner_failed(client, monkeypatch):
-    # Create a task and mark it as runner_failed directly via DB
-    task_id = create_pending_task(client, monkeypatch, crate_name="stats-crate")
+def test_dashboard_stats_includes_runner_failed(client):
+    # Create a job and mark it as runner_failed directly via DB
+    create_pending_job(client, crate_name="stats-crate")
     # We cannot easily set runner_failed through API, so just verify the field exists
     response = client.get("/api/dashboard/stats")
     assert response.status_code == 200

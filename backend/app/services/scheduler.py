@@ -42,7 +42,7 @@ class TaskScheduler:
         self.db.conn.commit()
         if cursor.rowcount > 0:
             logger.warning(
-                "requeued running tasks with expired lease",
+                "requeued running jobs with expired lease",
                 extra={
                     "requeued_count": cursor.rowcount,
                     "from_status": TaskStatus.RUNNING.value,
@@ -67,19 +67,19 @@ class TaskScheduler:
             raise
 
     def _cleanup_remaining_tasks(self):
-        running_tasks = self.db.get_jobs_by_status(TaskStatus.RUNNING)
-        for task in running_tasks:
+        running_jobs = self.db.get_jobs_by_status(TaskStatus.RUNNING)
+        for job in running_jobs:
             self.db.update_job_status(
-                task.id,
+                job.id,
                 TaskStatus.FAILED,
                 finished_at=datetime.now(),
-                error_message="Task interrupted by server shutdown",
+                error_message="Job interrupted by server shutdown",
             )
             logger.info(
-                "task marked as failed during shutdown cleanup",
+                "job marked as failed during shutdown cleanup",
                 extra={
-                    "task_id": task.id,
-                    "crate_name": task.crate_name,
+                    "job_id": job.id,
+                    "crate_name": job.crate_name,
                     "reason": "server_shutdown",
                     "from_status": TaskStatus.RUNNING.value,
                     "to_status": TaskStatus.FAILED.value,
@@ -92,7 +92,7 @@ class TaskScheduler:
         )
         if stale_count > 0:
             logger.warning(
-                "marked stale tasks as runner_failed",
+                "marked stale jobs as runner_failed",
                 extra={
                     "stale_count": stale_count,
                     "to_status": TaskStatus.RUNNER_FAILED.value,
@@ -101,39 +101,39 @@ class TaskScheduler:
             )
 
     def recover_orphaned_tasks(self):
-        running_tasks = self.db.get_jobs_by_status(TaskStatus.RUNNING)
-        if not running_tasks:
+        running_jobs = self.db.get_jobs_by_status(TaskStatus.RUNNING)
+        if not running_jobs:
             return
         logger.warning(
-            "found orphaned running tasks on startup, marking as failed",
+            "found orphaned running jobs on startup, marking as failed",
             extra={
-                "orphaned_count": len(running_tasks),
+                "orphaned_count": len(running_jobs),
                 "from_status": TaskStatus.RUNNING.value,
                 "to_status": TaskStatus.FAILED.value,
             },
         )
-        for task in running_tasks:
+        for job in running_jobs:
             self.db.update_job_status(
-                task.id,
+                job.id,
                 TaskStatus.FAILED,
                 finished_at=datetime.now(),
-                error_message="Task interrupted by server restart",
+                error_message="Job interrupted by server restart",
             )
             logger.info(
-                "task marked as failed during orphan recovery",
+                "job marked as failed during orphan recovery",
                 extra={
-                    "task_id": task.id,
-                    "crate_name": task.crate_name,
+                    "job_id": job.id,
+                    "crate_name": job.crate_name,
                     "from_status": TaskStatus.RUNNING.value,
                     "to_status": TaskStatus.FAILED.value,
                     "reason": "server_restart",
                 },
             )
 
-    async def cancel_task(self, task_id: int):
-        task = self.db.get_job(task_id)
-        if not task or task.status != TaskStatus.RUNNING:
+    async def cancel_task(self, job_id: int):
+        job = self.db.get_job(job_id)
+        if not job or job.status != TaskStatus.RUNNING:
             return
         self.db.update_job_status(
-            task_id, TaskStatus.CANCELLED, finished_at=datetime.now()
+            job_id, TaskStatus.CANCELLED, finished_at=datetime.now()
         )
