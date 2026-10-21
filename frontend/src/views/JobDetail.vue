@@ -92,40 +92,6 @@ const watchFiles = computed(() => {
   return Array.isArray(watch) ? watch : []
 })
 
-// --- Watched files viewer ----------------------------------------------
-const activeWatchFile = ref(null)
-const watchContent = ref('')
-const watchLoading = ref(false)
-const watchError = ref(null)
-
-async function loadWatchFile(path) {
-  activeWatchFile.value = path
-  watchLoading.value = true
-  watchError.value = null
-  watchContent.value = ''
-
-  try {
-    const data = await api.getJobFile(jobId.value, path, { lines: 1000 })
-    watchContent.value =
-      data.lines && Array.isArray(data.lines) && data.lines.length > 0
-        ? data.lines.join('\n')
-        : 'No content available'
-  } catch (err) {
-    watchError.value =
-      err.response?.status === 404
-        ? 'File not available yet.'
-        : err.response?.data?.detail || err.message
-  } finally {
-    watchLoading.value = false
-  }
-}
-
-function refreshWatchFile() {
-  if (activeWatchFile.value) {
-    loadWatchFile(activeWatchFile.value)
-  }
-}
-
 // --- Artifacts -----------------------------------------------------------
 const artifacts = ref([])
 const artifactsError = ref(null)
@@ -367,60 +333,17 @@ onUnmounted(() => {
         <p v-else class="text-sm text-gray-500">Task spec unavailable or could not be parsed.</p>
       </div>
 
-      <!-- Watched Files -->
-      <div v-if="watchFiles.length > 0" class="bento-card mb-8">
-        <div class="flex items-center justify-between mb-4">
-          <h3 class="text-lg font-semibold text-gray-900">Watched Files</h3>
-          <button
-            v-if="activeWatchFile"
-            @click="refreshWatchFile"
-            :disabled="watchLoading"
-            class="px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors disabled:opacity-50"
-          >
-            {{ watchLoading ? 'Refreshing...' : '↻ Refresh' }}
-          </button>
-        </div>
-        <div class="flex" style="min-height: 200px;">
-          <!-- Left: watched file list -->
-          <div
-            class="flex flex-col flex-shrink-0 border-r border-gray-200"
-            style="width: 220px;"
-          >
-            <div class="flex flex-col gap-1 px-2 flex-1">
-              <button
-                v-for="path in watchFiles"
-                :key="path"
-                @click="loadWatchFile(path)"
-                :class="[
-                  'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-left transition-colors w-full',
-                  activeWatchFile === path
-                    ? 'bg-blue-50 border border-blue-200 text-blue-700'
-                    : 'text-gray-600 hover:bg-gray-100'
-                ]"
-              >
-                <span>📄</span>
-                <span class="truncate font-mono text-xs">{{ path }}</span>
-              </button>
-            </div>
-          </div>
+      <!-- Watches & Logs Viewer -->
+      <LogViewer
+        ref="logViewerRef"
+        :key="`log-viewer-${jobId}`"
+        :job-id="jobId"
+        :auto-scroll="job.status === 'running'"
+        :watch-files="watchFiles"
+        class="mb-8"
+      />
 
-          <!-- Right: watched file content -->
-          <div class="flex-1 min-w-0 px-4">
-            <div v-if="!activeWatchFile" class="flex items-center justify-center h-full text-sm text-gray-400">
-              Select a file to view its content
-            </div>
-            <div v-else-if="watchLoading" class="flex justify-center py-8">
-              <div class="spinner"></div>
-            </div>
-            <div v-else-if="watchError" class="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg text-sm">
-              {{ watchError }}
-            </div>
-            <pre v-else class="text-sm text-gray-900 whitespace-pre-wrap break-all" style="max-height: 400px; overflow-y: auto;">{{ watchContent }}</pre>
-          </div>
-        </div>
-      </div>
-
-      <!-- Artifacts -->
+      <!-- Artifacts (last) -->
       <div class="bento-card mb-8">
         <h3 class="text-lg font-semibold text-gray-900 mb-4">Artifacts</h3>
         <div v-if="artifactsError" class="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg text-sm">
@@ -454,9 +377,6 @@ onUnmounted(() => {
           </tbody>
         </table>
       </div>
-
-      <!-- Log Viewer -->
-      <LogViewer ref="logViewerRef" :key="`log-viewer-${jobId}`" :job-id="jobId" :auto-scroll="job.status === 'running'" />
     </div>
   </div>
 </template>
