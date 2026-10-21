@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '../services/api'
 import websocket from '../services/websocket'
@@ -87,6 +87,143 @@ const specEnvEntries = computed(() => {
   return Object.entries(env)
 })
 
+const showEnv = ref(false)
+
+// --- Runtime ticker (live while the job is running) ---------------------
+const nowMs = ref(Date.now())
+let runtimeTicker = null
+
+function startRuntimeTicker() {
+  if (runtimeTicker) return
+  nowMs.value = Date.now()
+  runtimeTicker = setInterval(() => {
+    nowMs.value = Date.now()
+  }, 1000)
+}
+
+function stopRuntimeTicker() {
+  if (runtimeTicker) {
+    clearInterval(runtimeTicker)
+    runtimeTicker = null
+  }
+}
+
+watch(
+  () => job.value?.status,
+  (status) => {
+    if (status === 'running') {
+      startRuntimeTicker()
+    } else {
+      stopRuntimeTicker()
+    }
+  }
+)
+
+const runtimeText = computed(() => {
+  const started = job.value?.started_at
+  if (!started) return '—'
+  const startMs = new Date(started).getTime()
+  const endMs = job.value?.finished_at
+    ? new Date(job.value.finished_at).getTime()
+    : nowMs.value
+  return formatDurationMs(endMs - startMs)
+})
+
+function formatDurationMs(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '—'
+  const diff = Math.floor(ms / 1000)
+  if (diff < 60) return `${diff}s`
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ${diff % 60}s`
+  const hours = Math.floor(diff / 3600)
+  const minutes = Math.floor((diff % 3600) / 60)
+  return `${hours}h ${minutes}m`
+}
+
+// --- Status timeline ----------------------------------------------------
+const STATUS_DOT = {
+  completed: 'bg-green-600 border-green-600',
+  failed: 'bg-red-600 border-red-600',
+  cancelled: 'bg-yellow-500 border-yellow-500',
+  timeout: 'bg-orange-500 border-orange-500',
+  oom: 'bg-purple-600 border-purple-600',
+  runner_failed: 'bg-red-800 border-red-800',
+}
+
+const timelineSteps = computed(() => {
+  const j = job.value
+  if (!j) return []
+  const terminal = isTerminalStatus(j.status)
+  const running = j.status === 'running'
+  return [
+    {
+      label: 'Created',
+      time: j.created_at,
+      state: 'done',
+      dotClass: 'bg-gray-900 border-gray-900',
+    },
+    {
+      label: 'Started',
+      time: j.started_at,
+      state: running ? 'active' : terminal ? 'done' : 'pending',
+      dotClass:
+        running || terminal
+          ? 'bg-gray-900 border-gray-900'
+          : 'bg-white border-gray-300',
+    },
+    {
+      label: 'Finished',
+      time: j.finished_at,
+      state: terminal ? 'done' : 'pending',
+      dotClass: terminal
+        ? STATUS_DOT[j.status] || 'bg-gray-900 border-gray-900'
+        : 'bg-white border-gray-300',
+    },
+  ]
+})
+
+function connectorClass(index) {
+  const next = timelineSteps.value[index + 1]
+  return next && next.state !== 'pending' ? 'bg-gray-900' : 'bg-gray-200'
+}
+
+function formatTime(dateStr) {
+  if (!dateStr) return '—'
+  return new Date(dateStr).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+}
+
+// --- Failure banner -----------------------------------------------------
+const failureBanner = computed(() => {
+  const j = job.value
+  if (!j) return null
+  const detail = j.error_message || j.message || ''
+  switch (j.status) {
+    case 'failed':
+      return { tone: 'red', title: 'Job failed', detail }
+    case 'runner_failed':
+      return { tone: 'red', title: 'Runner failed', detail }
+    case 'timeout':
+      return { tone: 'amber', title: 'Job timed out', detail }
+    case 'oom':
+      return { tone: 'purple', title: 'Job ran out of memory', detail }
+    case 'cancelled':
+      return { tone: 'amber', title: 'Job cancelled', detail }
+    default:
+      return j.error_message
+        ? { tone: 'red', title: 'Error', detail: j.error_message }
+        : null
+  }
+})
+
+const BANNER_TONES = {
+  red: 'bg-red-50 border-red-200 text-red-800',
+  amber: 'bg-amber-50 border-amber-200 text-amber-800',
+  purple: 'bg-purple-50 border-purple-200 text-purple-800',
+}
+
 const watchFiles = computed(() => {
   const watch = taskSpec.value?.watch
   return Array.isArray(watch) ? watch : []
@@ -151,19 +288,6 @@ function formatDate(dateStr) {
   return date.toLocaleString()
 }
 
-function formatDuration(startStr, endStr) {
-  if (!startStr) return 'N/A'
-  const start = new Date(startStr)
-  const end = endStr ? new Date(endStr) : new Date()
-  const diff = Math.floor((end - start) / 1000)
-
-  if (diff < 60) return `${diff}s`
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ${diff % 60}s`
-  const hours = Math.floor(diff / 3600)
-  const minutes = Math.floor((diff % 3600) / 60)
-  return `${hours}h ${minutes}m`
-}
-
 onMounted(() => {
   fetchJob()
   fetchArtifacts()
@@ -173,6 +297,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  stopRuntimeTicker()
   websocket.off('job_update', handleJobUpdate)
   websocket.off('job_completed', handleJobUpdate)
 })
@@ -235,102 +360,152 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- Stats Grid -->
-      <div class="bento-grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-        <div class="bento-card">
-          <p class="text-sm font-medium text-gray-600">Status</p>
-          <p class="mt-2 text-2xl font-bold text-gray-900">{{ job.status }}</p>
-        </div>
-        <div class="bento-card">
-          <p class="text-sm font-medium text-gray-600">Runtime</p>
-          <p class="mt-2 text-2xl font-bold text-gray-900">
-            {{ formatDuration(job.started_at, job.finished_at) }}
-          </p>
-        </div>
-        <div class="bento-card">
-          <p class="text-sm font-medium text-gray-600">Exit Code</p>
-          <p class="mt-2 text-2xl font-bold text-gray-900">
-            {{ job.exit_code !== null ? job.exit_code : 'N/A' }}
-          </p>
+      <!-- Failure banner -->
+      <div
+        v-if="failureBanner"
+        :class="[
+          'mb-6 border rounded-lg px-4 py-3 flex items-start gap-3',
+          BANNER_TONES[failureBanner.tone]
+        ]"
+      >
+        <svg class="w-5 h-5 shrink-0 mt-0.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <circle cx="8" cy="8" r="6.25" />
+          <path d="M8 4.75v3.5M8 11h.01" stroke-linecap="round" />
+        </svg>
+        <div class="min-w-0">
+          <p class="font-medium">{{ failureBanner.title }}</p>
+          <p v-if="failureBanner.detail" class="mt-0.5 text-sm break-words">{{ failureBanner.detail }}</p>
         </div>
       </div>
 
-      <!-- Job Details -->
+      <!-- Status timeline -->
       <div class="bento-card mb-8">
-        <h3 class="text-lg font-semibold text-gray-900 mb-4">Details</h3>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <p class="text-sm font-medium text-gray-600">Task</p>
-            <p class="mt-1 text-sm text-gray-900">
-              {{ job.task_name || 'N/A' }} <span class="text-gray-500">(#{{ job.task_id }})</span>
-            </p>
+        <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+          <div class="flex-1 min-w-0">
+            <div class="flex items-start">
+              <template v-for="(step, index) in timelineSteps" :key="step.label">
+                <div class="flex flex-col items-center w-24 shrink-0">
+                  <span
+                    :class="[
+                      'w-3 h-3 rounded-full border-2 mt-0.5',
+                      step.dotClass,
+                      step.state === 'active' ? 'animate-pulse' : ''
+                    ]"
+                  ></span>
+                  <span class="mt-2 text-xs font-medium text-gray-700">{{ step.label }}</span>
+                  <span class="mt-0.5 text-xs text-gray-500 tabular-nums" :title="formatDate(step.time)">
+                    {{ formatTime(step.time) }}
+                  </span>
+                </div>
+                <div
+                  v-if="index < timelineSteps.length - 1"
+                  :class="['flex-1 h-0.5 mt-1.5 rounded', connectorClass(index)]"
+                ></div>
+              </template>
+            </div>
           </div>
-          <div>
-            <p class="text-sm font-medium text-gray-600">Runner ID</p>
-            <div class="mt-1"><RunnerIdBadge :runner-id="job.runner_id || ''" /></div>
-          </div>
-          <div>
-            <p class="text-sm font-medium text-gray-600">Created</p>
-            <p class="mt-1 text-sm text-gray-900">{{ formatDate(job.created_at) }}</p>
-          </div>
-          <div>
-            <p class="text-sm font-medium text-gray-600">Started</p>
-            <p class="mt-1 text-sm text-gray-900">{{ formatDate(job.started_at) }}</p>
-          </div>
-          <div>
-            <p class="text-sm font-medium text-gray-600">Finished</p>
-            <p class="mt-1 text-sm text-gray-900">{{ formatDate(job.finished_at) }}</p>
-          </div>
-          <div v-if="job.message" class="md:col-span-2">
-            <p class="text-sm font-medium text-gray-600">Execution Message</p>
-            <p class="mt-1 text-sm text-gray-900 break-words">{{ job.message }}</p>
-          </div>
-          <div v-if="job.error_message">
-            <p class="text-sm font-medium text-gray-600">Error</p>
-            <p class="mt-1 text-sm text-red-600">{{ job.error_message }}</p>
+          <div class="flex items-center gap-8 md:border-l md:border-gray-200 md:pl-8">
+            <div>
+              <p class="text-xs font-medium text-gray-500">Runtime</p>
+              <p class="mt-1 text-xl font-semibold text-gray-900 tabular-nums">{{ runtimeText }}</p>
+            </div>
+            <div>
+              <p class="text-xs font-medium text-gray-500">Exit code</p>
+              <p
+                :class="[
+                  'mt-1 text-xl font-semibold tabular-nums',
+                  job.exit_code !== null && job.exit_code !== 0 ? 'text-red-600' : 'text-gray-900'
+                ]"
+              >
+                {{ job.exit_code !== null ? job.exit_code : '—' }}
+              </p>
+            </div>
           </div>
         </div>
       </div>
 
-      <!-- Task Spec Summary -->
+      <!-- Job & Task overview -->
       <div class="bento-card mb-8">
-        <h3 class="text-lg font-semibold text-gray-900 mb-4">Task Spec</h3>
-        <div v-if="taskSpec" class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <p class="text-sm font-medium text-gray-600">Name</p>
-            <p class="mt-1 text-sm text-gray-900">{{ taskSpec.name || 'N/A' }}</p>
-          </div>
-          <div>
-            <p class="text-sm font-medium text-gray-600">Image</p>
-            <p class="mt-1 text-sm text-gray-900 font-mono break-all">{{ taskSpec.image || 'N/A' }}</p>
-          </div>
-          <div class="md:col-span-2">
-            <p class="text-sm font-medium text-gray-600">Command</p>
-            <p class="mt-1 text-sm text-gray-900 font-mono break-all">{{ taskSpec.cmd || 'N/A' }}</p>
-          </div>
-          <div>
-            <p class="text-sm font-medium text-gray-600">Workspace</p>
-            <p class="mt-1 text-sm text-gray-900 font-mono break-all">{{ taskSpec.workspace || 'N/A' }}</p>
-          </div>
-          <div>
-            <p class="text-sm font-medium text-gray-600">Limits</p>
-            <p class="mt-1 text-sm text-gray-900">
-              <span v-if="specLimits.cpu">CPU: {{ specLimits.cpu }} </span>
-              <span v-if="specLimits.mem">Mem: {{ specLimits.mem }} </span>
-              <span v-if="specLimits.timeout_seconds">Timeout: {{ specLimits.timeout_seconds }}s</span>
-              <span v-if="!specLimits.cpu && !specLimits.mem && !specLimits.timeout_seconds">N/A</span>
-            </p>
-          </div>
-          <div v-if="specEnvEntries.length > 0" class="md:col-span-2">
-            <p class="text-sm font-medium text-gray-600">Environment</p>
-            <ul class="mt-1 text-sm text-gray-900 font-mono space-y-1">
-              <li v-for="[key, value] in specEnvEntries" :key="key" class="break-all">
-                {{ key }}={{ value }}
-              </li>
-            </ul>
-          </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+          <section>
+            <h3 class="text-sm font-semibold text-gray-900 mb-4">Job</h3>
+            <div class="space-y-4">
+              <div>
+                <p class="text-sm font-medium text-gray-600">Task</p>
+                <p class="mt-1 text-sm text-gray-900">
+                  {{ job.task_name || 'N/A' }} <span class="text-gray-500">(#{{ job.task_id }})</span>
+                </p>
+              </div>
+              <div>
+                <p class="text-sm font-medium text-gray-600">Runner ID</p>
+                <div class="mt-1"><RunnerIdBadge :runner-id="job.runner_id || ''" /></div>
+              </div>
+              <div v-if="job.message && !failureBanner">
+                <p class="text-sm font-medium text-gray-600">Execution message</p>
+                <p class="mt-1 text-sm text-gray-900 break-words">{{ job.message }}</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="md:border-l md:border-gray-200 md:pl-8">
+            <h3 class="text-sm font-semibold text-gray-900 mb-4">Task spec</h3>
+            <div v-if="taskSpec" class="space-y-4">
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <p class="text-sm font-medium text-gray-600">Name</p>
+                  <p class="mt-1 text-sm text-gray-900 break-words">{{ taskSpec.name || 'N/A' }}</p>
+                </div>
+                <div>
+                  <p class="text-sm font-medium text-gray-600">Image</p>
+                  <p class="mt-1 text-sm text-gray-900 font-mono break-all">{{ taskSpec.image || 'N/A' }}</p>
+                </div>
+              </div>
+              <div>
+                <p class="text-sm font-medium text-gray-600">Command</p>
+                <p class="mt-1 text-sm text-gray-900 font-mono break-all">{{ taskSpec.cmd || 'N/A' }}</p>
+              </div>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <p class="text-sm font-medium text-gray-600">Workspace</p>
+                  <p class="mt-1 text-sm text-gray-900 font-mono break-all">{{ taskSpec.workspace || 'N/A' }}</p>
+                </div>
+                <div>
+                  <p class="text-sm font-medium text-gray-600">Limits</p>
+                  <p class="mt-1 text-sm text-gray-900">
+                    <span v-if="specLimits.cpu">CPU: {{ specLimits.cpu }} </span>
+                    <span v-if="specLimits.mem">Mem: {{ specLimits.mem }} </span>
+                    <span v-if="specLimits.timeout_seconds">Timeout: {{ specLimits.timeout_seconds }}s</span>
+                    <span v-if="!specLimits.cpu && !specLimits.mem && !specLimits.timeout_seconds">N/A</span>
+                  </p>
+                </div>
+              </div>
+              <div v-if="specEnvEntries.length > 0">
+                <button
+                  @click="showEnv = !showEnv"
+                  class="inline-flex items-center gap-1 text-sm font-medium text-blue-600 hover:text-blue-500"
+                >
+                  Environment ({{ specEnvEntries.length }})
+                  <svg
+                    :class="['w-3.5 h-3.5 transition-transform', showEnv ? 'rotate-90' : '']"
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    aria-hidden="true"
+                  >
+                    <path d="m6 3.5 4.5 4.5L6 12.5" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                </button>
+                <ul v-if="showEnv" class="mt-2 text-xs text-gray-900 font-mono space-y-1 bg-gray-50 rounded-lg p-3">
+                  <li v-for="[key, value] in specEnvEntries" :key="key" class="break-all">
+                    {{ key }}={{ value }}
+                  </li>
+                </ul>
+              </div>
+            </div>
+            <p v-else class="text-sm text-gray-500">Task spec unavailable or could not be parsed.</p>
+          </section>
         </div>
-        <p v-else class="text-sm text-gray-500">Task spec unavailable or could not be parsed.</p>
       </div>
 
       <!-- Watches & Logs Viewer -->
