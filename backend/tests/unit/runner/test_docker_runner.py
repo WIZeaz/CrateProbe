@@ -14,19 +14,33 @@ import time
 @pytest.fixture
 def docker_runner():
     return DockerRunner(
-        image="rust:test",
-        max_memory_gb=8,
-        max_runtime_seconds=7200,
-        max_cpus=2,  # 2 hours
+        docker_pull_policy="if-not-present",
+        mounts=[],
+        log_sync_interval_seconds=2.0,
     )
 
 
+def _run_kwargs(workspace, stdout_log, stderr_log, **overrides):
+    kwargs = dict(
+        image="rust:test",
+        cmd="cargo rapx",
+        workspace_dir=workspace,
+        container_workspace="/workspace",
+        env={},
+        cpu=2,
+        mem="8g",
+        timeout_seconds=7200,
+        stdout_log=stdout_log,
+        stderr_log=stderr_log,
+    )
+    kwargs.update(overrides)
+    return kwargs
+
+
 def test_docker_runner_initialization(docker_runner):
-    assert docker_runner.image == "rust:test"
-    assert docker_runner.max_memory_gb == 8
-    assert docker_runner.max_runtime_seconds == 7200
-    assert docker_runner.max_cpus == 2
+    assert docker_runner.docker_pull_policy == "if-not-present"
     assert docker_runner.mounts == []
+    assert docker_runner.log_sync_interval_seconds == 2.0
 
 
 @pytest.mark.asyncio
@@ -45,16 +59,15 @@ async def test_run_builds_correct_command(docker_runner, tmp_path):
         stderr_log = tmp_path / "stderr.log"
 
         result = await docker_runner.run(
-            command=["cargo", "rapx"],
-            workspace_dir=workspace,
-            stdout_log=stdout_log,
-            stderr_log=stderr_log,
+            **_run_kwargs(workspace, stdout_log, stderr_log)
         )
 
         # Verify container was created with correct parameters
         call_kwargs = mock_client.containers.run.call_args_list[0][1]
         assert call_kwargs["image"] == "rust:test"
         assert call_kwargs["mem_limit"] == "8g"
+        assert call_kwargs["memswap_limit"] == "8g"
+        assert call_kwargs["cpu_period"] == 100000
         assert call_kwargs["cpu_quota"] == 200000  # 2 CPUs
         # Command should be wrapped with shell redirection
         assert call_kwargs["command"] == [
@@ -62,6 +75,7 @@ async def test_run_builds_correct_command(docker_runner, tmp_path):
             "-c",
             'exec cargo rapx > "/workspace/stdout.log" 2> "/workspace/stderr.log"',
         ]
+        assert call_kwargs["working_dir"] == "/workspace"
         assert call_kwargs["volumes"] == [f"{workspace.resolve()}:/workspace:rw"]
         # stdout/stderr should be disabled since we're writing to files
         # tty should be enable cause we want colored output in logs
@@ -74,12 +88,197 @@ async def test_run_builds_correct_command(docker_runner, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_run_without_limits_omits_resource_kwargs(docker_runner, tmp_path):
+    """cpu=None / mem=None must omit the corresponding docker limit kwargs."""
+    with patch("docker.from_env") as mock_docker:
+        mock_client = Mock()
+        mock_container = Mock()
+        mock_container.wait.return_value = {"StatusCode": 0}
+        mock_client.containers.run.return_value = mock_container
+        mock_docker.return_value = mock_client
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        stdout_log = tmp_path / "stdout.log"
+        stderr_log = tmp_path / "stderr.log"
+
+        result = await docker_runner.run(
+            **_run_kwargs(workspace, stdout_log, stderr_log, cpu=None, mem=None)
+        )
+
+        call_kwargs = mock_client.containers.run.call_args_list[0][1]
+        assert "mem_limit" not in call_kwargs
+        assert "memswap_limit" not in call_kwargs
+        assert "cpu_quota" not in call_kwargs
+        assert "cpu_period" not in call_kwargs
+        assert result.state == TaskStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_run_with_partial_limits(docker_runner, tmp_path):
+    """Only the provided limit should produce docker kwargs."""
+    with patch("docker.from_env") as mock_docker:
+        mock_client = Mock()
+        mock_container = Mock()
+        mock_container.wait.return_value = {"StatusCode": 0}
+        mock_client.containers.run.return_value = mock_container
+        mock_docker.return_value = mock_client
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        stdout_log = tmp_path / "stdout.log"
+        stderr_log = tmp_path / "stderr.log"
+
+        # mem only
+        await docker_runner.run(
+            **_run_kwargs(workspace, stdout_log, stderr_log, cpu=None, mem="512m")
+        )
+        call_kwargs = mock_client.containers.run.call_args_list[0][1]
+        assert call_kwargs["mem_limit"] == "512m"
+        assert call_kwargs["memswap_limit"] == "512m"
+        assert "cpu_quota" not in call_kwargs
+        assert "cpu_period" not in call_kwargs
+
+        # cpu only (index 2: index 1 is the ownership-reconciliation chown run)
+        await docker_runner.run(
+            **_run_kwargs(workspace, stdout_log, stderr_log, cpu=0.5, mem=None)
+        )
+        call_kwargs = mock_client.containers.run.call_args_list[2][1]
+        assert call_kwargs["cpu_period"] == 100000
+        assert call_kwargs["cpu_quota"] == 50000
+        assert "mem_limit" not in call_kwargs
+        assert "memswap_limit" not in call_kwargs
+
+
+@pytest.mark.asyncio
+async def test_run_uses_container_workspace_for_command_mounts_and_workdir(
+    docker_runner, tmp_path
+):
+    """container_workspace drives redirection paths, bind mount target and working_dir."""
+    with patch("docker.from_env") as mock_docker:
+        mock_client = Mock()
+        mock_container = Mock()
+        mock_container.wait.return_value = {"StatusCode": 0}
+        mock_client.containers.run.return_value = mock_container
+        mock_docker.return_value = mock_client
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        stdout_log = tmp_path / "stdout.log"
+        stderr_log = tmp_path / "stderr.log"
+
+        result = await docker_runner.run(
+            **_run_kwargs(
+                workspace, stdout_log, stderr_log, container_workspace="/work"
+            )
+        )
+
+        call_kwargs = mock_client.containers.run.call_args_list[0][1]
+        assert call_kwargs["command"] == [
+            "sh",
+            "-c",
+            'exec cargo rapx > "/work/stdout.log" 2> "/work/stderr.log"',
+        ]
+        assert call_kwargs["volumes"] == [f"{workspace.resolve()}:/work:rw"]
+        assert call_kwargs["working_dir"] == "/work"
+        assert result.state == TaskStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_run_merges_env_with_term_default(docker_runner, tmp_path):
+    """Environment passed to docker = TERM default merged with caller env."""
+    with patch("docker.from_env") as mock_docker:
+        mock_client = Mock()
+        mock_container = Mock()
+        mock_container.wait.return_value = {"StatusCode": 0}
+        mock_client.containers.run.return_value = mock_container
+        mock_docker.return_value = mock_client
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        stdout_log = tmp_path / "stdout.log"
+        stderr_log = tmp_path / "stderr.log"
+
+        await docker_runner.run(
+            **_run_kwargs(workspace, stdout_log, stderr_log, env={"FOO": "bar"})
+        )
+
+        call_kwargs = mock_client.containers.run.call_args_list[0][1]
+        assert call_kwargs["environment"] == {
+            "TERM": "xterm-256color",
+            "FOO": "bar",
+        }
+        assert "CARGO_TERM_COLOR" not in call_kwargs["environment"]
+
+
+@pytest.mark.asyncio
+async def test_run_env_can_override_term(docker_runner, tmp_path):
+    """Caller-provided env wins over the TERM default."""
+    with patch("docker.from_env") as mock_docker:
+        mock_client = Mock()
+        mock_container = Mock()
+        mock_container.wait.return_value = {"StatusCode": 0}
+        mock_client.containers.run.return_value = mock_container
+        mock_docker.return_value = mock_client
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        stdout_log = tmp_path / "stdout.log"
+        stderr_log = tmp_path / "stderr.log"
+
+        await docker_runner.run(
+            **_run_kwargs(workspace, stdout_log, stderr_log, env={"TERM": "dumb"})
+        )
+
+        call_kwargs = mock_client.containers.run.call_args_list[0][1]
+        assert call_kwargs["environment"]["TERM"] == "dumb"
+
+
+@pytest.mark.asyncio
+async def test_run_without_timeout_awaits_container_indefinitely(
+    docker_runner, tmp_path
+):
+    """timeout_seconds=None must not impose any execution time limit."""
+    stdout_log = tmp_path / "stdout.log"
+    stderr_log = tmp_path / "stderr.log"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    with patch("docker.from_env") as mock_docker:
+        mock_client = Mock()
+        mock_container = Mock()
+
+        release_wait = threading.Event()
+
+        def blocking_wait():
+            release_wait.wait(timeout=5.0)
+            return {"StatusCode": 0}
+
+        mock_container.wait.side_effect = blocking_wait
+        mock_client.containers.run.return_value = mock_container
+        mock_docker.return_value = mock_client
+
+        run_task = asyncio.create_task(
+            docker_runner.run(
+                **_run_kwargs(workspace, stdout_log, stderr_log, timeout_seconds=None)
+            )
+        )
+
+        # The container "runs" longer than any default timeout would allow;
+        # with no timeout configured the task must still be pending.
+        await asyncio.sleep(0.5)
+        assert not run_task.done()
+
+        release_wait.set()
+        result = await asyncio.wait_for(run_task, timeout=2.0)
+        assert result.state == TaskStatus.COMPLETED
+        assert result.exit_code == 0
+
+
+@pytest.mark.asyncio
 async def test_run_includes_workspace_and_configured_mounts(tmp_path):
     runner = DockerRunner(
-        image="rust:test",
-        max_memory_gb=8,
-        max_runtime_seconds=7200,
-        max_cpus=2,
+        docker_pull_policy="if-not-present",
         mounts=["/host-cache:/cache:ro"],
     )
 
@@ -95,12 +294,7 @@ async def test_run_includes_workspace_and_configured_mounts(tmp_path):
         stdout_log = tmp_path / "stdout.log"
         stderr_log = tmp_path / "stderr.log"
 
-        result = await runner.run(
-            command=["cargo", "rapx"],
-            workspace_dir=workspace,
-            stdout_log=stdout_log,
-            stderr_log=stderr_log,
-        )
+        result = await runner.run(**_run_kwargs(workspace, stdout_log, stderr_log))
 
         call_kwargs = mock_client.containers.run.call_args_list[0][1]
         assert call_kwargs["volumes"] == [
@@ -118,7 +312,7 @@ async def test_ensure_image_with_if_not_present_policy(docker_runner):
         mock_client.images.get.return_value = Mock(tags=["rust:test"])
         mock_docker.return_value = mock_client
 
-        result = await docker_runner.ensure_image("if-not-present")
+        result = await docker_runner.ensure_image("rust:test")
         assert result is True
 
 
@@ -131,9 +325,24 @@ async def test_ensure_image_pulls_when_missing(docker_runner):
         mock_client.images.pull.return_value = Mock()
         mock_docker.return_value = mock_client
 
-        result = await docker_runner.ensure_image("if-not-present")
+        result = await docker_runner.ensure_image("rust:test")
         assert result is True
         mock_client.images.pull.assert_called_once_with("rust:test")
+
+
+@pytest.mark.asyncio
+async def test_ensure_image_always_policy_pulls():
+    """docker_pull_policy='always' pulls even when the image exists locally."""
+    runner = DockerRunner(docker_pull_policy="always")
+    with patch("docker.from_env") as mock_docker:
+        mock_client = Mock()
+        mock_client.images.pull.return_value = Mock()
+        mock_docker.return_value = mock_client
+
+        result = await runner.ensure_image("rust:test")
+        assert result is True
+        mock_client.images.pull.assert_called_once_with("rust:test")
+        mock_client.images.get.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -152,10 +361,7 @@ async def test_run_redirects_to_workspace_log_files(docker_runner, tmp_path):
         mock_docker.return_value = mock_client
 
         result = await docker_runner.run(
-            command=["cargo", "rapx"],
-            workspace_dir=workspace,
-            stdout_log=stdout_log,
-            stderr_log=stderr_log,
+            **_run_kwargs(workspace, stdout_log, stderr_log)
         )
 
         assert result.exit_code == 0
@@ -184,12 +390,7 @@ async def test_run_does_not_use_docker_logs_api(docker_runner, tmp_path):
         mock_client.containers.run.return_value = mock_container
         mock_docker.return_value = mock_client
 
-        await docker_runner.run(
-            command=["cargo", "rapx"],
-            workspace_dir=workspace,
-            stdout_log=stdout_log,
-            stderr_log=stderr_log,
-        )
+        await docker_runner.run(**_run_kwargs(workspace, stdout_log, stderr_log))
 
         # logs() should NOT be called since we redirect to files
         mock_container.logs.assert_not_called()
@@ -221,14 +422,8 @@ async def test_docker_timeout_stops_container(docker_runner, tmp_path):
         mock_client.containers.run.return_value = mock_container
         mock_docker.return_value = mock_client
 
-        # Set a very short timeout to trigger the timeout quickly
-        docker_runner.max_runtime_seconds = 1
-
         result = await docker_runner.run(
-            command=["blah"],
-            workspace_dir=workspace,
-            stdout_log=stdout_log,
-            stderr_log=stderr_log,
+            **_run_kwargs(workspace, stdout_log, stderr_log, timeout_seconds=1)
         )
 
         assert result.state == TaskStatus.TIMEOUT
@@ -258,14 +453,9 @@ async def test_run_reconciles_workspace_ownership_after_execution(
         with patch.object(
             docker_runner, "_ensure_workspace_ownership_sync"
         ) as mock_fix:
-            await docker_runner.run(
-                command=["cargo", "rapx"],
-                workspace_dir=workspace,
-                stdout_log=stdout_log,
-                stderr_log=stderr_log,
-            )
+            await docker_runner.run(**_run_kwargs(workspace, stdout_log, stderr_log))
 
-        mock_fix.assert_called_once_with(workspace)
+        mock_fix.assert_called_once_with(workspace, "rust:test", "/workspace")
 
 
 @pytest.mark.asyncio
@@ -285,12 +475,7 @@ async def test_docker_command_start_logs_info_with_workspace_context(
         mock_client.containers.run.return_value = mock_container
         mock_docker.return_value = mock_client
 
-        await docker_runner.run(
-            command=["cargo", "rapx"],
-            workspace_dir=workspace,
-            stdout_log=stdout_log,
-            stderr_log=stderr_log,
-        )
+        await docker_runner.run(**_run_kwargs(workspace, stdout_log, stderr_log))
 
     record = next(
         r for r in caplog.records if "container command starting" in r.message.lower()
@@ -317,12 +502,7 @@ async def test_docker_cancellation_logs_warning_with_command_summary(
         mock_docker.return_value = mock_client
 
         with pytest.raises(asyncio.CancelledError):
-            await docker_runner.run(
-                command=["cargo", "rapx"],
-                workspace_dir=workspace,
-                stdout_log=stdout_log,
-                stderr_log=stderr_log,
-            )
+            await docker_runner.run(**_run_kwargs(workspace, stdout_log, stderr_log))
 
     record = next(
         r
@@ -356,12 +536,8 @@ async def test_docker_timeout_logs_error_with_fields(docker_runner, tmp_path, ca
         mock_client.containers.run.return_value = mock_container
         mock_docker.return_value = mock_client
 
-        docker_runner.max_runtime_seconds = 1
         result = await docker_runner.run(
-            command=["cargo", "rapx"],
-            workspace_dir=workspace,
-            stdout_log=stdout_log,
-            stderr_log=stderr_log,
+            **_run_kwargs(workspace, stdout_log, stderr_log, timeout_seconds=1)
         )
         wait_event.set()
 
@@ -390,10 +566,7 @@ async def test_docker_nonzero_exit_logs_warning_with_fields(
         mock_docker.return_value = mock_client
 
         result = await docker_runner.run(
-            command=["cargo", "rapx"],
-            workspace_dir=workspace,
-            stdout_log=stdout_log,
-            stderr_log=stderr_log,
+            **_run_kwargs(workspace, stdout_log, stderr_log)
         )
 
     assert result.state == TaskStatus.FAILED
@@ -420,10 +593,7 @@ async def test_docker_completion_logs_info_with_fields(docker_runner, tmp_path, 
         mock_docker.return_value = mock_client
 
         result = await docker_runner.run(
-            command=["cargo", "rapx"],
-            workspace_dir=workspace,
-            stdout_log=stdout_log,
-            stderr_log=stderr_log,
+            **_run_kwargs(workspace, stdout_log, stderr_log)
         )
 
     assert result.state == TaskStatus.COMPLETED
@@ -448,10 +618,7 @@ async def test_docker_unexpected_error_logs_traceback(docker_runner, tmp_path, c
         mock_docker.return_value = mock_client
 
         result = await docker_runner.run(
-            command=["cargo", "rapx"],
-            workspace_dir=workspace,
-            stdout_log=stdout_log,
-            stderr_log=stderr_log,
+            **_run_kwargs(workspace, stdout_log, stderr_log)
         )
 
     assert result.state == TaskStatus.FAILED
@@ -463,10 +630,7 @@ async def test_docker_unexpected_error_logs_traceback(docker_runner, tmp_path, c
 
 def test_docker_runner_uses_custom_log_sync_interval():
     runner = DockerRunner(
-        image="rust:test",
-        max_memory_gb=8,
-        max_runtime_seconds=7200,
-        max_cpus=2,
+        docker_pull_policy="if-not-present",
         log_sync_interval_seconds=5.0,
     )
 
@@ -503,7 +667,7 @@ async def test_docker_cancellation_skips_workspace_ownership_reconciliation(
 
         ownership_called = []
 
-        def track_ownership(workspace_dir):
+        def track_ownership(*args, **kwargs):
             ownership_called.append(True)
 
         monkeypatch.setattr(
@@ -511,12 +675,7 @@ async def test_docker_cancellation_skips_workspace_ownership_reconciliation(
         )
 
         run_task = asyncio.create_task(
-            docker_runner.run(
-                command=["cargo", "rapx"],
-                workspace_dir=workspace,
-                stdout_log=stdout_log,
-                stderr_log=stderr_log,
-            )
+            docker_runner.run(**_run_kwargs(workspace, stdout_log, stderr_log))
         )
 
         # Wait for container.wait() to start
@@ -557,12 +716,7 @@ async def test_docker_cancellation_during_container_startup_stops_started_contai
     monkeypatch.setattr(docker_runner, "_run_container_sync", slow_start_container)
 
     run_task = asyncio.create_task(
-        docker_runner.run(
-            command=["cargo", "rapx"],
-            workspace_dir=workspace,
-            stdout_log=stdout_log,
-            stderr_log=stderr_log,
-        )
+        docker_runner.run(**_run_kwargs(workspace, stdout_log, stderr_log))
     )
 
     await asyncio.to_thread(start_entered.wait, timeout=1.0)

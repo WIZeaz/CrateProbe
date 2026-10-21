@@ -4,7 +4,7 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 import time
 import docker
 from docker.errors import ImageNotFound, APIError
@@ -77,23 +77,18 @@ async def _sync_logs_periodically(
 class DockerRunner:
     """Execute tasks in Docker containers with resource limits.
 
-    Each task should create its own DockerRunner instance to avoid
-    shared-state issues when running multiple containers concurrently.
+    Runner-level settings (pull policy, extra mounts, log sync interval) are
+    fixed at construction; everything task-specific (image, command, limits,
+    timeout, env, workspace) is supplied per run from the task spec.
     """
 
     def __init__(
         self,
-        image: str,
-        max_memory_gb: int,
-        max_runtime_seconds: int,
-        max_cpus: int,
+        docker_pull_policy: str = "if-not-present",
         mounts: Optional[List[str]] = None,
         log_sync_interval_seconds: float = 2.0,
     ):
-        self.image = image
-        self.max_memory_gb = max_memory_gb
-        self.max_runtime_seconds = max_runtime_seconds
-        self.max_cpus = max_cpus
+        self.docker_pull_policy = docker_pull_policy
         self.mounts = mounts or []
         self.log_sync_interval_seconds = log_sync_interval_seconds
         self._client: Optional[docker.DockerClient] = None
@@ -127,64 +122,77 @@ class DockerRunner:
         except Exception:
             return False
 
-    async def ensure_image(self, pull_policy: str = "if-not-present") -> bool:
+    async def ensure_image(self, image: str) -> bool:
         """
         Ensure the Docker image is available locally.
 
         Args:
-            pull_policy: "always", "if-not-present", or "never"
+            image: Docker image reference to check/pull
 
         Returns:
             True if image is available, False otherwise
         """
-        return await asyncio.to_thread(self._ensure_image_sync, pull_policy)
+        return await asyncio.to_thread(self._ensure_image_sync, image)
 
-    def _ensure_image_sync(self, pull_policy: str) -> bool:
+    def _ensure_image_sync(self, image: str) -> bool:
+        pull_policy = self.docker_pull_policy
         if pull_policy == "always":
-            self.client.images.pull(self.image)
+            self.client.images.pull(image)
             return True
 
         if pull_policy == "never":
             try:
-                self.client.images.get(self.image)
+                self.client.images.get(image)
                 return True
             except ImageNotFound:
                 return False
 
         # if-not-present: pull only if not available
         try:
-            self.client.images.get(self.image)
+            self.client.images.get(image)
             return True
         except ImageNotFound:
             try:
-                self.client.images.pull(self.image)
+                self.client.images.pull(image)
                 return True
             except APIError as e:
-                raise RuntimeError(f"Failed to pull image {self.image}: {e}")
+                raise RuntimeError(f"Failed to pull image {image}: {e}")
 
-    def _build_resource_limits(self) -> dict:
-        """Build Docker resource limit parameters"""
-        # CPU quota: number of CPUs * 100000 (microseconds per period)
-        cpu_quota = int(self.max_cpus * 100000)
+    def _build_resource_limits(self, cpu: Optional[float], mem: Optional[str]) -> dict:
+        """Build Docker resource limit parameters from the task spec.
 
-        return {
-            "mem_limit": f"{self.max_memory_gb}g",
-            "memswap_limit": f"{self.max_memory_gb}g",  # Disable swap
-            "cpu_quota": cpu_quota,
-            "cpu_period": 100000,
-        }
+        Missing limits (None) are simply not passed to Docker.
+        """
+        limits: dict = {}
+        if mem is not None:
+            limits["mem_limit"] = mem
+            limits["memswap_limit"] = mem  # Disable swap
+        if cpu is not None:
+            # CPU quota: number of CPUs * 100000 (microseconds per period)
+            limits["cpu_period"] = 100000
+            limits["cpu_quota"] = int(cpu * 100000)
+        return limits
 
-    async def ensure_workspace_ownership(self, workspace_dir: Path) -> None:
+    async def ensure_workspace_ownership(
+        self, workspace_dir: Path, image: str, container_workspace: str
+    ) -> None:
         """Normalize bind-mounted workspace ownership back to host user."""
-        await asyncio.to_thread(self._ensure_workspace_ownership_sync, workspace_dir)
+        await asyncio.to_thread(
+            self._ensure_workspace_ownership_sync,
+            workspace_dir,
+            image,
+            container_workspace,
+        )
 
-    def _ensure_workspace_ownership_sync(self, workspace_dir: Path) -> None:
+    def _ensure_workspace_ownership_sync(
+        self, workspace_dir: Path, image: str, container_workspace: str
+    ) -> None:
         uid_gid = f"{os.getuid()}:{os.getgid()}"
         self.client.containers.run(
-            image=self.image,
-            command=["chown", "-R", uid_gid, "/workspace"],
-            volumes=[f"{workspace_dir.resolve()}:/workspace:rw"],
-            working_dir="/workspace",
+            image=image,
+            command=["chown", "-R", uid_gid, container_workspace],
+            volumes=[f"{workspace_dir.resolve()}:{container_workspace}:rw"],
+            working_dir=container_workspace,
             user="0:0",
             remove=True,
             stdout=True,
@@ -207,8 +215,15 @@ class DockerRunner:
 
     async def run(
         self,
-        command: List[str],
+        *,
+        image: str,
+        cmd: str,
         workspace_dir: Path,
+        container_workspace: str,
+        env: Dict[str, str],
+        cpu: Optional[float] = None,
+        mem: Optional[str] = None,
+        timeout_seconds: Optional[int] = None,
         stdout_log: Path,
         stderr_log: Path,
     ) -> ExecutionResult:
@@ -220,10 +235,17 @@ class DockerRunner:
         for real-time log updates.
 
         Args:
-            command: Command and arguments to execute
-            workspace_dir: Host path to mount as /workspace in container
-            stdout_log: Path to write stdout (relative to workspace)
-            stderr_log: Path to write stderr (relative to workspace)
+            image: Docker image to run
+            cmd: Shell command string to execute (wrapped with sh -c)
+            workspace_dir: Host path mounted at container_workspace
+            container_workspace: Absolute path inside the container where
+                workspace_dir is mounted and used as working directory
+            env: Extra environment variables for the container
+            cpu: CPU core limit (None = no limit)
+            mem: Docker-style memory limit string, e.g. "4g" (None = no limit)
+            timeout_seconds: Execution time limit (None = no timeout)
+            stdout_log: Host path to write stdout
+            stderr_log: Host path to write stderr
 
         Returns:
             Structured execution result with status, exit code, and message
@@ -234,28 +256,28 @@ class DockerRunner:
         stderr_log.parent.mkdir(parents=True, exist_ok=True)
 
         # Build resource limits
-        resource_limits = self._build_resource_limits()
+        resource_limits = self._build_resource_limits(cpu=cpu, mem=mem)
 
         # Prepare volume mounts
-        volumes = [f"{workspace_dir.resolve()}:/workspace:rw"] + self.mounts
+        volumes = [f"{workspace_dir.resolve()}:{container_workspace}:rw"] + self.mounts
 
-        # Compute log paths inside container (relative to /workspace)
-        stdout_container_path = "/workspace/stdout.log"
-        stderr_container_path = "/workspace/stderr.log"
+        # Compute log paths inside container (relative to container workspace)
+        stdout_container_path = f"{container_workspace}/stdout.log"
+        stderr_container_path = f"{container_workspace}/stderr.log"
 
         # Wrap command to redirect stdout/stderr to files
         # Use 'exec' to replace shell process, ensuring proper signal handling
         wrapped_command = [
             "sh",
             "-c",
-            f'exec {" ".join(command)} > "{stdout_container_path}" 2> "{stderr_container_path}"',
+            f'exec {cmd} > "{stdout_container_path}" 2> "{stderr_container_path}"',
         ]
 
         # Run container
         container = None
         log_sync_task = None
         stop_sync_event = asyncio.Event()
-        command_summary = " ".join(command)
+        command_summary = cmd
         started_at = time.monotonic()
         cancelled = False
 
@@ -283,18 +305,15 @@ class DockerRunner:
                 None,
                 partial(
                     self._run_container_sync,
-                    image=self.image,
+                    image=image,
                     command=wrapped_command,
-                    working_dir="/workspace",
+                    working_dir=container_workspace,
                     volumes=volumes,
                     detach=True,
                     stdout=False,  # No need to capture stdout via Docker API
                     stderr=False,  # No need to capture stderr via Docker API
                     tty=True,  # Enable TTY for colored output in logs
-                    environment={
-                        "CARGO_TERM_COLOR": "always",
-                        "TERM": "xterm-256color",
-                    },
+                    environment={"TERM": "xterm-256color", **env},
                     **resource_limits,
                 ),
             )
@@ -330,8 +349,6 @@ class DockerRunner:
                 )
             )
 
-            timeout_seconds = self.max_runtime_seconds
-
             def _wait_container() -> dict:
                 """Wait for container to finish and return result dict."""
                 return container.wait()
@@ -340,11 +357,15 @@ class DockerRunner:
 
             # Use asyncio.wait_for to enforce execution time limit
             try:
-                # Wrap wait_future to handle cancellation properly
-                wait_task = asyncio.create_task(
-                    asyncio.wait_for(wait_future, timeout=timeout_seconds)
-                )
-                wait_result = await wait_task
+                if timeout_seconds is None:
+                    # No timeout configured: wait for the container directly
+                    wait_result = await wait_future
+                else:
+                    # Wrap wait_future to handle cancellation properly
+                    wait_task = asyncio.create_task(
+                        asyncio.wait_for(wait_future, timeout=timeout_seconds)
+                    )
+                    wait_result = await wait_task
                 exit_code = wait_result.get("StatusCode", -1)
             except asyncio.CancelledError:
                 # Server is shutting down - stop the container
@@ -482,7 +503,10 @@ class DockerRunner:
             if not cancelled:
                 try:
                     await asyncio.to_thread(
-                        self._ensure_workspace_ownership_sync, workspace_dir
+                        self._ensure_workspace_ownership_sync,
+                        workspace_dir,
+                        image,
+                        container_workspace,
                     )
                 except Exception:
                     pass
