@@ -86,6 +86,37 @@ def test_watch_parent_dir_raises():
         parse_task_spec(MINIMAL_TOML + b'watch = ["../secret"]\n')
 
 
+@pytest.mark.parametrize("key", ["artifacts", "watch"])
+def test_rel_path_list_rejects_empty_string_entry(key):
+    with pytest.raises(TaskSpecError, match="empty"):
+        parse_task_spec(MINIMAL_TOML + f'{key} = ["ok.log", ""]\n'.encode())
+
+
+def test_timeout_subsecond_string_rejected_with_integer_seconds_message():
+    with pytest.raises(TaskSpecError, match="positive integer number of seconds"):
+        parse_task_spec(MINIMAL_TOML + b'[limit]\ntimeout = "0.5s"\n')
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        # desc must be a string
+        b"desc = 1\n",
+        # artifacts / watch must be lists, not bare strings
+        b'artifacts = "stdout.log"\n',
+        b'watch = "stdout.log"\n',
+        # cpu / timeout must be positive
+        b"[limit]\ncpu = 0\n",
+        b"[limit]\ntimeout = 0\n",
+        # env values must be strings
+        b"[env]\nFOO = 1\n",
+    ],
+)
+def test_optional_field_type_rejections(extra):
+    with pytest.raises(TaskSpecError):
+        parse_task_spec(MINIMAL_TOML + extra)
+
+
 def test_watch_absolute_path_raises():
     with pytest.raises(TaskSpecError):
         parse_task_spec(MINIMAL_TOML + b'watch = ["/etc/passwd"]\n')

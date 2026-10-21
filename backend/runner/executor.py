@@ -133,12 +133,15 @@ class TaskExecutor:
 
             try:
                 task_dir = await self.task_cache.ensure(task_id, task_sha256)
+                # A missing task.toml is a fetch-level failure too: route it
+                # through the same "task fetch failed" log path (terminal
+                # semantics unchanged).
+                spec = self._load_task_spec(task_dir, task_id)
             except TaskFetchError as exc:
                 job_logger.error("task fetch failed: %s", exc, extra=job_ctx)
                 terminal_status = "failed"
                 terminal_message = str(exc)
             else:
-                spec = self._load_task_spec(task_dir, task_id)
                 job_logger.info(
                     "task spec loaded",
                     extra={**job_ctx, "task_name": spec.name, "image": spec.image},

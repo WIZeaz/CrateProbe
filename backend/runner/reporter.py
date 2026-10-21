@@ -81,7 +81,7 @@ class TaskReporter:
                     sent_offset = 0
                     self._next_chunk_seq[remote_path] = 1
             else:
-                # full mode (e.g. stats.yaml) is rewritten in place; an
+                # full mode (e.g. progress.txt) is rewritten in place; an
                 # in-place edit can change content without changing the byte
                 # length, so size comparison is unreliable. Always re-read the
                 # whole file and re-upload it.

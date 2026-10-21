@@ -94,6 +94,13 @@ class WebSocketService {
     }
 
     if (this.ws) {
+      // Detach handlers before close() so the old socket's onclose cannot
+      // fire after a new connection has started and clobber isConnecting or
+      // emit a spurious 'disconnected'.
+      this.ws.onopen = null
+      this.ws.onmessage = null
+      this.ws.onerror = null
+      this.ws.onclose = null
       this.ws.close()
       this.ws = null
     }

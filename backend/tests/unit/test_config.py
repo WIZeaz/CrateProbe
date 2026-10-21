@@ -130,6 +130,18 @@ artifact_max_mb = 256
     assert config.artifact_max_mb == 256
 
 
+@pytest.mark.parametrize(
+    "key", ["task_upload_max_mb", "file_push_max_mb", "artifact_max_mb"]
+)
+@pytest.mark.parametrize("value", [0, -5])
+def test_config_rejects_task_limits_below_one(tmp_path, key, value):
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(f"[tasks]\n{key} = {value}\n")
+
+    with pytest.raises(ValueError, match=f"tasks.{key} must be >= 1"):
+        Config.from_file(str(config_file))
+
+
 def test_config_loads_without_execution_block():
     import tempfile
     import os

@@ -27,7 +27,7 @@ api.interceptors.request.use(config => {
   return config
 })
 
-// Request interceptor for error handling
+// Response interceptor for error handling
 api.interceptors.response.use(
   response => response,
   error => {
@@ -46,7 +46,7 @@ function encodePath(path) {
 
 export default {
   // Job endpoints
-  async createJob(crateName, version = null, taskId) {
+  async createJob(crateName, version, taskId) {
     const response = await api.post('/jobs', {
       crate_name: crateName,
       version,

@@ -135,7 +135,7 @@ class ClaimJobResponse(BaseModel):
     task_sha256: str
 
 
-class ClaimTaskRequest(BaseModel):
+class ClaimJobRequest(BaseModel):
     runner_id: Optional[str] = None
     jobs: int = Field(ge=0)
     max_jobs: int = Field(ge=1)
@@ -832,7 +832,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     )
     async def claim_task(
         runner_id: str,
-        request: ClaimTaskRequest,
+        request: ClaimJobRequest,
         x_request_id: Optional[str] = Header(default=None, alias="X-Request-ID"),
         _auth: None = Depends(require_runner_auth),
     ):
@@ -1008,6 +1008,10 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             )
 
         try:
+            # Path validation intentionally runs BEFORE record_job_file_chunk:
+            # record_job_file_chunk consumes chunk_seq, so a path rejected
+            # after consumption would burn the sequence number and cause the
+            # runner's retry of that chunk to be silently dropped.
             JobFileStore.safe_join(job_files.files_dir(job_id), request.path)
         except PathSafetyError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -1137,6 +1141,10 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             if not job:
                 results["not_found"].append(job_id)
             elif job.status == TaskStatus.RUNNING:
+                results["skipped"].append(job_id)
+            elif db.get_task_definition(job.task_id) is None:
+                # Same precondition as single-job retry (400 "Task has been
+                # deleted"): skip instead of resetting the job.
                 results["skipped"].append(job_id)
             else:
                 db.reset_job_for_retry(job_id)

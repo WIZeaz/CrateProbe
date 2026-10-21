@@ -18,6 +18,24 @@ def _make_zip(files: dict[str, str]) -> bytes:
     return buf.getvalue()
 
 
+def _corrupt_member_crc(zip_bytes: bytes, member_name: str) -> bytes:
+    """Flip one CRC-32 byte of ``member_name``'s central-directory record so
+    extraction fails with a Bad CRC error."""
+    data = bytearray(zip_bytes)
+    pos = 0
+    while True:
+        idx = data.find(b"PK\x01\x02", pos)
+        if idx == -1:
+            raise AssertionError(f"central directory record for {member_name} missing")
+        name_len = int.from_bytes(data[idx + 28 : idx + 30], "little")
+        name = bytes(data[idx + 46 : idx + 46 + name_len]).decode()
+        if name == member_name:
+            break
+        pos = idx + 4
+    data[idx + 16] ^= 0xFF
+    return bytes(data)
+
+
 def _http_status_error(status_code: int) -> httpx.HTTPStatusError:
     request = httpx.Request("GET", "http://control.local/api/runners/r/tasks/1/zip")
     response = httpx.Response(status_code=status_code, request=request)
@@ -143,6 +161,18 @@ async def test_ensure_bad_zip_raises(tmp_path: Path):
 
     with pytest.raises(TaskFetchError, match="zip"):
         await cache.ensure(1, sha256_hex(bad))
+
+    assert not (tmp_path / "cache" / "1").exists()
+
+
+@pytest.mark.asyncio
+async def test_ensure_corrupted_member_crc_raises_corrupted_error(tmp_path: Path):
+    corrupted = _corrupt_member_crc(GOOD_ZIP, "task.toml")
+    client = FakeClient(corrupted)
+    cache = TaskCache(tmp_path / "cache", client)
+
+    with pytest.raises(TaskFetchError, match="corrupted"):
+        await cache.ensure(1, sha256_hex(corrupted))
 
     assert not (tmp_path / "cache" / "1").exists()
 

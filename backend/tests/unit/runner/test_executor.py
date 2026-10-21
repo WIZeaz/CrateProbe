@@ -322,6 +322,40 @@ async def test_task_fetch_error_marks_job_failed_without_starting_docker(
 
 
 @pytest.mark.asyncio
+async def test_missing_task_toml_fails_via_task_fetch_log_path(tmp_path, monkeypatch):
+    """A cached task dir without task.toml fails the job through the same
+    'task fetch failed' path as download errors (terminal semantics
+    unchanged)."""
+    task_dir = tmp_path / "task_cache" / "7"
+    task_dir.mkdir(parents=True)
+    (task_dir / ".sha256").write_text("deadbeef\n")
+    client = FakeClient()
+    tracker = new_tracker()
+    install_fakes(monkeypatch, tracker)
+
+    executor = TaskExecutor(
+        config=make_config(tmp_path),
+        client=client,
+        crate_downloader=FakeDownloader(),
+        task_cache=FakeTaskCache(task_dir=task_dir),
+    )
+
+    await executor.execute_claimed_job(make_claimed(job_id=1, task_id=7))
+
+    terminal = terminal_payloads(client)
+    assert len(terminal) == 1
+    assert terminal[0]["status"] == "failed"
+    assert "task.toml" in terminal[0]["message"]
+
+    # Docker never touched.
+    assert tracker["is_available"] == 0
+    assert tracker["run_calls"] == []
+
+    content = (tmp_path / "logs" / "1-runner.log").read_text()
+    assert "task fetch failed" in content
+
+
+@pytest.mark.asyncio
 async def test_missing_artifact_path_warns_and_skips(tmp_path, monkeypatch):
     toml_text = TASK_TOML.replace(
         'artifacts = ["out/result.txt", "reports"]',

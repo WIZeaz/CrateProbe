@@ -47,7 +47,8 @@ const logContainer = ref(null)
 let refreshInterval = null
 
 function getLogPath(logId) {
-  return logFiles.find(file => file.id === logId)?.path || `${logId}.log`
+  // logFiles is the single source of truth; every logId originates from it.
+  return logFiles.find(file => file.id === logId).path
 }
 
 async function loadLog(logId, isRefresh = false) {

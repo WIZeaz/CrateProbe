@@ -163,16 +163,19 @@ class JobFileStore:
                             f"bytes: {path}"
                         )
                     handle.write(chunk)
-        except ArtifactTooLargeError:
+        except Exception as exc:
+            # Any failure (size cap, stream error, disk I/O) must not leave a
+            # half-written artifact behind.
             target.unlink(missing_ok=True)
-            logger.warning(
-                "artifact rejected: size cap exceeded",
-                extra={
-                    "job_id": job_id,
-                    "path": path,
-                    "cap_bytes": self._artifact_max_bytes,
-                },
-            )
+            if isinstance(exc, ArtifactTooLargeError):
+                logger.warning(
+                    "artifact rejected: size cap exceeded",
+                    extra={
+                        "job_id": job_id,
+                        "path": path,
+                        "cap_bytes": self._artifact_max_bytes,
+                    },
+                )
             raise
         return total
 

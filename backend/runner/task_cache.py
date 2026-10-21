@@ -126,7 +126,12 @@ class TaskCache:
                 tempfile.mkdtemp(prefix=f".{task_dir.name}-", dir=self._cache_dir)
             )
             try:
-                zf.extractall(tmp_dir)
+                try:
+                    zf.extractall(tmp_dir)
+                except (zipfile.BadZipFile, OSError) as e:
+                    raise TaskFetchError(
+                        f"task {task_id} downloaded zip is corrupted: {e}"
+                    ) from e
                 (tmp_dir / _MARKER_NAME).write_text(sha256 + "\n")
                 if task_dir.exists():
                     shutil.rmtree(task_dir)

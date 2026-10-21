@@ -22,10 +22,6 @@ class FakeClient:
         self.claims.append(payload)
         return self.claimed_task
 
-    async def sync_task(self, task_id, payload):
-        self.events.append((task_id, payload))
-        return {"synced": True, "last_sync_seq": payload.get("sync_seq", 0)}
-
     async def send_metrics(self, payload):
         self.metrics.append(payload)
         return {"success": True}
@@ -94,7 +90,7 @@ async def test_worker_claims_and_executes_task():
         "job_id": 42,
         "lease_token": "lease-42",
         "crate_name": "foo",
-        "crate_version": "1.0.0",
+        "version": "1.0.0",
     }
     client = FakeClient(claimed_task=task)
     executed = []
@@ -125,13 +121,13 @@ async def test_worker_fills_multiple_slots_via_repeated_single_claims():
             "job_id": 101,
             "lease_token": "lease-101",
             "crate_name": "foo",
-            "crate_version": "1.0.0",
+            "version": "1.0.0",
         },
         {
             "job_id": 102,
             "lease_token": "lease-102",
             "crate_name": "bar",
-            "crate_version": "2.0.0",
+            "version": "2.0.0",
         },
     ]
 
@@ -188,7 +184,7 @@ async def test_worker_executor_failure_isolated_from_poll_and_schedule_one():
         "job_id": 9,
         "lease_token": "lease-9",
         "crate_name": "foo",
-        "crate_version": "1.0.0",
+        "version": "1.0.0",
     }
     client = FakeClient(claimed_task=task)
 
@@ -295,7 +291,7 @@ async def test_worker_executor_failure_logs_traceback(caplog):
         "job_id": 22,
         "lease_token": "lease-22",
         "crate_name": "foo",
-        "crate_version": "1.0.0",
+        "version": "1.0.0",
     }
     client = FakeClient(claimed_task=task)
 
@@ -503,7 +499,7 @@ async def test_poll_and_schedule_one_does_not_start_task_scoped_heartbeat_thread
         "job_id": 77,
         "lease_token": "lease-77",
         "crate_name": "foo",
-        "crate_version": "1.0.0",
+        "version": "1.0.0",
     }
     client = FakeClient(claimed_task=task)
     executed = []
@@ -540,7 +536,7 @@ async def test_heartbeat_continues_while_executor_blocks_main_event_loop():
         "job_id": 88,
         "lease_token": "lease-88",
         "crate_name": "foo",
-        "crate_version": "1.0.0",
+        "version": "1.0.0",
     }
 
     class SingleTaskClient(FakeClient):
@@ -611,7 +607,7 @@ async def test_run_forever_shutdown_waits_for_inflight_tasks_before_exit(monkeyp
         "job_id": 99,
         "lease_token": "lease-99",
         "crate_name": "foo",
-        "crate_version": "1.0.0",
+        "version": "1.0.0",
     }
 
     class SingleTaskClient(FakeClient):

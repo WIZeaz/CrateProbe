@@ -16,6 +16,8 @@ const tasksError = ref(null)
 const selectedTaskId = ref(null)
 
 async function fetchTasks() {
+  tasksLoading.value = true
+  tasksError.value = null
   try {
     tasks.value = await api.getTasks()
     if (tasks.value.length > 0) {
@@ -169,9 +171,16 @@ onMounted(() => {
         </div>
         <div
           v-else-if="tasksError"
-          class="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg text-sm"
+          class="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg text-sm flex items-center justify-between"
         >
-          Failed to load tasks: {{ tasksError }}
+          <span>Failed to load tasks: {{ tasksError }}</span>
+          <button
+            type="button"
+            @click="fetchTasks"
+            class="ml-4 px-3 py-1 text-sm font-medium text-red-700 bg-red-100 rounded-lg hover:bg-red-200 transition-colors"
+          >
+            Retry
+          </button>
         </div>
         <div
           v-else-if="tasks.length === 0"

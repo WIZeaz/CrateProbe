@@ -60,6 +60,11 @@ def test_safe_join_rejects_empty_path(store, tmp_path):
         store.safe_join(tmp_path, "")
 
 
+def test_safe_join_rejects_dot(store, tmp_path):
+    with pytest.raises(PathSafetyError):
+        store.safe_join(tmp_path, ".")
+
+
 def test_path_safety_error_is_value_error():
     assert issubclass(PathSafetyError, ValueError)
 
@@ -143,6 +148,13 @@ def test_write_full_over_limit_keeps_tail(store):
     assert data == b"B" * FULL_LIMIT
 
 
+def test_write_full_at_exact_limit_is_not_truncated(store):
+    content = "x" * FULL_LIMIT
+    store.write_full(1, "watch.txt", content)
+    target = store.files_dir(1) / "watch.txt"
+    assert target.read_bytes() == content.encode("utf-8")
+
+
 def test_write_full_truncates_multibyte_content(store):
     # each char is 3 bytes in utf-8; 500 chars = 1500 bytes > cap
     content = "界" * 500
@@ -178,6 +190,19 @@ def test_list_files_returns_sorted_entries(store):
 def test_read_tail_returns_last_lines(store):
     store.append_file(1, "stdout.log", "\n".join(f"line{i}" for i in range(10)))
     assert store.read_tail(1, "stdout.log", 3) == ["line7", "line8", "line9"]
+
+
+def test_read_tail_handles_file_truncated_mid_character(store):
+    """A file whose tail ends mid-UTF-8-character must not crash the read."""
+    target = store.files_dir(1) / "watch.txt"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # "界" is 3 bytes in UTF-8; drop the last byte to leave a partial char.
+    target.write_bytes("ok\n".encode("utf-8") + "界".encode("utf-8")[:-1])
+
+    lines = store.read_tail(1, "watch.txt", 5)
+
+    assert lines[0] == "ok"
+    assert len(lines) == 2
 
 
 def test_read_tail_missing_file_raises(store):
@@ -227,6 +252,25 @@ def test_save_artifact_aborts_mid_stream_and_removes_partial(store):
     with pytest.raises(ArtifactTooLargeError):
         store.save_artifact(1, "nested/dir/big.bin", stream)
     assert not (store.artifacts_dir(1) / "nested/dir/big.bin").exists()
+
+
+def test_save_artifact_removes_partial_on_stream_error(store):
+    """Any failure mid-stream (not just the size cap) must not leave a
+    half-written artifact behind."""
+
+    class ExplodingStream:
+        def __init__(self):
+            self._first = True
+
+        def read(self, n=-1):
+            if self._first:
+                self._first = False
+                return b"partial-data"
+            raise OSError("stream died mid-read")
+
+    with pytest.raises(OSError, match="stream died"):
+        store.save_artifact(1, "broken.bin", ExplodingStream())
+    assert not (store.artifacts_dir(1) / "broken.bin").exists()
 
 
 def test_save_artifact_rejects_unsafe_path(store):

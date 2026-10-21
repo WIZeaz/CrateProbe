@@ -530,6 +530,22 @@ def test_batch_retry_uses_job_ids_key(client, app):
     assert data["not_found"] == [99999]
 
 
+def test_batch_retry_skips_job_with_deleted_task(client, app):
+    """Batch retry skips (not retries) jobs whose task definition was deleted,
+    matching the single-retry 400 semantics."""
+    job_id = create_job(client, app)
+    db = app.state.scheduler.db
+    job = db.get_job(job_id)
+    db.delete_task_definition(job.task_id)
+
+    response = client.post("/api/jobs/batch-retry", json={"job_ids": [job_id]})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["retried"] == []
+    assert data["skipped"] == [job_id]
+
+
 def test_batch_delete_uses_job_ids_key(client, app):
     """POST /api/jobs/batch-delete accepts job_ids body key"""
     job_id = create_job(client, app)

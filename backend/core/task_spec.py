@@ -133,6 +133,8 @@ def _rel_path_list(raw: dict, key: str) -> list[str]:
     for entry in value:
         if not isinstance(entry, str):
             raise TaskSpecError(f"{key} entries must be strings: {entry!r}")
+        if not entry:
+            raise TaskSpecError(f"{key} entries must not be empty strings")
         path = PurePosixPath(entry)
         if path.is_absolute():
             raise TaskSpecError(f"{key} entry must be relative: {entry!r}")
@@ -179,6 +181,12 @@ def _parse_timeout(value) -> int:
             )
             if seconds > 0:
                 return seconds
+            # Sub-second timeouts (e.g. "0.5s") round to zero and serve no
+            # practical purpose; reject them with an explicit message.
+            raise TaskSpecError(
+                "limit.timeout must be a positive integer number of seconds "
+                f'("90" or "90s"/"45m"/"2h"): {value!r}'
+            )
     raise TaskSpecError(f"limit.timeout has invalid format: {value!r}")
 
 

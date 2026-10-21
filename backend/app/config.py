@@ -49,6 +49,17 @@ class Config:
         if claim_max_jobs_hard_limit < 1:
             raise ValueError("distributed.claim_max_jobs_hard_limit must be >= 1")
 
+        task_upload_max_mb = tasks.get("task_upload_max_mb", 100)
+        file_push_max_mb = tasks.get("file_push_max_mb", 10)
+        artifact_max_mb = tasks.get("artifact_max_mb", 1024)
+        for key, value in (
+            ("task_upload_max_mb", task_upload_max_mb),
+            ("file_push_max_mb", file_push_max_mb),
+            ("artifact_max_mb", artifact_max_mb),
+        ):
+            if value < 1:
+                raise ValueError(f"tasks.{key} must be >= 1")
+
         return cls(
             server_port=server.get("port", 8000),
             server_host=server.get("host", "0.0.0.0"),
@@ -68,9 +79,9 @@ class Config:
                 "max_state_sync_interval_seconds", 120
             ),
             admin_token=security.get("admin_token", ""),
-            task_upload_max_mb=tasks.get("task_upload_max_mb", 100),
-            file_push_max_mb=tasks.get("file_push_max_mb", 10),
-            artifact_max_mb=tasks.get("artifact_max_mb", 1024),
+            task_upload_max_mb=task_upload_max_mb,
+            file_push_max_mb=file_push_max_mb,
+            artifact_max_mb=artifact_max_mb,
         )
 
     def ensure_workspace_structure(self):

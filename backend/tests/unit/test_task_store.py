@@ -128,6 +128,27 @@ def test_ingest_zip_does_not_write_file_on_validation_failure(store, tasks_dir):
     assert not tasks_dir.exists() or list(tasks_dir.iterdir()) == []
 
 
+def test_ingest_zip_leaves_no_tmp_files(store, tasks_dir):
+    zip_bytes = build_zip({"task.toml": VALID_TOML})
+
+    _, _, zip_path = store.ingest_zip(zip_bytes)
+
+    assert zip_path.read_bytes() == zip_bytes
+    assert list(tasks_dir.iterdir()) == [zip_path]
+
+
+def test_write_zip_atomically_replaces_garbage_file(store, tasks_dir):
+    """A truncated file at the target path must not survive the atomic write."""
+    tasks_dir.mkdir(parents=True)
+    target = store.zip_path("ab" * 32)
+    target.write_bytes(b"truncated garbage")
+
+    store._write_zip_atomically(target, b"full zip payload")
+
+    assert target.read_bytes() == b"full zip payload"
+    assert not (tasks_dir / f"{target.name}.tmp").exists()
+
+
 def test_delete_zip_removes_file(store):
     zip_bytes = build_zip({"task.toml": VALID_TOML})
     _, sha256, zip_path = store.ingest_zip(zip_bytes)

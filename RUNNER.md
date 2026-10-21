@@ -75,3 +75,7 @@ The runner communicates with the backend through the following endpoints:
 - **`POST /api/runners/{runner_id}/jobs/{job_id}/files`** — Unified file push. JSON payload `{lease_token, path, mode, content, chunk_seq?}`; `mode="append"` (logs, ordered by `chunk_seq`) appends, `mode="full"` (watch files) overwrites.
 - **`POST /api/runners/{runner_id}/jobs/{job_id}/artifacts`** — Multipart upload of an artifact file after the job finishes.
 - **`POST /api/runners/{runner_id}/metrics`** — System metrics payload (`cpu_percent`, `memory_percent`, `disk_percent`, `active_tasks`).
+
+## Task Update vs. Claim Race
+
+Claiming snapshots the task's current `task_sha256` into the job. If the task definition is updated *after* the claim snapshot was taken but *before* the runner downloads the zip, the runner downloads the new zip (sha B) while the claim payload still says sha A: the sha256 verification fails with a clear `sha256 mismatch` message and the job ends `failed`. This is the inherent trade-off of the "claim refreshes the snapshot" design — retrying the job re-claims it against the now-current task definition and self-heals.

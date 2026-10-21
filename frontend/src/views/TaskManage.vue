@@ -19,6 +19,10 @@ const updateLoading = ref(false)
 const updateError = ref(null)
 const updateFileInput = ref(null)
 
+// Delete state: track the row being deleted so only its button disables.
+const deletingId = ref(null)
+const deleteError = ref(null)
+
 async function fetchTasks() {
   try {
     tasks.value = await api.getTasks()
@@ -30,7 +34,12 @@ async function fetchTasks() {
 }
 
 function extractError(err) {
-  return err.response?.data?.detail || err.message
+  const detail = err.response?.data?.detail
+  // FastAPI 422 responses carry detail as an array of {msg, ...} objects.
+  if (Array.isArray(detail)) {
+    return detail.map(d => d.msg || JSON.stringify(d)).join('; ')
+  }
+  return detail || err.message
 }
 
 function onUploadFileChange(event) {
@@ -89,11 +98,15 @@ async function onUpdateFileChange(event) {
 async function handleDelete(task) {
   if (!confirm(`Delete task "${task.name}" (#${task.id})? This cannot be undone.`)) return
 
+  deletingId.value = task.id
+  deleteError.value = null
   try {
     await api.deleteTask(task.id)
     fetchTasks()
   } catch (err) {
-    alert(`Delete failed: ${extractError(err)}`)
+    deleteError.value = extractError(err)
+  } finally {
+    deletingId.value = null
   }
 }
 
@@ -160,6 +173,13 @@ onMounted(() => {
       Update failed: {{ updateError }}
     </div>
 
+    <div
+      v-if="deleteError"
+      class="mb-6 bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg"
+    >
+      Delete failed: {{ deleteError }}
+    </div>
+
     <!-- Hidden file input for inline updates -->
     <input
       ref="updateFileInput"
@@ -213,10 +233,10 @@ onMounted(() => {
                 </button>
                 <button
                   @click="handleDelete(task)"
-                  :disabled="updateLoading"
+                  :disabled="deletingId === task.id"
                   class="px-3 py-1.5 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors"
                 >
-                  Delete
+                  {{ deletingId === task.id ? 'Deleting...' : 'Delete' }}
                 </button>
               </div>
             </td>
