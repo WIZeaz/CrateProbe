@@ -328,3 +328,34 @@ def test_download_example_task(client):
         assert spec.image
         assert spec.cmd
         assert spec.workspace == "/workspace"
+
+
+def test_download_task_zip_returns_uploaded_bytes(client):
+    """GET /api/tasks/{id}/zip returns the exact uploaded zip bytes."""
+    zip_bytes = task_zip()
+    task_id = upload(client, zip_bytes).json()["id"]
+
+    resp = client.get(f"/api/tasks/{task_id}/zip")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/zip"
+    assert resp.content == zip_bytes
+
+
+def test_get_task_toml_returns_raw_content(client):
+    """GET /api/tasks/{id}/task-toml returns the raw task.toml text."""
+    task_id = upload(client, task_zip()).json()["id"]
+
+    resp = client.get(f"/api/tasks/{task_id}/task-toml")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/plain")
+    assert resp.text == TASK_A_TOML.decode("utf-8")
+
+
+def test_download_task_zip_unknown_task_returns_404(client):
+    assert client.get("/api/tasks/999/zip").status_code == 404
+
+
+def test_get_task_toml_unknown_task_returns_404(client):
+    assert client.get("/api/tasks/999/task-toml").status_code == 404

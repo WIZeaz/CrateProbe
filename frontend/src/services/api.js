@@ -176,6 +176,19 @@ export default {
     return response.data
   },
 
+  // Raw task.toml text stored inside a task definition's zip.
+  async getTaskToml(taskId) {
+    const response = await api.get(`/tasks/${taskId}/task-toml`, {
+      responseType: 'text',
+    })
+    return response.data
+  },
+
+  // Relative download URL for a task definition zip (for <a :href>).
+  taskZipUrl(taskId) {
+    return `/api/tasks/${taskId}/zip`
+  },
+
   // Dashboard endpoints
   async getDashboardStats() {
     const response = await api.get('/dashboard/stats')

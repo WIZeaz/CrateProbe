@@ -3,6 +3,7 @@ import logging
 import base64
 import json
 import uuid
+import zipfile
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from fastapi import (
@@ -575,6 +576,42 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         if record is None:
             raise HTTPException(status_code=404, detail="Task not found")
         return TaskDefinitionResponse(**_task_def_fields(record))
+
+    def _task_zip_file(task_id: int) -> tuple[TaskDefRecord, Path]:
+        record = db.get_task_definition(task_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        zip_path = task_store.zip_path(record.sha256)
+        if not zip_path.is_file():
+            logger.error(
+                "task zip missing on disk",
+                extra={"task_id": task_id, "sha256": record.sha256},
+            )
+            raise HTTPException(status_code=404, detail="Task zip not found")
+        return record, zip_path
+
+    @app.get("/api/tasks/{task_id}/zip")
+    async def download_task_definition_zip(task_id: int):
+        """Download the stored zip for a task definition."""
+        _, zip_path = _task_zip_file(task_id)
+        return FileResponse(
+            zip_path,
+            media_type="application/zip",
+            filename=f"task-{task_id}.zip",
+        )
+
+    @app.get("/api/tasks/{task_id}/task-toml", response_class=PlainTextResponse)
+    async def get_task_definition_toml(task_id: int):
+        """Return the raw task.toml text from a task definition's zip."""
+        _, zip_path = _task_zip_file(task_id)
+        try:
+            return TaskStore.read_task_toml(zip_path)
+        except (zipfile.BadZipFile, KeyError) as exc:
+            logger.error(
+                "task zip unreadable",
+                extra={"task_id": task_id},
+            )
+            raise HTTPException(status_code=500, detail="Task zip unreadable") from exc
 
     @app.put(
         "/api/tasks/{task_id}",

@@ -23,13 +23,41 @@ const updateFileInput = ref(null)
 const deletingId = ref(null)
 const deleteError = ref(null)
 
+// Inline task.toml viewer state.
+const expandedTomlId = ref(null)
+const tomlContents = ref({})
+const tomlErrors = ref({})
+const tomlLoading = ref(null)
+
 async function fetchTasks() {
+  // Any list refresh may mean a task's zip changed; drop cached TOML.
+  tomlContents.value = {}
+  tomlErrors.value = {}
+  expandedTomlId.value = null
   try {
     tasks.value = await api.getTasks()
     loading.value = false
   } catch (err) {
     error.value = extractError(err)
     loading.value = false
+  }
+}
+
+async function toggleToml(task) {
+  if (expandedTomlId.value === task.id) {
+    expandedTomlId.value = null
+    return
+  }
+  expandedTomlId.value = task.id
+  if (tomlContents.value[task.id] !== undefined) return
+
+  tomlLoading.value = task.id
+  try {
+    tomlContents.value[task.id] = await api.getTaskToml(task.id)
+  } catch (err) {
+    tomlErrors.value[task.id] = extractError(err)
+  } finally {
+    tomlLoading.value = null
   }
 }
 
@@ -277,6 +305,35 @@ onMounted(() => {
                   <dd class="text-gray-600">{{ task.updated_at ? formatDate(task.updated_at) : 'Never' }}</dd>
                 </div>
               </dl>
+
+              <div class="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  @click="toggleToml(task)"
+                  class="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                >
+                  {{ expandedTomlId === task.id ? 'Hide task.toml' : 'View task.toml' }}
+                </button>
+                <a
+                  :href="api.taskZipUrl(task.id)"
+                  :download="`task-${task.id}.zip`"
+                  class="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                >
+                  Download zip
+                </a>
+              </div>
+
+              <div v-if="expandedTomlId === task.id" class="mt-3">
+                <div v-if="tomlLoading === task.id" class="text-xs text-gray-500">
+                  Loading task.toml...
+                </div>
+                <div v-else-if="tomlErrors[task.id]" class="text-xs text-red-600">
+                  Failed to load task.toml: {{ tomlErrors[task.id] }}
+                </div>
+                <pre
+                  v-else
+                  class="bg-gray-900 text-gray-100 text-xs rounded-lg p-3 overflow-x-auto whitespace-pre"
+                >{{ tomlContents[task.id] }}</pre>
+              </div>
             </article>
           </div>
         </div>

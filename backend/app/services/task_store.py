@@ -105,6 +105,17 @@ class TaskStore:
         self.zip_path(sha256).unlink(missing_ok=True)
 
     @staticmethod
+    def read_task_toml(zip_path: Path) -> str:
+        """Return the raw ``task.toml`` text stored inside a task zip.
+
+        Raises ``FileNotFoundError`` when the zip or the member is missing,
+        and ``ZipValidationError`` when the zip is unreadable.
+        """
+        with zipfile.ZipFile(zip_path) as zf:
+            data = zf.read("task.toml")
+        return data.decode("utf-8", errors="replace")
+
+    @staticmethod
     def _write_zip_atomically(zip_path: Path, zip_bytes: bytes) -> None:
         """Write via a temp sibling + rename, so a crash mid-write can never
         leave a truncated zip behind that the exists-skip above would then
