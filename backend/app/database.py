@@ -1,37 +1,138 @@
 """Database layer for experiment tracking"""
 
-import sqlite3
+import io
+import json
+import logging
+import re
 import secrets
+import shutil
+import sqlite3
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List
 
 from core.models import TaskStatus
+from core.task_spec import parse_task_spec, sha256_hex, spec_to_dict
+
+logger = logging.getLogger(__name__)
+
+
+# Placeholder task definition backfilled onto jobs migrated from the legacy
+# single-task schema. Users are expected to fill in the real content later via
+# the task update API; historical jobs are never re-executed against it.
+DUMMY_TASK_TOML = (
+    'name = "legacy"\n'
+    'desc = "遗留数据占位 task，内容待补充"\n'
+    'image = "none"\n'
+    'cmd = "true"\n'
+    'workspace = "/workspace"\n'
+)
+
+# Legacy log files lived at workspace/logs/{task_id}-{log_type}.log
+_LEGACY_LOG_FILE_RE = re.compile(r"^(\d+)-(.+)\.log$")
+
+_TASKS_TABLE_DDL = """
+    CREATE TABLE IF NOT EXISTS tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        "desc" TEXT,
+        sha256 TEXT NOT NULL UNIQUE,
+        zip_path TEXT NOT NULL,
+        spec TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP
+    )
+"""
+
+_JOBS_TABLE_COLUMNS = """
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        crate_name TEXT NOT NULL,
+        version TEXT NOT NULL,
+        task_id INTEGER NOT NULL REFERENCES tasks(id),
+        task_name TEXT NOT NULL,
+        task_sha256 TEXT NOT NULL,
+        task_spec TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        started_at TIMESTAMP,
+        finished_at TIMESTAMP,
+        pid INTEGER,
+        exit_code INTEGER,
+        error_message TEXT,
+        message TEXT,
+        memory_used_mb REAL,
+        priority INTEGER DEFAULT 0,
+        runner_id TEXT,
+        lease_token TEXT,
+        lease_expires_at TIMESTAMP,
+        attempt INTEGER DEFAULT 0,
+        last_sync_seq INTEGER DEFAULT 0,
+        cancel_requested INTEGER NOT NULL DEFAULT 0,
+        last_state_sync_at TIMESTAMP
+"""
+
+# Columns carried over when rebuilding a legacy jobs table. The SQL literal is
+# substituted when the legacy table predates the column.
+_JOBS_KEPT_COLUMNS = [
+    ("id", None),
+    ("crate_name", "''"),
+    ("version", "''"),
+    ("status", "'pending'"),
+    ("created_at", "CURRENT_TIMESTAMP"),
+    ("started_at", "NULL"),
+    ("finished_at", "NULL"),
+    ("pid", "NULL"),
+    ("exit_code", "NULL"),
+    ("error_message", "NULL"),
+    ("message", "NULL"),
+    ("memory_used_mb", "NULL"),
+    ("priority", "0"),
+    ("runner_id", "NULL"),
+    ("lease_token", "NULL"),
+    ("lease_expires_at", "NULL"),
+    ("attempt", "0"),
+    ("last_sync_seq", "0"),
+    ("cancel_requested", "0"),
+    ("last_state_sync_at", "NULL"),
+]
 
 
 @dataclass
-class TaskRecord:
-    """Data model for a task record"""
+class TaskDefRecord:
+    """Data model for a task definition record"""
+
+    id: int
+    name: str
+    desc: Optional[str]
+    sha256: str
+    zip_path: str
+    spec: str
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+
+@dataclass
+class JobRecord:
+    """Data model for a job record (one execution of a task on a crate)"""
 
     id: int
     crate_name: str
     version: str
-    workspace_path: str
-    stdout_log: str
-    stderr_log: str
+    task_id: int
+    task_name: str
+    task_sha256: str
+    task_spec: str
     status: TaskStatus
     created_at: datetime
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
-    case_count: Optional[int] = None
-    poc_count: Optional[int] = None
     pid: Optional[int] = None
     exit_code: Optional[int] = None
     error_message: Optional[str] = None
     message: Optional[str] = None
     memory_used_mb: Optional[float] = None
-    compile_failed: Optional[int] = None
     priority: Optional[int] = None
     runner_id: Optional[str] = None
     lease_token: Optional[str] = None
@@ -55,6 +156,16 @@ class RunnerRecord:
     last_seen_at: Optional[datetime] = None
 
 
+def _build_dummy_task_zip() -> bytes:
+    """Build the deterministic placeholder task zip in memory."""
+    buffer = io.BytesIO()
+    entry = zipfile.ZipInfo("task.toml", date_time=(1980, 1, 1, 0, 0, 0))
+    entry.compress_type = zipfile.ZIP_DEFLATED
+    with zipfile.ZipFile(buffer, "w") as zf:
+        zf.writestr(entry, DUMMY_TASK_TOML)
+    return buffer.getvalue()
+
+
 class Database:
     """SQLite database for tracking experiments"""
 
@@ -67,8 +178,15 @@ class Database:
         self.db_path = db_path
         self.conn: Optional[sqlite3.Connection] = None
 
-    def init_db(self):
-        """Initialize database schema"""
+    def init_db(self, workspace: Optional[Path] = None):
+        """Initialize database schema, migrating a legacy layout when found.
+
+        Args:
+            workspace: Workspace root. Only used by legacy migration for
+                filesystem side effects: writing the dummy task zip under
+                ``tasks/`` and moving ``logs/{id}-{type}.log`` files to
+                ``jobs/{id}/files/``.
+        """
         # Create parent directory if needed
         db_file = Path(self.db_path)
         db_file.parent.mkdir(parents=True, exist_ok=True)
@@ -78,105 +196,605 @@ class Database:
         self.conn.row_factory = sqlite3.Row
 
         cursor = self.conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                crate_name TEXT NOT NULL,
-                version TEXT NOT NULL,
-                workspace_path TEXT NOT NULL,
-                stdout_log TEXT NOT NULL,
-                stderr_log TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                started_at TIMESTAMP,
-                finished_at TIMESTAMP,
-                case_count INTEGER,
-                poc_count INTEGER,
-                pid INTEGER,
-                exit_code INTEGER,
-                error_message TEXT,
-                message TEXT,
-                memory_used_mb REAL
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS runners (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                runner_id TEXT NOT NULL UNIQUE,
-                token_hash TEXT NOT NULL,
-                token_salt TEXT NOT NULL,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                last_seen_at TIMESTAMP
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS task_log_chunk_sequences (
-                task_id INTEGER NOT NULL,
-                log_type TEXT NOT NULL,
-                last_chunk_seq INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (task_id, log_type)
-            )
-            """)
-        # Backward-compatible migration for existing databases.
-        columns = {
-            row["name"] for row in cursor.execute("PRAGMA table_info(tasks)").fetchall()
-        }
-        if "message" not in columns:
-            cursor.execute("ALTER TABLE tasks ADD COLUMN message TEXT")
-        if "compile_failed" not in columns:
-            cursor.execute("ALTER TABLE tasks ADD COLUMN compile_failed INTEGER")
-        if "priority" not in columns:
-            cursor.execute("ALTER TABLE tasks ADD COLUMN priority INTEGER DEFAULT 0")
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_pending_priority
-                ON tasks(status, priority DESC, created_at ASC)
-            """)
-        if "runner_id" not in columns:
-            cursor.execute("ALTER TABLE tasks ADD COLUMN runner_id TEXT")
-        if "lease_token" not in columns:
-            cursor.execute("ALTER TABLE tasks ADD COLUMN lease_token TEXT")
-        if "lease_expires_at" not in columns:
-            cursor.execute("ALTER TABLE tasks ADD COLUMN lease_expires_at TIMESTAMP")
-        if "attempt" not in columns:
-            cursor.execute("ALTER TABLE tasks ADD COLUMN attempt INTEGER DEFAULT 0")
-        if "last_event_seq" in columns and "last_sync_seq" not in columns:
-            cursor.execute(
-                "ALTER TABLE tasks RENAME COLUMN last_event_seq TO last_sync_seq"
-            )
-        elif "last_sync_seq" not in columns:
-            cursor.execute(
-                "ALTER TABLE tasks ADD COLUMN last_sync_seq INTEGER DEFAULT 0"
-            )
-        if "cancel_requested" not in columns:
-            cursor.execute(
-                "ALTER TABLE tasks ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0"
-            )
-        if "last_state_sync_at" not in columns:
-            cursor.execute("ALTER TABLE tasks ADD COLUMN last_state_sync_at TIMESTAMP")
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_created_at ON tasks(created_at DESC)
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_status ON tasks(status)
-        """)
-        self.conn.commit()
+        cursor.execute("BEGIN")
+        try:
+            # Legacy layout: the old `tasks` table holds job records.
+            if self._is_legacy_schema(cursor):
+                cursor.execute("ALTER TABLE tasks RENAME TO jobs")
+                logger.info("renamed legacy tasks table to jobs")
 
-    def apply_task_sync(
+            cursor.execute(_TASKS_TABLE_DDL)
+
+            if not self._table_exists(cursor, "jobs"):
+                cursor.execute(f"CREATE TABLE jobs ({_JOBS_TABLE_COLUMNS})")
+            elif "task_id" not in self._table_columns(cursor, "jobs"):
+                self._rebuild_legacy_jobs(cursor, workspace)
+            self._create_jobs_indexes(cursor)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS runners (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    runner_id TEXT NOT NULL UNIQUE,
+                    token_hash TEXT NOT NULL,
+                    token_salt TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    last_seen_at TIMESTAMP
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS job_file_chunk_sequences (
+                    job_id INTEGER NOT NULL,
+                    path TEXT NOT NULL,
+                    last_chunk_seq INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (job_id, path)
+                )
+            """)
+            if self._table_exists(cursor, "task_log_chunk_sequences"):
+                cursor.execute("""
+                    INSERT OR IGNORE INTO job_file_chunk_sequences
+                        (job_id, path, last_chunk_seq)
+                    SELECT task_id, log_type, last_chunk_seq
+                    FROM task_log_chunk_sequences
+                """)
+                cursor.execute("DROP TABLE task_log_chunk_sequences")
+                logger.info(
+                    "migrated task_log_chunk_sequences to job_file_chunk_sequences"
+                )
+
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+
+        if workspace is not None:
+            self._migrate_legacy_log_files(Path(workspace))
+
+    # ------------------------------------------------------------------
+    # Migration helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _table_exists(cursor: sqlite3.Cursor, name: str) -> bool:
+        row = cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (name,),
+        ).fetchone()
+        return row is not None
+
+    @staticmethod
+    def _table_columns(cursor: sqlite3.Cursor, table: str) -> set:
+        return {row["name"] for row in cursor.execute(f"PRAGMA table_info({table})")}
+
+    def _is_legacy_schema(self, cursor: sqlite3.Cursor) -> bool:
+        """The legacy layout has job rows in a `tasks` table keyed by crate."""
+        return self._table_exists(cursor, "tasks") and "crate_name" in (
+            self._table_columns(cursor, "tasks")
+        )
+
+    def _create_jobs_indexes(self, cursor: sqlite3.Cursor) -> None:
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pending_priority
+            ON jobs(status, priority DESC, created_at ASC)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_created_at ON jobs(created_at DESC)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_status ON jobs(status)
+        """)
+
+    def _rebuild_legacy_jobs(
+        self, cursor: sqlite3.Cursor, workspace: Optional[Path]
+    ) -> None:
+        """Rebuild a legacy-schema jobs table with task snapshot columns.
+
+        Drops case_count/poc_count/compile_failed/workspace_path/stdout_log/
+        stderr_log, adds the task snapshot columns, and backfills every row
+        with the dummy task definition.
+        """
+        row = cursor.execute("SELECT COUNT(*) AS n FROM jobs").fetchone()
+        if row["n"] > 0:
+            task_id, task_name, task_sha256, task_spec = self._ensure_dummy_task(
+                cursor, workspace
+            )
+        else:
+            # Empty legacy table: nothing is backfilled, no dummy is created.
+            task_id, task_name, task_sha256, task_spec = 0, "", "", ""
+
+        existing = self._table_columns(cursor, "jobs")
+        column_names = []
+        select_exprs = []
+        for column, default_sql in _JOBS_KEPT_COLUMNS:
+            column_names.append(f'"{column}"')
+            if column in existing:
+                select_exprs.append(f'"{column}"')
+            elif column == "last_sync_seq" and "last_event_seq" in existing:
+                # Very old databases used last_event_seq before the rename.
+                select_exprs.append('"last_event_seq"')
+            elif default_sql is not None:
+                select_exprs.append(f'{default_sql} AS "{column}"')
+            else:
+                raise RuntimeError(
+                    f"legacy jobs table is missing required column: {column}"
+                )
+
+        cursor.execute("DROP TABLE IF EXISTS jobs_new")
+        cursor.execute(f"CREATE TABLE jobs_new ({_JOBS_TABLE_COLUMNS})")
+        cursor.execute(
+            f"""
+            INSERT INTO jobs_new
+                ({", ".join(column_names)}, task_id, task_name, task_sha256, task_spec)
+            SELECT {", ".join(select_exprs)}, ?, ?, ?, ?
+            FROM jobs
+            """,
+            (task_id, task_name, task_sha256, task_spec),
+        )
+        cursor.execute("DROP TABLE jobs")
+        cursor.execute("ALTER TABLE jobs_new RENAME TO jobs")
+        logger.info(
+            "rebuilt jobs table with task snapshot columns",
+            extra={"migrated_rows": row["n"]},
+        )
+
+    def _ensure_dummy_task(
+        self, cursor: sqlite3.Cursor, workspace: Optional[Path]
+    ) -> tuple:
+        """Insert (or reuse) the dummy task definition for legacy jobs.
+
+        Returns (id, name, sha256, spec_json). Runs inside the caller's
+        transaction.
+        """
+        zip_bytes = _build_dummy_task_zip()
+        sha256 = sha256_hex(zip_bytes)
+
+        row = cursor.execute(
+            "SELECT id, name, sha256, spec FROM tasks WHERE sha256 = ?", (sha256,)
+        ).fetchone()
+        if row is not None:
+            return row["id"], row["name"], row["sha256"], row["spec"]
+
+        spec = parse_task_spec(DUMMY_TASK_TOML.encode("utf-8"))
+        spec_json = json.dumps(spec_to_dict(spec), ensure_ascii=False)
+
+        if workspace is not None:
+            zip_path = Path(workspace) / "tasks" / f"{sha256}.zip"
+            zip_path.parent.mkdir(parents=True, exist_ok=True)
+            if not zip_path.exists():
+                zip_path.write_bytes(zip_bytes)
+            zip_path_str = str(zip_path)
+        else:
+            zip_path_str = str(Path("tasks") / f"{sha256}.zip")
+
+        cursor.execute(
+            """
+            INSERT INTO tasks (name, "desc", sha256, zip_path, spec, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (spec.name, spec.desc, sha256, zip_path_str, spec_json, datetime.now()),
+        )
+        logger.info(
+            "created dummy task definition for legacy jobs",
+            extra={"task_id": cursor.lastrowid, "sha256": sha256},
+        )
+        return cursor.lastrowid, spec.name, sha256, spec_json
+
+    def _migrate_legacy_log_files(self, workspace: Path) -> None:
+        """Move logs/{id}-{type}.log files to jobs/{id}/files/{type}.log.
+
+        Idempotent: files whose target already exists are skipped (and left in
+        place) so re-running never loses data.
+        """
+        logs_dir = workspace / "logs"
+        if not logs_dir.is_dir():
+            return
+        for entry in sorted(logs_dir.iterdir()):
+            if not entry.is_file():
+                continue
+            match = _LEGACY_LOG_FILE_RE.match(entry.name)
+            if match is None:
+                continue
+            job_id, log_type = match.group(1), match.group(2)
+            target_dir = workspace / "jobs" / job_id / "files"
+            target = target_dir / f"{log_type}.log"
+            if target.exists():
+                continue
+            target_dir.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(entry), str(target))
+            logger.info(
+                "migrated legacy log file",
+                extra={"job_id": job_id, "path": f"{log_type}.log"},
+            )
+
+    # ------------------------------------------------------------------
+    # Task definitions
+    # ------------------------------------------------------------------
+
+    def create_task_definition(
+        self,
+        name: str,
+        desc: Optional[str],
+        sha256: str,
+        zip_path: str,
+        spec: str,
+    ) -> int:
+        """Create a new task definition
+
+        Returns:
+            Task ID of the created task definition
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO tasks (name, "desc", sha256, zip_path, spec, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (name, desc, sha256, zip_path, spec, datetime.now()),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_task_definition(self, task_id: int) -> Optional[TaskDefRecord]:
+        """Get a task definition by ID"""
+        cursor = self.conn.cursor()
+        row = cursor.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if row is None:
+            return None
+        return self._row_to_task_def_record(row)
+
+    def get_task_definition_by_sha256(self, sha256: str) -> Optional[TaskDefRecord]:
+        """Get a task definition by its zip sha256 fingerprint"""
+        cursor = self.conn.cursor()
+        row = cursor.execute(
+            "SELECT * FROM tasks WHERE sha256 = ?", (sha256,)
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_task_def_record(row)
+
+    def list_task_definitions(self) -> List[TaskDefRecord]:
+        """List all task definitions, newest first"""
+        cursor = self.conn.cursor()
+        rows = cursor.execute("SELECT * FROM tasks ORDER BY created_at DESC").fetchall()
+        return [self._row_to_task_def_record(row) for row in rows]
+
+    def update_task_definition(
         self,
         task_id: int,
+        *,
+        name: str,
+        desc: Optional[str],
+        sha256: str,
+        zip_path: str,
+        spec: str,
+    ) -> bool:
+        """Replace a task definition; returns True when the row exists."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            UPDATE tasks
+            SET name = ?, "desc" = ?, sha256 = ?, zip_path = ?, spec = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (name, desc, sha256, zip_path, spec, datetime.now(), task_id),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def delete_task_definition(self, task_id: int) -> Optional[TaskDefRecord]:
+        """Delete a task definition; returns the deleted record if it existed."""
+        record = self.get_task_definition(task_id)
+        if record is None:
+            return None
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+        self.conn.commit()
+        return record
+
+    def _row_to_task_def_record(self, row: sqlite3.Row) -> TaskDefRecord:
+        """Convert a database row to a TaskDefRecord"""
+        return TaskDefRecord(
+            id=row["id"],
+            name=row["name"],
+            desc=row["desc"],
+            sha256=row["sha256"],
+            zip_path=row["zip_path"],
+            spec=row["spec"],
+            created_at=self._parse_datetime(row["created_at"]),
+            updated_at=(
+                self._parse_datetime(row["updated_at"]) if row["updated_at"] else None
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # Jobs
+    # ------------------------------------------------------------------
+
+    def create_job(
+        self,
+        crate_name: str,
+        version: str,
+        task_id: int,
+        task_name: str,
+        task_sha256: str,
+        task_spec: str,
+    ) -> int:
+        """Create a new job
+
+        Args:
+            crate_name: Name of the crate
+            version: Version of the crate
+            task_id: Task definition this job runs
+            task_name: Snapshot of the task name
+            task_sha256: Snapshot of the task zip sha256
+            task_spec: Snapshot of the parsed task spec (JSON string)
+
+        Returns:
+            Job ID of the created job
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO jobs (
+                crate_name, version, task_id, task_name, task_sha256, task_spec,
+                status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+            (
+                crate_name,
+                version,
+                task_id,
+                task_name,
+                task_sha256,
+                task_spec,
+                TaskStatus.PENDING.value,
+                datetime.now(),
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_job(self, job_id: int) -> Optional[JobRecord]:
+        """Get a job by ID
+
+        Args:
+            job_id: Job ID to retrieve
+
+        Returns:
+            JobRecord if found, None otherwise
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM jobs WHERE id = ?", (job_id,))
+        row = cursor.fetchone()
+
+        if row is None:
+            return None
+
+        return self._row_to_job_record(row)
+
+    def get_all_jobs(self) -> List[JobRecord]:
+        """Get all jobs ordered by creation time (latest first)
+
+        Returns:
+            List of JobRecord objects
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM jobs ORDER BY created_at DESC")
+        rows = cursor.fetchall()
+
+        return [self._row_to_job_record(row) for row in rows]
+
+    def get_jobs_by_status(self, status: TaskStatus) -> List[JobRecord]:
+        """Get jobs filtered by status
+
+        Args:
+            status: Status to filter by
+
+        Returns:
+            List of JobRecord objects with matching status
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM jobs WHERE status = ? ORDER BY created_at DESC",
+            (status.value,),
+        )
+        rows = cursor.fetchall()
+
+        return [self._row_to_job_record(row) for row in rows]
+
+    def get_pending_jobs_ordered(self) -> List[JobRecord]:
+        """Get pending jobs ordered by priority (high first), then creation time."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM jobs WHERE status = ? ORDER BY priority DESC, created_at ASC",
+            (TaskStatus.PENDING.value,),
+        )
+        rows = cursor.fetchall()
+        return [self._row_to_job_record(row) for row in rows]
+
+    def delete_job(self, job_id: int) -> bool:
+        """Delete a job from database
+
+        Args:
+            job_id: Job ID to delete
+
+        Returns:
+            True if job was deleted, False if job not found
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def update_job_status(
+        self,
+        job_id: int,
+        status: TaskStatus,
+        started_at: Optional[datetime] = None,
+        finished_at: Optional[datetime] = None,
+        exit_code: Optional[int] = None,
+        error_message: Optional[str] = None,
+        message: Optional[str] = None,
+    ):
+        """Update job status and timestamps
+
+        Args:
+            job_id: Job ID to update
+            status: New job status
+            started_at: Job start time (optional)
+            finished_at: Job completion time (optional)
+            exit_code: Exit code (optional)
+            error_message: Error message (optional)
+        """
+        cursor = self.conn.cursor()
+
+        updates = ["status = ?"]
+        params = [status.value]
+
+        if started_at is not None:
+            updates.append("started_at = ?")
+            params.append(started_at)
+
+        if finished_at is not None:
+            updates.append("finished_at = ?")
+            params.append(finished_at)
+
+        if exit_code is not None:
+            updates.append("exit_code = ?")
+            params.append(exit_code)
+
+        if error_message is not None:
+            updates.append("error_message = ?")
+            params.append(error_message)
+
+        if message is not None:
+            updates.append("message = ?")
+            params.append(message)
+
+        params.append(job_id)
+
+        query = f"UPDATE jobs SET {', '.join(updates)} WHERE id = ?"
+        cursor.execute(query, params)
+        self.conn.commit()
+
+    def update_job_priority(self, job_id: int, priority: int):
+        """Update job priority."""
+        cursor = self.conn.cursor()
+        cursor.execute("UPDATE jobs SET priority = ? WHERE id = ?", (priority, job_id))
+        self.conn.commit()
+
+    def update_job_pid(self, job_id: int, pid: int):
+        """Update job process ID
+
+        Args:
+            job_id: Job ID to update
+            pid: Process ID
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("UPDATE jobs SET pid = ? WHERE id = ?", (pid, job_id))
+        self.conn.commit()
+
+    def reset_job_for_retry(self, job_id: int):
+        """Reset job state for retry
+
+        Resets job to pending status and clears execution results.
+        Keeps crate info and the task snapshot intact.
+
+        Args:
+            job_id: Job ID to reset
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            UPDATE jobs SET
+                status = ?,
+                started_at = NULL,
+                finished_at = NULL,
+                exit_code = NULL,
+                error_message = NULL,
+                message = NULL,
+                pid = NULL,
+                runner_id = NULL,
+                lease_token = NULL,
+                lease_expires_at = NULL,
+                last_sync_seq = 0,
+                cancel_requested = 0,
+                last_state_sync_at = NULL
+            WHERE id = ?
+        """,
+            (TaskStatus.PENDING.value, job_id),
+        )
+        cursor.execute(
+            "DELETE FROM job_file_chunk_sequences WHERE job_id = ?",
+            (job_id,),
+        )
+        self.conn.commit()
+
+    def update_job_state_sync(self, job_id: int) -> bool:
+        """Update the last_state_sync_at timestamp for a running job.
+
+        Args:
+            job_id: Job ID to update
+
+        Returns:
+            True if a row was updated, False otherwise
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "UPDATE jobs SET last_state_sync_at = ? WHERE id = ? AND status = ?",
+            (datetime.now(), job_id, TaskStatus.RUNNING.value),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def reconcile_stale_jobs(self, max_sync_interval_seconds: int) -> int:
+        """Mark RUNNING jobs that haven't synced within the threshold as runner_failed.
+
+        Args:
+            max_sync_interval_seconds: Maximum allowed interval since last sync
+
+        Returns:
+            Number of jobs marked as runner_failed
+        """
+        now = datetime.now()
+        threshold = now - timedelta(seconds=max_sync_interval_seconds)
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            UPDATE jobs
+            SET status = ?,
+                finished_at = ?,
+                last_state_sync_at = NULL,
+                error_message = COALESCE(error_message, ?)
+            WHERE status = ?
+              AND last_state_sync_at IS NOT NULL
+              AND last_state_sync_at <= ?
+            """,
+            (
+                TaskStatus.RUNNER_FAILED.value,
+                now,
+                "Runner stopped sending state sync updates",
+                TaskStatus.RUNNING.value,
+                threshold,
+            ),
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
+    def apply_job_sync(
+        self,
+        job_id: int,
         sync_seq: int,
         status: str,
         exit_code: Optional[int] = None,
         message: Optional[str] = None,
-        case_count: Optional[int] = None,
-        poc_count: Optional[int] = None,
-        compile_failed: Optional[int] = None,
     ) -> Optional[bool]:
         """Apply an ordered runner sync.
 
         Returns:
-            None: task does not exist
+            None: job does not exist
             False: duplicate/stale sequence or invalid state transition
             True: sync applied
         """
@@ -186,7 +804,7 @@ class Database:
         try:
             cursor.execute("BEGIN IMMEDIATE")
             row = cursor.execute(
-                "SELECT status, last_sync_seq FROM tasks WHERE id = ?", (task_id,)
+                "SELECT status, last_sync_seq FROM jobs WHERE id = ?", (job_id,)
             ).fetchone()
 
             if row is None:
@@ -235,21 +853,9 @@ class Database:
                 updates.append("message = ?")
                 params.append(message)
 
-            if case_count is not None:
-                updates.append("case_count = ?")
-                params.append(case_count)
-
-            if poc_count is not None:
-                updates.append("poc_count = ?")
-                params.append(poc_count)
-
-            if compile_failed is not None:
-                updates.append("compile_failed = ?")
-                params.append(compile_failed)
-
-            params.append(task_id)
+            params.append(job_id)
             cursor.execute(
-                f"UPDATE tasks SET {', '.join(updates)} WHERE id = ?",
+                f"UPDATE jobs SET {', '.join(updates)} WHERE id = ?",
                 params,
             )
             self.conn.commit()
@@ -258,10 +864,10 @@ class Database:
             self.conn.rollback()
             raise
 
-    def record_task_log_chunk(
+    def record_job_file_chunk(
         self,
-        task_id: int,
-        log_type: str,
+        job_id: int,
+        path: str,
         chunk_seq: int,
     ) -> bool:
         """Record chunk sequence and return whether append should occur."""
@@ -272,10 +878,10 @@ class Database:
             row = cursor.execute(
                 """
                 SELECT last_chunk_seq
-                FROM task_log_chunk_sequences
-                WHERE task_id = ? AND log_type = ?
+                FROM job_file_chunk_sequences
+                WHERE job_id = ? AND path = ?
                 """,
-                (task_id, log_type),
+                (job_id, path),
             ).fetchone()
 
             if row is not None and chunk_seq <= row["last_chunk_seq"]:
@@ -285,19 +891,19 @@ class Database:
             if row is None:
                 cursor.execute(
                     """
-                    INSERT INTO task_log_chunk_sequences (task_id, log_type, last_chunk_seq)
+                    INSERT INTO job_file_chunk_sequences (job_id, path, last_chunk_seq)
                     VALUES (?, ?, ?)
                     """,
-                    (task_id, log_type, chunk_seq),
+                    (job_id, path, chunk_seq),
                 )
             else:
                 cursor.execute(
                     """
-                    UPDATE task_log_chunk_sequences
+                    UPDATE job_file_chunk_sequences
                     SET last_chunk_seq = ?
-                    WHERE task_id = ? AND log_type = ?
+                    WHERE job_id = ? AND path = ?
                     """,
-                    (chunk_seq, task_id, log_type),
+                    (chunk_seq, job_id, path),
                 )
 
             self.conn.commit()
@@ -306,363 +912,137 @@ class Database:
             self.conn.rollback()
             raise
 
-    def create_task(
-        self,
-        crate_name: str,
-        version: str,
-        workspace_path: str,
-        stdout_log: str,
-        stderr_log: str,
-    ) -> int:
-        """Create a new task
-
-        Args:
-            crate_name: Name of the crate
-            version: Version of the crate
-            workspace_path: Path to workspace directory
-            stdout_log: Path to stdout log file
-            stderr_log: Path to stderr log file
-
-        Returns:
-            Task ID of the created task
-        """
+    def reset_job_file_chunk_sequences(self, job_id: int):
+        """Clear per-file chunk sequence tracking for a job."""
         cursor = self.conn.cursor()
         cursor.execute(
-            """
-            INSERT INTO tasks (
-                crate_name, version, workspace_path,
-                stdout_log, stderr_log, status, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-            (
-                crate_name,
-                version,
-                workspace_path,
-                stdout_log,
-                stderr_log,
-                TaskStatus.PENDING.value,
-                datetime.now(),
-            ),
-        )
-        self.conn.commit()
-        return cursor.lastrowid
-
-    def get_task(self, task_id: int) -> Optional[TaskRecord]:
-        """Get a task by ID
-
-        Args:
-            task_id: Task ID to retrieve
-
-        Returns:
-            TaskRecord if found, None otherwise
-        """
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
-        row = cursor.fetchone()
-
-        if row is None:
-            return None
-
-        return self._row_to_task_record(row)
-
-    def get_task_by_crate_and_version(
-        self, crate_name: str, version: str
-    ) -> Optional[TaskRecord]:
-        """Get a task by crate name and version
-
-        Args:
-            crate_name: Name of the crate
-            version: Version of the crate
-
-        Returns:
-            TaskRecord if found, None otherwise
-        """
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT * FROM tasks WHERE crate_name = ? AND version = ?",
-            (crate_name, version),
-        )
-        row = cursor.fetchone()
-
-        if row is None:
-            return None
-
-        return self._row_to_task_record(row)
-
-    def get_all_tasks(self) -> List[TaskRecord]:
-        """Get all tasks ordered by creation time (latest first)
-
-        Returns:
-            List of TaskRecord objects
-        """
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM tasks ORDER BY created_at DESC")
-        rows = cursor.fetchall()
-
-        return [self._row_to_task_record(row) for row in rows]
-
-    def update_task_status(
-        self,
-        task_id: int,
-        status: TaskStatus,
-        started_at: Optional[datetime] = None,
-        finished_at: Optional[datetime] = None,
-        exit_code: Optional[int] = None,
-        error_message: Optional[str] = None,
-        message: Optional[str] = None,
-    ):
-        """Update task status and timestamps
-
-        Args:
-            task_id: Task ID to update
-            status: New task status
-            started_at: Task start time (optional)
-            finished_at: Task completion time (optional)
-            exit_code: Exit code (optional)
-            error_message: Error message (optional)
-        """
-        cursor = self.conn.cursor()
-
-        updates = ["status = ?"]
-        params = [status.value]
-
-        if started_at is not None:
-            updates.append("started_at = ?")
-            params.append(started_at)
-
-        if finished_at is not None:
-            updates.append("finished_at = ?")
-            params.append(finished_at)
-
-        if exit_code is not None:
-            updates.append("exit_code = ?")
-            params.append(exit_code)
-
-        if error_message is not None:
-            updates.append("error_message = ?")
-            params.append(error_message)
-
-        if message is not None:
-            updates.append("message = ?")
-            params.append(message)
-
-        params.append(task_id)
-
-        query = f"UPDATE tasks SET {', '.join(updates)} WHERE id = ?"
-        cursor.execute(query, params)
-        self.conn.commit()
-
-    def update_task_counts(
-        self,
-        task_id: int,
-        case_count: Optional[int] = None,
-        poc_count: Optional[int] = None,
-    ):
-        """Update task case and POC counts
-
-        Args:
-            task_id: Task ID to update
-            case_count: Number of test cases (optional)
-            poc_count: Number of POCs found (optional)
-        """
-        cursor = self.conn.cursor()
-
-        updates = []
-        params = []
-
-        if case_count is not None:
-            updates.append("case_count = ?")
-            params.append(case_count)
-
-        if poc_count is not None:
-            updates.append("poc_count = ?")
-            params.append(poc_count)
-
-        if not updates:
-            return
-
-        params.append(task_id)
-
-        query = f"UPDATE tasks SET {', '.join(updates)} WHERE id = ?"
-        cursor.execute(query, params)
-        self.conn.commit()
-
-    def update_task_compile_failed(self, task_id: int, compile_failed: Optional[int]):
-        """Update task compile_failed count.
-
-        Args:
-            task_id: Task ID to update
-            compile_failed: CompileFailed count, or None to clear
-        """
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "UPDATE tasks SET compile_failed = ? WHERE id = ?",
-            (compile_failed, task_id),
+            "DELETE FROM job_file_chunk_sequences WHERE job_id = ?",
+            (job_id,),
         )
         self.conn.commit()
 
-    def update_task_state_sync(self, task_id: int) -> bool:
-        """Update the last_state_sync_at timestamp for a running task.
-
-        Args:
-            task_id: Task ID to update
-
-        Returns:
-            True if a row was updated, False otherwise
-        """
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "UPDATE tasks SET last_state_sync_at = ? WHERE id = ? AND status = ?",
-            (datetime.now(), task_id, TaskStatus.RUNNING.value),
-        )
-        self.conn.commit()
-        return cursor.rowcount > 0
-
-    def reconcile_stale_tasks(self, max_sync_interval_seconds: int) -> int:
-        """Mark RUNNING tasks that haven't synced within the threshold as runner_failed.
-
-        Args:
-            max_sync_interval_seconds: Maximum allowed interval since last sync
-
-        Returns:
-            Number of tasks marked as runner_failed
-        """
+    def extend_runner_job_leases(self, runner_id: str, lease_ttl_seconds: int) -> int:
+        """Extend lease expiration of all RUNNING jobs for a runner."""
         now = datetime.now()
-        threshold = now - timedelta(seconds=max_sync_interval_seconds)
+        lease_expires_at = now + timedelta(seconds=lease_ttl_seconds)
         cursor = self.conn.cursor()
         cursor.execute(
             """
-            UPDATE tasks
-            SET status = ?,
-                finished_at = ?,
-                last_state_sync_at = NULL,
-                error_message = COALESCE(error_message, ?)
-            WHERE status = ?
-              AND last_state_sync_at IS NOT NULL
-              AND last_state_sync_at <= ?
+            UPDATE jobs
+            SET lease_expires_at = ?
+            WHERE status = ? AND runner_id = ?
             """,
-            (
-                TaskStatus.RUNNER_FAILED.value,
-                now,
-                "Runner stopped sending state sync updates",
-                TaskStatus.RUNNING.value,
-                threshold,
-            ),
+            (lease_expires_at, TaskStatus.RUNNING.value, runner_id),
         )
         self.conn.commit()
         return cursor.rowcount
 
-    def update_task_priority(self, task_id: int, priority: int):
-        """Update task priority."""
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "UPDATE tasks SET priority = ? WHERE id = ?", (priority, task_id)
-        )
-        self.conn.commit()
+    def claim_pending_job(
+        self, runner_id: str, lease_ttl_seconds: int
+    ) -> Optional[JobRecord]:
+        """Atomically claim one pending job for a runner.
 
-    def update_task_pid(self, task_id: int, pid: int):
-        """Update task process ID
-
-        Args:
-            task_id: Task ID to update
-            pid: Process ID
+        The claimed job's task snapshot (task_name/task_sha256/task_spec) is
+        refreshed from the current task definition when one exists, so updates
+        to a task take effect for jobs that have not started yet. Jobs whose
+        task definition has been deleted are claimed with their old snapshot.
         """
+        now = datetime.now()
+        lease_token = secrets.token_urlsafe(24)
+        lease_expires_at = now + timedelta(seconds=lease_ttl_seconds)
         cursor = self.conn.cursor()
-        cursor.execute("UPDATE tasks SET pid = ? WHERE id = ?", (pid, task_id))
-        self.conn.commit()
 
-    def reset_task_for_retry(self, task_id: int):
-        """Reset task state for retry
+        try:
+            cursor.execute("BEGIN IMMEDIATE")
+            row = cursor.execute(
+                """
+                SELECT j.id AS id,
+                       j.task_sha256 AS current_sha256,
+                       t.id AS def_id,
+                       t.name AS def_name,
+                       t.sha256 AS def_sha256,
+                       t.spec AS def_spec
+                FROM jobs j
+                LEFT JOIN tasks t ON t.id = j.task_id
+                WHERE j.status = ?
+                ORDER BY j.priority DESC, j.created_at ASC
+                LIMIT 1
+                """,
+                (TaskStatus.PENDING.value,),
+            ).fetchone()
 
-        Resets task to pending status and clears execution results.
-        Keeps crate_name, version, and workspace paths intact.
+            if row is None:
+                self.conn.commit()
+                return None
 
-        Args:
-            task_id: Task ID to reset
-        """
-        cursor = self.conn.cursor()
-        cursor.execute(
-            """
-            UPDATE tasks SET
-                status = ?,
-                started_at = NULL,
-                finished_at = NULL,
-                exit_code = NULL,
-                error_message = NULL,
-                message = NULL,
-                case_count = 0,
-                poc_count = 0,
-                compile_failed = 0,
-                pid = NULL,
-                runner_id = NULL,
-                lease_token = NULL,
-                lease_expires_at = NULL,
-                last_sync_seq = 0,
-                cancel_requested = 0,
-                last_state_sync_at = NULL
-            WHERE id = ?
-        """,
-            (TaskStatus.PENDING.value, task_id),
-        )
-        cursor.execute(
-            "DELETE FROM task_log_chunk_sequences WHERE task_id = ?",
-            (task_id,),
-        )
-        self.conn.commit()
+            job_id = row["id"]
+            if row["def_id"] is not None and row["def_sha256"] != row["current_sha256"]:
+                cursor.execute(
+                    """
+                    UPDATE jobs
+                    SET task_name = ?, task_sha256 = ?, task_spec = ?
+                    WHERE id = ?
+                    """,
+                    (row["def_name"], row["def_sha256"], row["def_spec"], job_id),
+                )
 
-    def reset_task_log_chunk_sequences(self, task_id: int):
-        """Clear per-log chunk sequence tracking for a task."""
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "DELETE FROM task_log_chunk_sequences WHERE task_id = ?",
-            (task_id,),
-        )
-        self.conn.commit()
+            cursor.execute(
+                """
+                UPDATE jobs
+                SET status = ?,
+                    runner_id = ?,
+                    lease_token = ?,
+                    lease_expires_at = ?,
+                    started_at = ?,
+                    finished_at = NULL,
+                    exit_code = NULL,
+                    error_message = NULL,
+                    message = NULL,
+                    pid = NULL,
+                    last_sync_seq = 0,
+                    cancel_requested = 0,
+                    last_state_sync_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                (
+                    TaskStatus.RUNNING.value,
+                    runner_id,
+                    lease_token,
+                    lease_expires_at,
+                    now,
+                    now,
+                    job_id,
+                    TaskStatus.PENDING.value,
+                ),
+            )
 
-    def get_tasks_by_status(self, status: TaskStatus) -> List[TaskRecord]:
-        """Get tasks filtered by status
+            if cursor.rowcount == 0:
+                self.conn.commit()
+                return None
 
-        Args:
-            status: Status to filter by
+            self.conn.commit()
+            return self.get_job(job_id)
+        except Exception:
+            self.conn.rollback()
+            raise
 
-        Returns:
-            List of TaskRecord objects with matching status
-        """
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT * FROM tasks WHERE status = ? ORDER BY created_at DESC",
-            (status.value,),
-        )
-        rows = cursor.fetchall()
-
-        return [self._row_to_task_record(row) for row in rows]
-
-    def get_pending_tasks_ordered(self) -> List[TaskRecord]:
-        """Get pending tasks ordered by priority (high first), then creation time."""
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT * FROM tasks WHERE status = ? ORDER BY priority DESC, created_at ASC",
-            (TaskStatus.PENDING.value,),
-        )
-        rows = cursor.fetchall()
-        return [self._row_to_task_record(row) for row in rows]
-
-    def _row_to_task_record(self, row: sqlite3.Row) -> TaskRecord:
-        """Convert a database row to a TaskRecord
+    def _row_to_job_record(self, row: sqlite3.Row) -> JobRecord:
+        """Convert a database row to a JobRecord
 
         Args:
             row: Database row
 
         Returns:
-            TaskRecord object
+            JobRecord object
         """
-        return TaskRecord(
+        return JobRecord(
             id=row["id"],
             crate_name=row["crate_name"],
             version=row["version"],
-            workspace_path=row["workspace_path"],
-            stdout_log=row["stdout_log"],
-            stderr_log=row["stderr_log"],
+            task_id=row["task_id"],
+            task_name=row["task_name"],
+            task_sha256=row["task_sha256"],
+            task_spec=row["task_spec"],
             status=TaskStatus(row["status"]),
             created_at=self._parse_datetime(row["created_at"]),
             started_at=(
@@ -671,14 +1051,11 @@ class Database:
             finished_at=(
                 self._parse_datetime(row["finished_at"]) if row["finished_at"] else None
             ),
-            case_count=row["case_count"],
-            poc_count=row["poc_count"],
             pid=row["pid"],
             exit_code=row["exit_code"],
             error_message=row["error_message"],
             message=row["message"],
             memory_used_mb=row["memory_used_mb"],
-            compile_failed=row["compile_failed"],
             priority=row["priority"],
             runner_id=row["runner_id"],
             lease_token=row["lease_token"],
@@ -696,6 +1073,10 @@ class Database:
                 else None
             ),
         )
+
+    # ------------------------------------------------------------------
+    # Runners
+    # ------------------------------------------------------------------
 
     def _row_to_runner_record(self, row: sqlite3.Row) -> RunnerRecord:
         """Convert a database row to a RunnerRecord."""
@@ -799,90 +1180,9 @@ class Database:
         self.conn.commit()
         return cursor.rowcount > 0
 
-    def extend_runner_task_leases(self, runner_id: str, lease_ttl_seconds: int) -> int:
-        """Extend lease expiration of all RUNNING tasks for a runner."""
-        now = datetime.now()
-        lease_expires_at = now + timedelta(seconds=lease_ttl_seconds)
-        cursor = self.conn.cursor()
-        cursor.execute(
-            """
-            UPDATE tasks
-            SET lease_expires_at = ?
-            WHERE status = ? AND runner_id = ?
-            """,
-            (lease_expires_at, TaskStatus.RUNNING.value, runner_id),
-        )
-        self.conn.commit()
-        return cursor.rowcount
-
-    def claim_pending_task(
-        self, runner_id: str, lease_ttl_seconds: int
-    ) -> Optional[TaskRecord]:
-        """Atomically claim one pending task for a runner."""
-        now = datetime.now()
-        lease_token = secrets.token_urlsafe(24)
-        lease_expires_at = now + timedelta(seconds=lease_ttl_seconds)
-        cursor = self.conn.cursor()
-
-        try:
-            cursor.execute("BEGIN IMMEDIATE")
-            row = cursor.execute(
-                """
-                SELECT id
-                FROM tasks
-                WHERE status = ?
-                ORDER BY priority DESC, created_at ASC
-                LIMIT 1
-                """,
-                (TaskStatus.PENDING.value,),
-            ).fetchone()
-
-            if row is None:
-                self.conn.commit()
-                return None
-
-            cursor.execute(
-                """
-                UPDATE tasks
-                SET status = ?,
-                    runner_id = ?,
-                    lease_token = ?,
-                    lease_expires_at = ?,
-                    started_at = ?,
-                    finished_at = NULL,
-                    exit_code = NULL,
-                    error_message = NULL,
-                    message = NULL,
-                    case_count = 0,
-                    poc_count = 0,
-                    compile_failed = 0,
-                    pid = NULL,
-                    last_sync_seq = 0,
-                    cancel_requested = 0,
-                    last_state_sync_at = ?
-                WHERE id = ? AND status = ?
-                """,
-                (
-                    TaskStatus.RUNNING.value,
-                    runner_id,
-                    lease_token,
-                    lease_expires_at,
-                    now,
-                    now,
-                    row["id"],
-                    TaskStatus.PENDING.value,
-                ),
-            )
-
-            if cursor.rowcount == 0:
-                self.conn.commit()
-                return None
-
-            self.conn.commit()
-            return self.get_task(row["id"])
-        except Exception:
-            self.conn.rollback()
-            raise
+    # ------------------------------------------------------------------
+    # Misc
+    # ------------------------------------------------------------------
 
     def _parse_datetime(self, dt_str: str) -> datetime:
         """Parse datetime from database
@@ -910,20 +1210,6 @@ class Database:
 
         # If all formats fail, raise error
         raise ValueError(f"Cannot parse datetime: {dt_str}")
-
-    def delete_task(self, task_id: int) -> bool:
-        """Delete a task from database
-
-        Args:
-            task_id: Task ID to delete
-
-        Returns:
-            True if task was deleted, False if task not found
-        """
-        cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-        self.conn.commit()
-        return cursor.rowcount > 0
 
     def close(self):
         """Close database connection"""

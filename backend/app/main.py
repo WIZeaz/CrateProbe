@@ -19,7 +19,7 @@ from typing import Optional, List, Literal
 from pathlib import Path
 import asyncio
 from app.config import Config
-from app.database import Database, TaskRecord
+from app.database import Database, JobRecord
 from core.models import TaskStatus
 from runner.crates_api import CratesAPI, CrateNotFoundError
 from runner.rate_limiter import AsyncTokenBucket
@@ -170,12 +170,12 @@ class RunnerMetricsQueryResponse(BaseModel):
 RUNNER_LOG_TYPES = {"stdout", "stderr", "runner", "miri_report", "stats-yaml"}
 
 
-def resolve_log_path(task: TaskRecord, log_type: str, config: Config) -> Path:
+def resolve_log_path(task: JobRecord, log_type: str, config: Config) -> Path:
     return Path(config.workspace_path) / "logs" / f"{task.id}-{log_type}.log"
 
 
-def _clear_task_logs(task: TaskRecord, db: Database, config: Config) -> None:
-    db.reset_task_log_chunk_sequences(task.id)
+def _clear_task_logs(task: JobRecord, db: Database, config: Config) -> None:
+    db.reset_job_file_chunk_sequences(task.id)
     for log_name in RUNNER_LOG_TYPES:
         log_path = resolve_log_path(task, log_name, config)
         if not log_path.exists() or not log_path.is_file():
@@ -192,7 +192,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
     # Initialize database
     db = Database(db_path)
-    db.init_db()
+    db.init_db(config.workspace_path)
 
     # Create scheduler
     scheduler = TaskScheduler(config, db)
@@ -290,8 +290,8 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         sync_seq: Optional[int] = None,
         log_type: Optional[str] = None,
         chunk_seq: Optional[int] = None,
-    ) -> TaskRecord:
-        task = db.get_task(task_id)
+    ) -> JobRecord:
+        task = db.get_job(task_id)
         if task is None:
             if log_type is not None:
                 logger.warning(
@@ -409,9 +409,14 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                         status_code=400, detail=f"Version {version} not found"
                     )
 
-            # Check if task already exists for this crate and version
-            existing_task = db.get_task_by_crate_and_version(
-                request.crate_name, version
+            # Check if a job already exists for this crate and version
+            existing_task = next(
+                (
+                    job
+                    for job in db.get_all_jobs()
+                    if job.crate_name == request.crate_name and job.version == version
+                ),
+                None,
             )
             if existing_task:
                 terminal_statuses = {
@@ -434,8 +439,8 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
                 if existing_task.status in terminal_statuses:
                     # Terminal task: reset for re-execution
-                    db.reset_task_for_retry(existing_task.id)
-                    reset_task = db.get_task(existing_task.id)
+                    db.reset_job_for_retry(existing_task.id)
+                    reset_task = db.get_job(existing_task.id)
                     if reset_task is not None:
                         payload = _task_to_dict(reset_task)
                         payload["type"] = "task_created"
@@ -455,31 +460,20 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                     status=existing_task.status.value,
                 )
 
-            # Create workspace paths
-            workspace_path = (
-                config.workspace_path / "repos" / f"{request.crate_name}-{version}"
-            )
-            stdout_log = (
-                config.workspace_path
-                / "logs"
-                / f"{request.crate_name}-{version}-stdout.log"
-            )
-            stderr_log = (
-                config.workspace_path
-                / "logs"
-                / f"{request.crate_name}-{version}-stderr.log"
-            )
-
-            # Create task in database
-            task_id = db.create_task(
+            # Create job in database
+            # TODO(multi-task-jobs): Task 3 rewrites this route to accept a
+            # task_id and snapshot the real task definition; the snapshot
+            # columns are placeholders until then.
+            task_id = db.create_job(
                 crate_name=request.crate_name,
                 version=version,
-                workspace_path=str(workspace_path),
-                stdout_log=str(stdout_log),
-                stderr_log=str(stderr_log),
+                task_id=0,
+                task_name="",
+                task_sha256="",
+                task_spec="",
             )
 
-            created_task = db.get_task(task_id)
+            created_task = db.get_job(task_id)
             if created_task is not None:
                 payload = _task_to_dict(created_task)
                 payload["type"] = "task_created"
@@ -500,7 +494,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     @app.get("/api/tasks", response_model=List[TaskDetailResponse])
     async def get_all_tasks():
         """Get all tasks"""
-        tasks = db.get_all_tasks()
+        tasks = db.get_all_jobs()
         return [_task_to_response(task) for task in tasks]
 
     @app.post(
@@ -604,7 +598,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         _auth: None = Depends(require_runner_auth),
     ):
         db.touch_runner_heartbeat(runner_id)
-        db.extend_runner_task_leases(runner_id, config.lease_ttl_seconds)
+        db.extend_runner_job_leases(runner_id, config.lease_ttl_seconds)
         return {"success": True}
 
     @app.post("/api/runners/{runner_id}/metrics")
@@ -728,7 +722,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         if request.jobs >= request.max_jobs:
             return PlainTextResponse(status_code=204, content="")
 
-        task = db.claim_pending_task(runner_id, config.lease_ttl_seconds)
+        task = db.claim_pending_job(runner_id, config.lease_ttl_seconds)
         if task is None:
             return PlainTextResponse(status_code=204, content="")
 
@@ -762,15 +756,12 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             request_id=request_id,
             sync_seq=request.sync_seq,
         )
-        applied = db.apply_task_sync(
+        applied = db.apply_job_sync(
             task_id,
             request.sync_seq,
             request.status,
             exit_code=request.exit_code,
             message=request.message,
-            case_count=request.case_count,
-            poc_count=request.poc_count,
-            compile_failed=request.compile_failed,
         )
         if applied is None:
             logger.warning(
@@ -795,11 +786,11 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                 },
             )
 
-        task = db.get_task(task_id)
+        task = db.get_job(task_id)
         last_sync_seq = task.last_sync_seq if task is not None else 0
 
         if applied:
-            updated_task = db.get_task(task_id)
+            updated_task = db.get_job(task_id)
             if updated_task is not None:
                 task_payload = _task_to_dict(updated_task)
                 task_payload["type"] = "task_update"
@@ -843,7 +834,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             chunk_seq=request.chunk_seq,
         )
 
-        should_append = db.record_task_log_chunk(task_id, log_type, request.chunk_seq)
+        should_append = db.record_job_file_chunk(task_id, log_type, request.chunk_seq)
         if should_append:
             log_path = resolve_log_path(task, log_type, config)
             with log_path.open("a", encoding="utf-8") as handle:
@@ -879,7 +870,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     @app.get("/api/tasks/{task_id}", response_model=TaskDetailResponse)
     async def get_task(task_id: int):
         """Get task by ID"""
-        task = db.get_task(task_id)
+        task = db.get_job(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         return _task_to_response(task)
@@ -887,7 +878,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     @app.post("/api/tasks/{task_id}/cancel")
     async def cancel_running_task(task_id: int):
         """Cancel a running task (does not delete from database)"""
-        task = db.get_task(task_id)
+        task = db.get_job(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
 
@@ -900,7 +891,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     @app.post("/api/tasks/{task_id}/retry", response_model=TaskResponse)
     async def retry_task(task_id: int):
         """Retry/re-execute a task by resetting it to pending state"""
-        task = db.get_task(task_id)
+        task = db.get_job(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
 
@@ -909,7 +900,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
             raise HTTPException(status_code=400, detail="Cannot retry a running task")
 
         # Reset task to pending state
-        db.reset_task_for_retry(task_id)
+        db.reset_job_for_retry(task_id)
 
         return TaskResponse(
             task_id=task_id,
@@ -921,7 +912,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     @app.delete("/api/tasks/{task_id}")
     async def delete_task(task_id: int):
         """Delete a task from database (cannot delete running tasks)"""
-        task = db.get_task(task_id)
+        task = db.get_job(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
 
@@ -930,7 +921,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                 status_code=400, detail="Cannot delete running task. Cancel it first."
             )
 
-        deleted = db.delete_task(task_id)
+        deleted = db.delete_job(task_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Task not found")
 
@@ -942,13 +933,13 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         results = {"retried": [], "skipped": [], "not_found": []}
 
         for task_id in request.task_ids:
-            task = db.get_task(task_id)
+            task = db.get_job(task_id)
             if not task:
                 results["not_found"].append(task_id)
             elif task.status == TaskStatus.RUNNING:
                 results["skipped"].append(task_id)
             else:
-                db.reset_task_for_retry(task_id)
+                db.reset_job_for_retry(task_id)
                 results["retried"].append(task_id)
 
         return results
@@ -959,13 +950,13 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         results = {"deleted": [], "skipped": [], "not_found": []}
 
         for task_id in request.task_ids:
-            task = db.get_task(task_id)
+            task = db.get_job(task_id)
             if not task:
                 results["not_found"].append(task_id)
             elif task.status == TaskStatus.RUNNING:
                 results["skipped"].append(task_id)
             else:
-                db.delete_task(task_id)
+                db.delete_job(task_id)
                 results["deleted"].append(task_id)
 
         return results
@@ -975,13 +966,13 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         """Batch set priority on pending tasks. Skips non-pending tasks."""
         results = {"updated": [], "skipped": [], "not_found": []}
         for task_id in request.task_ids:
-            task = db.get_task(task_id)
+            task = db.get_job(task_id)
             if not task:
                 results["not_found"].append(task_id)
             elif task.status != TaskStatus.PENDING:
                 results["skipped"].append(task_id)
             else:
-                db.update_task_priority(task_id, request.priority)
+                db.update_job_priority(task_id, request.priority)
                 results["updated"].append(task_id)
         return results
 
@@ -990,7 +981,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         """Batch cancel running tasks."""
         results = {"cancelled": [], "skipped": [], "not_found": []}
         for task_id in request.task_ids:
-            task = db.get_task(task_id)
+            task = db.get_job(task_id)
             if not task:
                 results["not_found"].append(task_id)
             elif task.status != TaskStatus.RUNNING:
@@ -1003,8 +994,8 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     @app.get("/api/queue")
     async def get_queue():
         """Get queue state."""
-        running = db.get_tasks_by_status(TaskStatus.RUNNING)
-        pending = db.get_pending_tasks_ordered()
+        running = db.get_jobs_by_status(TaskStatus.RUNNING)
+        pending = db.get_pending_jobs_ordered()
         return {
             "running": [_task_to_dict(t) for t in running],
             "pending": [_task_to_dict(t) for t in pending],
@@ -1013,7 +1004,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     @app.get("/api/dashboard/stats")
     async def get_dashboard_stats():
         """Get task statistics for dashboard"""
-        all_tasks = db.get_all_tasks()
+        all_tasks = db.get_all_jobs()
 
         stats = {
             "total": len(all_tasks),
@@ -1047,7 +1038,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     ):
         """Get last N lines of any task log by name"""
 
-        task = db.get_task(task_id)
+        task = db.get_job(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
 
@@ -1066,7 +1057,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     async def get_task_log_raw(task_id: int, log_name: str):
         """Download full content of any task log by name"""
 
-        task = db.get_task(task_id)
+        task = db.get_job(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
 
@@ -1081,7 +1072,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     async def websocket_task_endpoint(websocket: WebSocket, task_id: int):
         """WebSocket endpoint for real-time task status updates"""
         # Check if task exists
-        task = db.get_task(task_id)
+        task = db.get_job(task_id)
         if not task:
             await websocket.close(code=1000)
             return
@@ -1112,7 +1103,7 @@ def create_app(config: Config, db_path: str) -> FastAPI:
 
         try:
             # Send initial dashboard stats
-            all_tasks = db.get_all_tasks()
+            all_tasks = db.get_all_jobs()
             stats = {
                 "total": len(all_tasks),
                 "pending": len(
@@ -1153,8 +1144,8 @@ def create_app(config: Config, db_path: str) -> FastAPI:
     return app
 
 
-def _task_to_dict(task: TaskRecord) -> dict:
-    """Convert TaskRecord to dictionary for WebSocket"""
+def _task_to_dict(task: JobRecord) -> dict:
+    """Convert JobRecord to dictionary for WebSocket"""
     return {
         "id": task.id,
         "crate_name": task.crate_name,
@@ -1164,18 +1155,18 @@ def _task_to_dict(task: TaskRecord) -> dict:
         "created_at": task.created_at.isoformat() if task.created_at else None,
         "started_at": task.started_at.isoformat() if task.started_at else None,
         "finished_at": task.finished_at.isoformat() if task.finished_at else None,
-        "case_count": task.case_count or 0,
-        "poc_count": task.poc_count or 0,
+        "case_count": getattr(task, "case_count", None) or 0,
+        "poc_count": getattr(task, "poc_count", None) or 0,
         "error_message": task.error_message,
         "message": task.message,
-        "compile_failed": task.compile_failed,
+        "compile_failed": getattr(task, "compile_failed", None),
         "priority": task.priority,
         "runner_id": task.runner_id,
     }
 
 
-def _task_to_response(task: TaskRecord) -> TaskDetailResponse:
-    """Convert TaskRecord to response model"""
+def _task_to_response(task: JobRecord) -> TaskDetailResponse:
+    """Convert JobRecord to response model"""
     return TaskDetailResponse(
         id=task.id,
         crate_name=task.crate_name,
@@ -1185,11 +1176,11 @@ def _task_to_response(task: TaskRecord) -> TaskDetailResponse:
         created_at=task.created_at.isoformat() if task.created_at else None,
         started_at=task.started_at.isoformat() if task.started_at else None,
         finished_at=task.finished_at.isoformat() if task.finished_at else None,
-        case_count=task.case_count or 0,
-        poc_count=task.poc_count or 0,
+        case_count=getattr(task, "case_count", None) or 0,
+        poc_count=getattr(task, "poc_count", None) or 0,
         error_message=task.error_message,
         message=task.message,
-        compile_failed=task.compile_failed,
+        compile_failed=getattr(task, "compile_failed", None),
         priority=task.priority,
         runner_id=task.runner_id,
     )

@@ -15,7 +15,7 @@ class TaskScheduler:
         self._shutdown_event = asyncio.Event()
 
     def get_running_count(self) -> int:
-        running = self.db.get_tasks_by_status(TaskStatus.RUNNING)
+        running = self.db.get_jobs_by_status(TaskStatus.RUNNING)
         return len(running)
 
     async def schedule_tasks(self):
@@ -27,7 +27,7 @@ class TaskScheduler:
         cursor = self.db.conn.cursor()
         cursor.execute(
             """
-            UPDATE tasks
+            UPDATE jobs
             SET status = ?,
                 runner_id = NULL,
                 lease_token = NULL,
@@ -67,9 +67,9 @@ class TaskScheduler:
             raise
 
     def _cleanup_remaining_tasks(self):
-        running_tasks = self.db.get_tasks_by_status(TaskStatus.RUNNING)
+        running_tasks = self.db.get_jobs_by_status(TaskStatus.RUNNING)
         for task in running_tasks:
-            self.db.update_task_status(
+            self.db.update_job_status(
                 task.id,
                 TaskStatus.FAILED,
                 finished_at=datetime.now(),
@@ -87,7 +87,7 @@ class TaskScheduler:
             )
 
     def reconcile_stale_tasks(self):
-        stale_count = self.db.reconcile_stale_tasks(
+        stale_count = self.db.reconcile_stale_jobs(
             self.config.max_state_sync_interval_seconds
         )
         if stale_count > 0:
@@ -101,7 +101,7 @@ class TaskScheduler:
             )
 
     def recover_orphaned_tasks(self):
-        running_tasks = self.db.get_tasks_by_status(TaskStatus.RUNNING)
+        running_tasks = self.db.get_jobs_by_status(TaskStatus.RUNNING)
         if not running_tasks:
             return
         logger.warning(
@@ -113,7 +113,7 @@ class TaskScheduler:
             },
         )
         for task in running_tasks:
-            self.db.update_task_status(
+            self.db.update_job_status(
                 task.id,
                 TaskStatus.FAILED,
                 finished_at=datetime.now(),
@@ -131,9 +131,9 @@ class TaskScheduler:
             )
 
     async def cancel_task(self, task_id: int):
-        task = self.db.get_task(task_id)
+        task = self.db.get_job(task_id)
         if not task or task.status != TaskStatus.RUNNING:
             return
-        self.db.update_task_status(
+        self.db.update_job_status(
             task_id, TaskStatus.CANCELLED, finished_at=datetime.now()
         )
