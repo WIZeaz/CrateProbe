@@ -27,10 +27,28 @@ api.interceptors.request.use(config => {
   return config
 })
 
-// Response interceptor for error handling
+// Response interceptor: retry idempotent GETs once on gateway errors or
+// network failures (e.g. a proxy reusing a stale keep-alive socket).
 api.interceptors.response.use(
   response => response,
-  error => {
+  async error => {
+    const config = error.config
+    const method = (config?.method || 'get').toLowerCase()
+    const status = error.response?.status
+    const retryableStatus = status === 502 || status === 503 || status === 504
+    const networkError = !error.response && error.code !== 'ERR_CANCELED'
+
+    if (
+      config &&
+      method === 'get' &&
+      !config.__retried &&
+      (retryableStatus || networkError)
+    ) {
+      config.__retried = true
+      await new Promise(resolve => setTimeout(resolve, 300))
+      return api.request(config)
+    }
+
     console.error('API Error:', error)
     return Promise.reject(error)
   }
