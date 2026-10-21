@@ -114,17 +114,6 @@ class TaskStore:
         self.zip_path(sha256).unlink(missing_ok=True)
 
     @staticmethod
-    def read_task_toml(zip_path: Path) -> str:
-        """Return the raw ``task.toml`` text stored inside a task zip.
-
-        Raises ``FileNotFoundError`` when the zip or the member is missing,
-        and ``ZipValidationError`` when the zip is unreadable.
-        """
-        with zipfile.ZipFile(zip_path) as zf:
-            data = zf.read("task.toml")
-        return data.decode("utf-8", errors="replace")
-
-    @staticmethod
     def read_member(
         zip_path: Path,
         member: str,

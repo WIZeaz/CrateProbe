@@ -211,14 +211,6 @@ export default {
     return response.data
   },
 
-  // Raw task.toml text stored inside a task definition's zip.
-  async getTaskToml(taskId) {
-    const response = await api.get(`/tasks/${taskId}/task-toml`, {
-      responseType: 'text',
-    })
-    return response.data
-  },
-
   // File and directory metadata stored inside a task definition's zip.
   async getTaskFiles(taskId) {
     const response = await api.get(`/tasks/${taskId}/files`)

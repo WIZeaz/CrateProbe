@@ -342,11 +342,11 @@ def test_download_task_zip_returns_uploaded_bytes(client):
     assert resp.content == zip_bytes
 
 
-def test_get_task_toml_returns_raw_content(client):
-    """GET /api/tasks/{id}/task-toml returns the raw task.toml text."""
+def test_get_task_toml_via_files_endpoint(client):
+    """task.toml is served by the unified files endpoint like any member."""
     task_id = upload(client, task_zip()).json()["id"]
 
-    resp = client.get(f"/api/tasks/{task_id}/task-toml")
+    resp = client.get(f"/api/tasks/{task_id}/files/task.toml")
 
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/plain")
@@ -355,10 +355,6 @@ def test_get_task_toml_returns_raw_content(client):
 
 def test_download_task_zip_unknown_task_returns_404(client):
     assert client.get("/api/tasks/999/zip").status_code == 404
-
-
-def test_get_task_toml_unknown_task_returns_404(client):
-    assert client.get("/api/tasks/999/task-toml").status_code == 404
 
 
 def test_get_task_files_lists_zip_entries(client):

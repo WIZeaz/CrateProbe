@@ -697,19 +697,6 @@ def create_app(config: Config, db_path: str) -> FastAPI:
                 status_code=415, detail="File is not UTF-8 text"
             ) from exc
 
-    @app.get("/api/tasks/{task_id}/task-toml", response_class=PlainTextResponse)
-    async def get_task_definition_toml(task_id: int):
-        """Return the raw task.toml text from a task definition's zip."""
-        _, zip_path = _task_zip_file(task_id)
-        try:
-            return TaskStore.read_task_toml(zip_path)
-        except (zipfile.BadZipFile, KeyError) as exc:
-            logger.error(
-                "task zip unreadable",
-                extra={"task_id": task_id},
-            )
-            raise HTTPException(status_code=500, detail="Task zip unreadable") from exc
-
     @app.put(
         "/api/tasks/{task_id}",
         response_model=TaskDefinitionResponse,

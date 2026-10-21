@@ -134,7 +134,7 @@ async function openDetail(task) {
   const requestId = ++detailRequestId
   try {
     const [toml, files] = await Promise.all([
-      api.getTaskToml(task.id),
+      api.getTaskFile(task.id, 'task.toml'),
       api.getTaskFiles(task.id),
     ])
     if (requestId === detailRequestId) {
