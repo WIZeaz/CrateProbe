@@ -55,7 +55,7 @@ const hasAdminToken = computed(() => Boolean(settings.security?.adminToken))
                   ? 'border-blue-500 text-gray-900'
                   : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'"
               >
-                New Task
+                New Job
               </router-link>
               <router-link
                 to="/jobs/batch"
@@ -64,7 +64,7 @@ const hasAdminToken = computed(() => Boolean(settings.security?.adminToken))
                   ? 'border-blue-500 text-gray-900'
                   : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'"
               >
-                Batch Tasks
+                Batch Jobs
               </router-link>
               <router-link
                 to="/tasks"

@@ -8,11 +8,11 @@ import RunnerMonitorPanel from '../components/RunnerMonitorPanel.vue'
 
 const router = useRouter()
 const dashboard = ref({
-  total_tasks: 0,
-  running_tasks: 0,
-  completed_tasks: 0,
-  failed_tasks: 0,
-  recent_tasks: []
+  total_jobs: 0,
+  running_jobs: 0,
+  completed_jobs: 0,
+  failed_jobs: 0,
+  recent_jobs: []
 })
 const loading = ref(true)
 const error = ref(null)
@@ -23,24 +23,24 @@ let refreshInterval = null
 
 async function fetchDashboard(isRefresh = false) {
   try {
-    // Fetch dashboard stats and tasks
-    const [stats, tasks] = await Promise.all([
+    // Fetch dashboard stats and jobs
+    const [stats, jobs] = await Promise.all([
       api.getDashboardStats(),
-      api.getAllTasks()
+      api.getJobs()
     ])
 
     // Map backend field names to frontend expected format
     dashboard.value = {
-      total_tasks: stats.total,
-      running_tasks: stats.running,
-      completed_tasks: stats.completed,
-      failed_tasks: stats.failed,
-      pending_tasks: stats.pending,
-      cancelled_tasks: stats.cancelled,
-      timeout_tasks: stats.timeout,
-      oom_tasks: stats.oom,
-      runner_failed_tasks: stats.runner_failed,
-      recent_tasks: tasks.slice(0, 10) // Get 10 most recent tasks
+      total_jobs: stats.total,
+      running_jobs: stats.running,
+      completed_jobs: stats.completed,
+      failed_jobs: stats.failed,
+      pending_jobs: stats.pending,
+      cancelled_jobs: stats.cancelled,
+      timeout_jobs: stats.timeout,
+      oom_jobs: stats.oom,
+      runner_failed_jobs: stats.runner_failed,
+      recent_jobs: jobs.slice(0, 10) // Get 10 most recent jobs
     }
     // Only hide loading spinner after initial load
     if (!isRefresh) {
@@ -75,19 +75,13 @@ async function fetchRunnerOverview(isRefresh = false) {
   }
 }
 
-function handleTaskUpdate(data) {
-  // Refresh dashboard on task updates (non-intrusive)
+function handleJobUpdate(data) {
+  // Refresh dashboard on job updates (non-intrusive)
   fetchDashboard(true)
 }
 
-function viewTask(taskId) {
-  router.push(`/tasks/${taskId}`)
-}
-
-function formatDate(dateStr) {
-  if (!dateStr) return 'N/A'
-  const date = new Date(dateStr)
-  return date.toLocaleString()
+function viewJob(jobId) {
+  router.push(`/jobs/${jobId}`)
 }
 
 function formatDuration(startStr, endStr) {
@@ -103,11 +97,11 @@ function formatDuration(startStr, endStr) {
   return `${hours}h ${minutes}m`
 }
 
-function navigateToTasks(status = 'all') {
+function navigateToJobs(status = 'all') {
   if (status === 'all') {
-    router.push('/tasks')
+    router.push('/jobs')
   } else {
-    router.push(`/tasks?status=${status}`)
+    router.push(`/jobs?status=${status}`)
   }
 }
 
@@ -115,11 +109,11 @@ onMounted(() => {
   fetchDashboard()
   fetchRunnerOverview()
   websocket.connect('/ws/dashboard')
-  websocket.on('task_update', handleTaskUpdate)
-  websocket.on('task_created', handleTaskUpdate)
-  websocket.on('task_completed', handleTaskUpdate)
+  websocket.on('job_update', handleJobUpdate)
+  websocket.on('job_created', handleJobUpdate)
+  websocket.on('job_completed', handleJobUpdate)
 
-  // Auto-refresh every 5 seconds (non-intrusive)
+  // Auto-refresh every 10 seconds (non-intrusive)
   refreshInterval = setInterval(() => {
     fetchDashboard(true)
     fetchRunnerOverview(true)
@@ -127,9 +121,9 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  websocket.off('task_update', handleTaskUpdate)
-  websocket.off('task_created', handleTaskUpdate)
-  websocket.off('task_completed', handleTaskUpdate)
+  websocket.off('job_update', handleJobUpdate)
+  websocket.off('job_created', handleJobUpdate)
+  websocket.off('job_completed', handleJobUpdate)
 
   if (refreshInterval) {
     clearInterval(refreshInterval)
@@ -154,56 +148,56 @@ onUnmounted(() => {
       <!-- Stats Grid -->
       <div class="bento-grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 mb-8">
         <StatCard
-          title="Total Tasks"
-          :value="dashboard.total_tasks"
+          title="Total Jobs"
+          :value="dashboard.total_jobs"
           icon="📊"
           color="blue"
           :clickable="true"
-          @click="navigateToTasks('all')"
+          @click="navigateToJobs('all')"
         />
         <StatCard
           title="Running"
-          :value="dashboard.running_tasks"
+          :value="dashboard.running_jobs"
           icon="▶️"
           color="yellow"
           :clickable="true"
-          @click="navigateToTasks('running')"
+          @click="navigateToJobs('running')"
         />
         <StatCard
           title="Completed"
-          :value="dashboard.completed_tasks"
+          :value="dashboard.completed_jobs"
           icon="✅"
           color="green"
           :clickable="true"
-          @click="navigateToTasks('completed')"
+          @click="navigateToJobs('completed')"
         />
         <StatCard
           title="Failed"
-          :value="dashboard.failed_tasks"
+          :value="dashboard.failed_jobs"
           icon="❌"
           color="red"
           :clickable="true"
-          @click="navigateToTasks('failed')"
+          @click="navigateToJobs('failed')"
         />
         <StatCard
           title="Pending"
-          :value="dashboard.pending_tasks || 0"
+          :value="dashboard.pending_jobs || 0"
           icon="⏳"
           color="purple"
           :clickable="true"
-          @click="navigateToTasks('pending')"
+          @click="navigateToJobs('pending')"
         />
         <StatCard
           title="Runner Failed"
-          :value="dashboard.runner_failed_tasks || 0"
+          :value="dashboard.runner_failed_jobs || 0"
           icon="💥"
           color="red"
           :clickable="true"
-          @click="navigateToTasks('runner_failed')"
+          @click="navigateToJobs('runner_failed')"
         />
       </div>
 
-      <!-- System Monitor and Recent Tasks -->
+      <!-- System Monitor and Recent Jobs -->
       <div class="bento-grid grid-cols-1 lg:grid-cols-3 gap-6">
         <!-- Runner Monitor -->
         <div class="lg:col-span-1">
@@ -214,13 +208,13 @@ onUnmounted(() => {
           />
         </div>
 
-        <!-- Recent Tasks -->
+        <!-- Recent Jobs -->
         <div class="lg:col-span-2">
           <div class="bento-card">
-            <h3 class="text-lg font-semibold text-gray-900 mb-4">Recent Tasks</h3>
+            <h3 class="text-lg font-semibold text-gray-900 mb-4">Recent Jobs</h3>
 
-            <div v-if="dashboard.recent_tasks.length === 0" class="text-center py-8 text-gray-500">
-              No tasks yet. Create your first task!
+            <div v-if="dashboard.recent_jobs.length === 0" class="text-center py-8 text-gray-500">
+              No jobs yet. Create your first job!
             </div>
 
             <div v-else class="overflow-x-auto">
@@ -231,13 +225,10 @@ onUnmounted(() => {
                       Crate
                     </th>
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Task
+                    </th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Status
-                    </th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Cases
-                    </th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      POCs
                     </th>
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Runtime
@@ -246,28 +237,25 @@ onUnmounted(() => {
                 </thead>
                 <tbody class="divide-y divide-gray-200">
                   <tr
-                    v-for="task in dashboard.recent_tasks"
-                    :key="task.id"
-                    @click="viewTask(task.id)"
+                    v-for="job in dashboard.recent_jobs"
+                    :key="job.id"
+                    @click="viewJob(job.id)"
                     class="hover:bg-gray-50 cursor-pointer transition-colors"
                   >
                     <td class="px-4 py-3 whitespace-nowrap">
-                      <div class="text-sm font-medium text-gray-900">{{ task.crate_name }}</div>
-                      <div class="text-sm text-gray-500">{{ task.version }}</div>
-                    </td>
-                    <td class="px-4 py-3 whitespace-nowrap">
-                      <span :class="['status-badge', `status-${task.status}`]">
-                        {{ task.status }}
-                      </span>
-                    </td>
-                    <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
-                      {{ task.case_count }}
-                    </td>
-                    <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
-                      {{ task.poc_count }}
+                      <div class="text-sm font-medium text-gray-900">{{ job.crate_name }}</div>
+                      <div class="text-sm text-gray-500">{{ job.version }}</div>
                     </td>
                     <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
-                      {{ formatDuration(task.started_at, task.finished_at) }}
+                      {{ job.task_name || '-' }}
+                    </td>
+                    <td class="px-4 py-3 whitespace-nowrap">
+                      <span :class="['status-badge', `status-${job.status}`]">
+                        {{ job.status }}
+                      </span>
+                    </td>
+                    <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                      {{ formatDuration(job.started_at, job.finished_at) }}
                     </td>
                   </tr>
                 </tbody>
@@ -276,10 +264,10 @@ onUnmounted(() => {
 
             <div class="mt-4 text-center">
               <router-link
-                to="/tasks"
+                to="/jobs"
                 class="text-sm font-medium text-blue-600 hover:text-blue-500"
               >
-                View all tasks →
+                View all jobs →
               </router-link>
             </div>
           </div>

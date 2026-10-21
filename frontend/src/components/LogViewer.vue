@@ -7,32 +7,27 @@ import api from '../services/api'
 const ansiUp = new AnsiUp()
 
 const props = defineProps({
-  taskId: [String, Number],
+  jobId: [String, Number],
   autoScroll: {
     type: Boolean,
     default: true
   }
 })
 
+const logFiles = [
+  { id: 'runner', label: 'runner', path: 'runner.log', icon: '⚙' },
+  { id: 'stdout', label: 'stdout', path: 'stdout.log', icon: '📄' },
+  { id: 'stderr', label: 'stderr', path: 'stderr.log', icon: '📄' },
+]
+
 const activeLog = ref('runner')
+
 function emptyLogMap() {
-  return {
-    runner: '',
-    stdout: '',
-    stderr: '',
-    miri_report: '',
-    stats: ''
-  }
+  return Object.fromEntries(logFiles.map(file => [file.id, '']))
 }
 
 function defaultFetchedMap() {
-  return {
-    runner: false,
-    stdout: false,
-    stderr: false,
-    miri_report: false,
-    stats: false
-  }
+  return Object.fromEntries(logFiles.map(file => [file.id, false]))
 }
 
 const logs = ref(emptyLogMap())
@@ -45,38 +40,25 @@ function ansiToHtml(text) {
   }
   return ansiUp.ansi_to_html(text)
 }
-const loading = ref({
-  runner: false,
-  stdout: false,
-  stderr: false,
-  miri_report: false,
-  stats: false
-})
+
+const loading = ref(Object.fromEntries(logFiles.map(file => [file.id, false])))
 const fetched = ref(defaultFetchedMap())
 const logContainer = ref(null)
 let refreshInterval = null
 
-const logFiles = [
-  { id: 'runner', label: 'runner', icon: '⚙' },
-  { id: 'stdout', label: 'stdout', icon: '📄' },
-  { id: 'stderr', label: 'stderr', icon: '📄' },
-  { id: 'miri_report', label: 'miri_report', icon: '📄' },
-  { id: 'stats', label: 'stats', icon: '📊' },
-]
-
-function getApiLogType(logType) {
-  return logType === 'stats' ? 'stats-yaml' : logType
+function getLogPath(logId) {
+  return logFiles.find(file => file.id === logId)?.path || `${logId}.log`
 }
 
-async function loadLog(logType, isRefresh = false) {
-  if (!isRefresh && loading.value[logType]) return
+async function loadLog(logId, isRefresh = false) {
+  if (!isRefresh && loading.value[logId]) return
 
   if (!isRefresh) {
-    loading.value[logType] = true
+    loading.value[logId] = true
   }
 
   try {
-    const data = await api.getLog(props.taskId, getApiLogType(logType), 1000)
+    const data = await api.getJobFile(props.jobId, getLogPath(logId), { lines: 1000 })
 
     let wasAtBottom = false
     if (isRefresh && logContainer.value) {
@@ -88,29 +70,27 @@ async function loadLog(logType, isRefresh = false) {
         threshold
     }
 
-    if (data.lines && Array.isArray(data.lines)) {
-      const content = data.lines.join('\n') || 'No content available'
-      logs.value[logType] = content
-      logHtml.value[logType] = ansiToHtml(content)
-    } else {
-      const content = data.content || 'No content available'
-      logs.value[logType] = content
-      logHtml.value[logType] = ansiToHtml(content)
-    }
+    const content =
+      data.lines && Array.isArray(data.lines) && data.lines.length > 0
+        ? data.lines.join('\n')
+        : 'No content available'
+    logs.value[logId] = content
+    logHtml.value[logId] = ansiToHtml(content)
 
     if ((!isRefresh && props.autoScroll) || (isRefresh && wasAtBottom)) {
       scrollToBottom()
     }
   } catch (err) {
-    if (err.response?.status === 404) {
-      logs.value[logType] = 'No content available'
-    } else {
-      logs.value[logType] = `Error loading log: ${err.response?.data?.detail || err.message}`
-    }
+    const content =
+      err.response?.status === 404
+        ? 'No content available'
+        : `Error loading log: ${err.response?.data?.detail || err.message}`
+    logs.value[logId] = content
+    logHtml.value[logId] = ansiToHtml(content)
   } finally {
     if (!isRefresh) {
-      loading.value[logType] = false
-      fetched.value[logType] = true
+      loading.value[logId] = false
+      fetched.value[logId] = true
     }
   }
 }
@@ -128,14 +108,15 @@ function stopAutoRefresh() {
   }
 }
 
-async function downloadLog() {
+async function downloadActiveLog() {
+  const path = getLogPath(activeLog.value)
   try {
-    const blob = await api.downloadLog(props.taskId, getApiLogType(activeLog.value))
+    const text = await api.getJobFile(props.jobId, path, { raw: true })
+    const blob = new Blob([text], { type: 'text/plain' })
     const url = window.URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    const ext = activeLog.value === 'miri_report' ? 'txt' : activeLog.value === 'stats' ? 'yaml' : 'log'
-    a.download = `task-${props.taskId}-${activeLog.value}.${ext}`
+    a.download = `job-${props.jobId}-${path}`
     document.body.appendChild(a)
     a.click()
     window.URL.revokeObjectURL(url)
@@ -188,7 +169,7 @@ onUnmounted(() => {
     <div class="flex items-center justify-between mb-4">
       <h3 class="text-lg font-semibold text-gray-900">Logs</h3>
       <button
-        @click="downloadLog"
+        @click="downloadActiveLog"
         class="px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
         :title="`Download ${activeLog}`"
       >

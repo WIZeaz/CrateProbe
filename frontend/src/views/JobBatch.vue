@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../services/api'
 
@@ -8,6 +8,25 @@ const textarea = ref('')
 const loading = ref(false)
 const progress = ref({ current: 0, total: 0 })
 const batchErrors = ref([])
+
+// Task selector state
+const tasks = ref([])
+const tasksLoading = ref(true)
+const tasksError = ref(null)
+const selectedTaskId = ref(null)
+
+async function fetchTasks() {
+  try {
+    tasks.value = await api.getTasks()
+    if (tasks.value.length > 0) {
+      selectedTaskId.value = tasks.value[0].id
+    }
+  } catch (err) {
+    tasksError.value = err.response?.data?.detail || err.message
+  } finally {
+    tasksLoading.value = false
+  }
+}
 
 // Parse input text into crate list
 function parseInput(text) {
@@ -65,9 +84,9 @@ const progressPercentage = computed(() => {
   return Math.round((progress.value.current / progress.value.total) * 100)
 })
 
-// Batch create tasks
-async function createBatchTasks() {
-  if (!validationResult.value.valid) {
+// Batch create jobs
+async function createBatchJobs() {
+  if (!validationResult.value.valid || !selectedTaskId.value) {
     return
   }
 
@@ -83,11 +102,11 @@ async function createBatchTasks() {
     await Promise.all(
       batch.map(async ({ crate_name, version }) => {
         try {
-          await api.createTask(crate_name, version)
+          await api.createJob(crate_name, version, selectedTaskId.value)
         } catch (err) {
           const message = err.response?.data?.detail || err.message
           batchErrors.value.push({ crate_name, version, message })
-          console.error(`Failed to create task for ${crate_name}:`, err)
+          console.error(`Failed to create job for ${crate_name}:`, err)
         }
       })
     )
@@ -104,21 +123,25 @@ async function createBatchTasks() {
   loading.value = false
 
   if (batchErrors.value.length === 0) {
-    router.push('/tasks')
+    router.push('/jobs')
   }
   // If there were failures, stay on the page to show the error summary
 }
+
+onMounted(() => {
+  fetchTasks()
+})
 </script>
 
 <template>
   <div class="max-w-4xl mx-auto">
-    <h1 class="text-3xl font-bold text-gray-900 mb-8">Batch Create Tasks</h1>
+    <h1 class="text-3xl font-bold text-gray-900 mb-8">Batch Create Jobs</h1>
 
     <!-- Instructions Card -->
     <div class="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
       <h3 class="text-sm font-medium text-blue-900 mb-2">How to use batch create</h3>
       <ul class="text-sm text-blue-800 space-y-1 list-disc list-inside mb-3">
-        <li>Enter one crate per line</li>
+        <li>Select the task to run, then enter one crate per line</li>
         <li>Format 1: <code class="bg-blue-100 px-1 rounded">crate_name</code> (uses latest version)</li>
         <li>Format 2: <code class="bg-blue-100 px-1 rounded">crate_name, version</code> (specific version)</li>
         <li>Format 3: <code class="bg-blue-100 px-1 rounded">crate_name version</code> (specific version, space-separated)</li>
@@ -136,6 +159,44 @@ async function createBatchTasks() {
 
     <!-- Input Area -->
     <div class="bento-card">
+      <!-- Task Selector -->
+      <div class="mb-4">
+        <label for="task_id" class="block text-sm font-medium text-gray-700 mb-2">
+          Task *
+        </label>
+        <div v-if="tasksLoading" class="flex items-center gap-2 text-sm text-gray-500">
+          <span class="spinner border-blue-500"></span> Loading tasks...
+        </div>
+        <div
+          v-else-if="tasksError"
+          class="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg text-sm"
+        >
+          Failed to load tasks: {{ tasksError }}
+        </div>
+        <div
+          v-else-if="tasks.length === 0"
+          class="bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-3 rounded-lg text-sm"
+        >
+          No task definitions found.
+          <router-link to="/tasks" class="font-medium underline hover:text-yellow-900">
+            Create one on the task management page
+          </router-link>
+          first.
+        </div>
+        <select
+          v-else
+          id="task_id"
+          v-model="selectedTaskId"
+          required
+          class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          :disabled="loading"
+        >
+          <option v-for="task in tasks" :key="task.id" :value="task.id">
+            {{ task.name }} (#{{ task.id }})
+          </option>
+        </select>
+      </div>
+
       <div class="mb-4">
         <div class="flex items-center justify-between mb-2">
           <label for="crate_list" class="block text-sm font-medium text-gray-700">
@@ -169,7 +230,7 @@ async function createBatchTasks() {
       <!-- Batch Create Errors -->
       <div v-if="batchErrors.length > 0"
            class="mb-4 bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg">
-        <p class="font-medium mb-2">Failed to create {{ batchErrors.length }} task(s):</p>
+        <p class="font-medium mb-2">Failed to create {{ batchErrors.length }} job(s):</p>
         <ul class="text-sm space-y-1 max-h-48 overflow-y-auto">
           <li v-for="(error, index) in batchErrors" :key="index">
             {{ error.crate_name }}{{ error.version ? `@${error.version}` : '' }}: {{ error.message }}
@@ -181,7 +242,7 @@ async function createBatchTasks() {
       <div class="flex items-center justify-between">
         <button
           type="button"
-          @click="router.push('/tasks')"
+          @click="router.push('/jobs')"
           class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
           :disabled="loading"
         >
@@ -189,11 +250,11 @@ async function createBatchTasks() {
         </button>
         <button
           type="button"
-          @click="createBatchTasks"
+          @click="createBatchJobs"
           class="px-6 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
-          :disabled="loading || !validationResult.valid || !inputStats.hasContent"
+          :disabled="loading || !validationResult.valid || !inputStats.hasContent || !selectedTaskId"
         >
-          Create {{ validationResult.parsed?.length || 0 }} {{ validationResult.parsed?.length === 1 ? 'Task' : 'Tasks' }}
+          Create {{ validationResult.parsed?.length || 0 }} {{ validationResult.parsed?.length === 1 ? 'Job' : 'Jobs' }}
         </button>
       </div>
     </div>
@@ -201,7 +262,7 @@ async function createBatchTasks() {
     <!-- Progress Overlay -->
     <div v-if="loading" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div class="bg-white rounded-lg p-8 max-w-md w-full mx-4">
-        <h3 class="text-lg font-semibold text-gray-900 mb-4">Creating Tasks...</h3>
+        <h3 class="text-lg font-semibold text-gray-900 mb-4">Creating Jobs...</h3>
 
         <!-- Progress Bar -->
         <div class="mb-4">
@@ -222,7 +283,7 @@ async function createBatchTasks() {
           {{ progressPercentage }}% complete
         </p>
         <p v-if="batchErrors.length > 0" class="text-center text-red-600 mt-2">
-          {{ batchErrors.length }} task(s) failed
+          {{ batchErrors.length }} job(s) failed
         </p>
       </div>
     </div>

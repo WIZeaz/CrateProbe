@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted, shallowRef } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { RecycleScroller } from 'vue-virtual-scroller'
 import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
@@ -7,12 +7,12 @@ import api from '../services/api'
 import websocket from '../services/websocket'
 import RunnerIdBadge from '../components/RunnerIdBadge.vue'
 import { filterTasksByCrateName } from './taskListFilters'
-import { exportTasksToXlsx } from '../utils/exportXlsx'
+import { exportJobsToXlsx } from '../utils/exportXlsx'
 import { useResizableColumns } from '../composables/useResizableColumns'
 
 const router = useRouter()
 const route = useRoute()
-const tasks = ref([])
+const jobs = ref([])
 const loading = ref(true)
 const error = ref(null)
 const filterStatus = ref('all')
@@ -25,12 +25,10 @@ const batchLoading = ref(false)
 const columns = [
   { key: 'checkbox', width: 48, resizable: false },
   { key: 'id', width: 64, minWidth: 50 },
-  { key: 'crate_name', width: 300, minWidth: 120 },
+  { key: 'crate_name', width: 260, minWidth: 120 },
   { key: 'version', width: 96, minWidth: 70 },
+  { key: 'task_name', width: 160, minWidth: 100 },
   { key: 'status', width: 96, minWidth: 80 },
-  { key: 'case_count', width: 80, minWidth: 60 },
-  { key: 'poc_count', width: 80, minWidth: 60 },
-  { key: 'compile_failed', width: 112, minWidth: 80 },
   { key: 'started_at', width: 176, minWidth: 120 },
   { key: 'runtime', width: 112, minWidth: 80 },
   { key: 'runner_id', width: 160, minWidth: 100 },
@@ -38,7 +36,7 @@ const columns = [
 
 const { columnWidths, startResize } = useResizableColumns(
   columns,
-  'task-list-column-widths'
+  'job-list-column-widths'
 )
 
 const totalWidth = computed(() => {
@@ -57,12 +55,12 @@ const statusOptions = [
   { value: 'runner_failed', label: 'Runner Failed' }
 ]
 
-const filteredAndSortedTasks = computed(() => {
-  let result = tasks.value
+const filteredAndSortedJobs = computed(() => {
+  let result = jobs.value
 
   // Filter
   if (filterStatus.value !== 'all') {
-    result = result.filter(task => task.status === filterStatus.value)
+    result = result.filter(job => job.status === filterStatus.value)
   }
 
   result = filterTasksByCrateName(result, searchCrateName.value)
@@ -71,23 +69,10 @@ const filteredAndSortedTasks = computed(() => {
   result = [...result].sort((a, b) => {
     let aVal, bVal
 
-    // Handle runtime and compile_failed columns specially
+    // Handle runtime column specially
     if (sortColumn.value === 'runtime') {
       aVal = getRuntimeSeconds(a.started_at, a.finished_at)
       bVal = getRuntimeSeconds(b.started_at, b.finished_at)
-    } else if (sortColumn.value === 'compile_failed') {
-      aVal = normalizeCompileFailed(a.compile_failed)
-      bVal = normalizeCompileFailed(b.compile_failed)
-
-      const aUnknown = aVal === null
-      const bUnknown = bVal === null
-      if (aUnknown && bUnknown) return 0
-      if (aUnknown) return 1
-      if (bUnknown) return -1
-
-      if (aVal < bVal) return sortDirection.value === 'asc' ? -1 : 1
-      if (aVal > bVal) return sortDirection.value === 'asc' ? 1 : -1
-      return 0
     } else {
       aVal = a[sortColumn.value]
       bVal = b[sortColumn.value]
@@ -104,16 +89,16 @@ const filteredAndSortedTasks = computed(() => {
   })
 
   // Add index for stable keys in virtual scroller
-  return result.map((task, index) => ({ ...task, _index: index }))
+  return result.map((job, index) => ({ ...job, _index: index }))
 })
 
-// Selectable tasks (exclude running)
-const selectableTasks = computed(() => {
-  return filteredAndSortedTasks.value.filter(t => t.status !== 'running')
+// Selectable jobs (exclude running)
+const selectableJobs = computed(() => {
+  return filteredAndSortedJobs.value.filter(j => j.status !== 'running')
 })
 
 const allSelected = computed(() => {
-  return selectableTasks.value.length > 0 && selectableTasks.value.every(t => selectedIds.value.has(t.id))
+  return selectableJobs.value.length > 0 && selectableJobs.value.every(j => selectedIds.value.has(j.id))
 })
 
 const someSelected = computed(() => {
@@ -132,26 +117,26 @@ function toggleSelectAll() {
   if (allSelected.value) {
     selectedIds.value = new Set()
   } else {
-    selectedIds.value = new Set(selectableTasks.value.map(t => t.id))
+    selectedIds.value = new Set(selectableJobs.value.map(j => j.id))
   }
 }
 
-function toggleSelect(taskId) {
+function toggleSelect(jobId) {
   const next = new Set(selectedIds.value)
-  if (next.has(taskId)) {
-    next.delete(taskId)
+  if (next.has(jobId)) {
+    next.delete(jobId)
   } else {
-    next.add(taskId)
+    next.add(jobId)
   }
   selectedIds.value = next
 }
 
-async function fetchTasks() {
+async function fetchJobs() {
   try {
-    tasks.value = await api.getAllTasks()
+    jobs.value = await api.getJobs()
     loading.value = false
     // Remove selected ids that no longer exist
-    const existingIds = new Set(tasks.value.map(t => t.id))
+    const existingIds = new Set(jobs.value.map(j => j.id))
     const cleaned = new Set([...selectedIds.value].filter(id => existingIds.has(id)))
     selectedIds.value = cleaned
   } catch (err) {
@@ -160,12 +145,12 @@ async function fetchTasks() {
   }
 }
 
-function handleTaskUpdate() {
-  fetchTasks()
+function handleJobUpdate() {
+  fetchJobs()
 }
 
-function viewTask(taskId) {
-  router.push(`/tasks/${taskId}`)
+function viewJob(jobId) {
+  router.push(`/jobs/${jobId}`)
 }
 
 function sortBy(column) {
@@ -183,7 +168,8 @@ function formatDate(dateStr) {
   return date.toLocaleString()
 }
 
-function formatDuration(startStr, endStr) {  if (!startStr) return 'N/A'
+function formatDuration(startStr, endStr) {
+  if (!startStr) return 'N/A'
   const start = new Date(startStr)
   const end = endStr ? new Date(endStr) : new Date()
   const diff = Math.floor((end - start) / 1000)
@@ -202,30 +188,18 @@ function getRuntimeSeconds(startStr, endStr) {
   return Math.floor((end - start) / 1000)
 }
 
-function normalizeCompileFailed(value) {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value
-  }
-
-  if (typeof value === 'string' && /^-?\d+$/.test(value.trim())) {
-    return Number(value)
-  }
-
-  return null
-}
-
 async function handleBatchRetry() {
   const ids = [...selectedIds.value]
   if (ids.length === 0) return
-  if (!confirm(`Retry ${ids.length} selected task(s)?`)) return
+  if (!confirm(`Retry ${ids.length} selected job(s)?`)) return
 
   batchLoading.value = true
   try {
     const result = await api.batchRetry(ids)
     selectedIds.value = new Set()
-    fetchTasks()
+    fetchJobs()
     if (result.skipped?.length > 0) {
-      alert(`Retried ${result.retried.length} task(s). Skipped ${result.skipped.length} running task(s).`)
+      alert(`Retried ${result.retried.length} job(s). Skipped ${result.skipped.length} running job(s).`)
     }
   } catch (err) {
     alert(`Batch retry failed: ${err.message}`)
@@ -237,15 +211,15 @@ async function handleBatchRetry() {
 async function handleBatchDelete() {
   const ids = [...selectedIds.value]
   if (ids.length === 0) return
-  if (!confirm(`Delete ${ids.length} selected task(s)? This cannot be undone.`)) return
+  if (!confirm(`Delete ${ids.length} selected job(s)? This cannot be undone.`)) return
 
   batchLoading.value = true
   try {
     const result = await api.batchDelete(ids)
     selectedIds.value = new Set()
-    fetchTasks()
+    fetchJobs()
     if (result.skipped?.length > 0) {
-      alert(`Deleted ${result.deleted.length} task(s). Skipped ${result.skipped.length} running task(s).`)
+      alert(`Deleted ${result.deleted.length} job(s). Skipped ${result.skipped.length} running job(s).`)
     }
   } catch (err) {
     alert(`Batch delete failed: ${err.message}`)
@@ -255,12 +229,12 @@ async function handleBatchDelete() {
 }
 
 function handleExportXlsx() {
-  if (tasks.value.length === 0) {
-    alert('No tasks to export')
+  if (jobs.value.length === 0) {
+    alert('No jobs to export')
     return
   }
   try {
-    exportTasksToXlsx(tasks.value)
+    exportJobsToXlsx(jobs.value)
   } catch (err) {
     alert(`Export failed: ${err.message}`)
   }
@@ -273,43 +247,43 @@ onMounted(() => {
     filterStatus.value = statusParam
   }
 
-  fetchTasks()
+  fetchJobs()
   websocket.connect('/ws/dashboard')
-  websocket.on('task_update', handleTaskUpdate)
-  websocket.on('task_created', handleTaskUpdate)
-  websocket.on('task_completed', handleTaskUpdate)
+  websocket.on('job_update', handleJobUpdate)
+  websocket.on('job_created', handleJobUpdate)
+  websocket.on('job_completed', handleJobUpdate)
 })
 
 onUnmounted(() => {
-  websocket.off('task_update', handleTaskUpdate)
-  websocket.off('task_created', handleTaskUpdate)
-  websocket.off('task_completed', handleTaskUpdate)
+  websocket.off('job_update', handleJobUpdate)
+  websocket.off('job_created', handleJobUpdate)
+  websocket.off('job_completed', handleJobUpdate)
 })
 </script>
 
 <template>
   <div>
     <div class="flex items-center justify-between mb-8">
-      <h1 class="text-3xl font-bold text-gray-900">Tasks</h1>
+      <h1 class="text-3xl font-bold text-gray-900">Jobs</h1>
       <div class="flex gap-3">
         <button
           @click="handleExportXlsx"
-          :disabled="loading || tasks.length === 0"
+          :disabled="loading || jobs.length === 0"
           class="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           Export XLSX
         </button>
         <router-link
-          to="/tasks/batch"
+          to="/jobs/batch"
           class="px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
         >
           Batch Create
         </router-link>
         <router-link
-          to="/tasks/new"
+          to="/jobs/new"
           class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
         >
-          + New Task
+          + New Job
         </router-link>
       </div>
     </div>
@@ -363,16 +337,16 @@ onUnmounted(() => {
     </div>
 
     <div v-else-if="error" class="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg">
-      Failed to load tasks: {{ error }}
+      Failed to load jobs: {{ error }}
     </div>
 
-    <div v-else-if="filteredAndSortedTasks.length === 0" class="bento-card text-center py-12">
-      <p class="text-gray-500">No tasks found. Create your first task to get started!</p>
+    <div v-else-if="filteredAndSortedJobs.length === 0" class="bento-card text-center py-12">
+      <p class="text-gray-500">No jobs found. Create your first job to get started!</p>
       <router-link
-        to="/tasks/new"
+        to="/jobs/new"
         class="mt-4 inline-block px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
       >
-        Create Task
+        Create Job
       </router-link>
     </div>
 
@@ -426,6 +400,18 @@ onUnmounted(() => {
             ></span>
           </div>
           <div
+            @click="sortBy('task_name')"
+            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 relative overflow-hidden whitespace-nowrap"
+            :style="{ width: columnWidths.task_name + 'px' }"
+          >
+            Task
+            <span v-if="sortColumn === 'task_name'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
+            <span
+              class="resize-handle absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 z-10"
+              @pointerdown.stop="startResize('task_name', $event)"
+            ></span>
+          </div>
+          <div
             @click="sortBy('status')"
             class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 relative overflow-hidden whitespace-nowrap"
             :style="{ width: columnWidths.status + 'px' }"
@@ -435,42 +421,6 @@ onUnmounted(() => {
             <span
               class="resize-handle absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 z-10"
               @pointerdown.stop="startResize('status', $event)"
-            ></span>
-          </div>
-          <div
-            @click="sortBy('case_count')"
-            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 relative overflow-hidden whitespace-nowrap"
-            :style="{ width: columnWidths.case_count + 'px' }"
-          >
-            Cases
-            <span v-if="sortColumn === 'case_count'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
-            <span
-              class="resize-handle absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 z-10"
-              @pointerdown.stop="startResize('case_count', $event)"
-            ></span>
-          </div>
-          <div
-            @click="sortBy('poc_count')"
-            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 relative overflow-hidden whitespace-nowrap"
-            :style="{ width: columnWidths.poc_count + 'px' }"
-          >
-            POCs
-            <span v-if="sortColumn === 'poc_count'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
-            <span
-              class="resize-handle absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 z-10"
-              @pointerdown.stop="startResize('poc_count', $event)"
-            ></span>
-          </div>
-          <div
-            @click="sortBy('compile_failed')"
-            class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 relative overflow-hidden whitespace-nowrap"
-            :style="{ width: columnWidths.compile_failed + 'px' }"
-          >
-            Compile Failed
-            <span v-if="sortColumn === 'compile_failed'">{{ sortDirection === 'asc' ? '↑' : '↓' }}</span>
-            <span
-              class="resize-handle absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 z-10"
-              @pointerdown.stop="startResize('compile_failed', $event)"
             ></span>
           </div>
           <div
@@ -513,58 +463,52 @@ onUnmounted(() => {
       </div>
       <RecycleScroller
         class="scroller"
-        :items="filteredAndSortedTasks"
+        :items="filteredAndSortedJobs"
         :item-size="53"
         key-field="id"
-        v-slot="{ item: task }"
+        v-slot="{ item: job }"
       >
         <div
-          class="task-row flex items-center hover:bg-gray-50 transition-colors border-b border-gray-200"
-          :class="selectedIds.has(task.id) ? 'bg-blue-50' : ''"
+          class="job-row flex items-center hover:bg-gray-50 transition-colors border-b border-gray-200"
+          :class="selectedIds.has(job.id) ? 'bg-blue-50' : ''"
           :style="{ height: '53px' }"
         >
           <div class="px-4 py-3 whitespace-nowrap" :style="{ width: columnWidths.checkbox + 'px' }">
             <input
-              v-if="task.status !== 'running'"
+              v-if="job.status !== 'running'"
               type="checkbox"
-              :checked="selectedIds.has(task.id)"
-              @change="toggleSelect(task.id)"
+              :checked="selectedIds.has(job.id)"
+              @change="toggleSelect(job.id)"
               @click.stop
               class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
             />
             <span v-else class="inline-block h-4 w-4"></span>
           </div>
-          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer overflow-hidden" :style="{ width: columnWidths.id + 'px' }" @click="viewTask(task.id)">
-            #{{ task.id }}
+          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer overflow-hidden" :style="{ width: columnWidths.id + 'px' }" @click="viewJob(job.id)">
+            #{{ job.id }}
           </div>
-          <div class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900 cursor-pointer truncate" :style="{ width: columnWidths.crate_name + 'px' }" @click="viewTask(task.id)">
-            {{ task.crate_name }}
+          <div class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900 cursor-pointer truncate" :style="{ width: columnWidths.crate_name + 'px' }" @click="viewJob(job.id)">
+            {{ job.crate_name }}
           </div>
-          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer overflow-hidden" :style="{ width: columnWidths.version + 'px' }" @click="viewTask(task.id)">
-            {{ task.version }}
+          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer overflow-hidden" :style="{ width: columnWidths.version + 'px' }" @click="viewJob(job.id)">
+            {{ job.version }}
           </div>
-          <div class="px-4 py-3 whitespace-nowrap cursor-pointer overflow-hidden" :style="{ width: columnWidths.status + 'px' }" @click="viewTask(task.id)">
-            <span :class="['status-badge', `status-${task.status}`]">
-              {{ task.status }}
+          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer truncate" :style="{ width: columnWidths.task_name + 'px' }" @click="viewJob(job.id)">
+            {{ job.task_name || '-' }}
+          </div>
+          <div class="px-4 py-3 whitespace-nowrap cursor-pointer overflow-hidden" :style="{ width: columnWidths.status + 'px' }" @click="viewJob(job.id)">
+            <span :class="['status-badge', `status-${job.status}`]">
+              {{ job.status }}
             </span>
           </div>
-          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer overflow-hidden" :style="{ width: columnWidths.case_count + 'px' }" @click="viewTask(task.id)">
-            {{ task.case_count }}
+          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer overflow-hidden" :style="{ width: columnWidths.started_at + 'px' }" @click="viewJob(job.id)">
+            {{ formatDate(job.started_at) }}
           </div>
-          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer overflow-hidden" :style="{ width: columnWidths.poc_count + 'px' }" @click="viewTask(task.id)">
-            {{ task.poc_count }}
+          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer overflow-hidden" :style="{ width: columnWidths.runtime + 'px' }" @click="viewJob(job.id)">
+            {{ formatDuration(job.started_at, job.finished_at) }}
           </div>
-          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-900 cursor-pointer overflow-hidden" :style="{ width: columnWidths.compile_failed + 'px' }" @click="viewTask(task.id)">
-            {{ task.compile_failed ?? '-' }}
-          </div>
-          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer overflow-hidden" :style="{ width: columnWidths.started_at + 'px' }" @click="viewTask(task.id)">
-            {{ formatDate(task.started_at) }}
-          </div>
-          <div class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 cursor-pointer overflow-hidden" :style="{ width: columnWidths.runtime + 'px' }" @click="viewTask(task.id)">
-            {{ formatDuration(task.started_at, task.finished_at) }}
-          </div>
-          <div class="px-4 py-3 whitespace-nowrap cursor-pointer overflow-hidden" :style="{ width: columnWidths.runner_id + 'px' }" @click="viewTask(task.id)">
-            <RunnerIdBadge :runner-id="task.runner_id || ''" />
+          <div class="px-4 py-3 whitespace-nowrap cursor-pointer overflow-hidden" :style="{ width: columnWidths.runner_id + 'px' }" @click="viewJob(job.id)">
+            <RunnerIdBadge :runner-id="job.runner_id || ''" />
           </div>
         </div>
       </RecycleScroller>
@@ -593,7 +537,7 @@ onUnmounted(() => {
   width: 100%;
 }
 
-.task-row {
+.job-row {
   display: flex;
   align-items: center;
   width: 100%;

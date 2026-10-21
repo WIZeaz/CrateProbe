@@ -6,8 +6,8 @@ import websocket from '../services/websocket'
 import RunnerIdBadge from '../components/RunnerIdBadge.vue'
 
 const router = useRouter()
-const runningTasks = ref([])
-const pendingTasks = ref([])
+const runningJobs = ref([])
+const pendingJobs = ref([])
 const selectedRunningIds = ref(new Set())
 const selectedPendingIds = ref(new Set())
 const loading = ref(true)
@@ -17,7 +17,7 @@ const runningSelectedCount = computed(() => selectedRunningIds.value.size)
 const pendingSelectedCount = computed(() => selectedPendingIds.value.size)
 
 const allRunningSelected = computed(() => {
-  return runningTasks.value.length > 0 && runningTasks.value.every(t => selectedRunningIds.value.has(t.id))
+  return runningJobs.value.length > 0 && runningJobs.value.every(j => selectedRunningIds.value.has(j.id))
 })
 
 const someRunningSelected = computed(() => {
@@ -25,7 +25,7 @@ const someRunningSelected = computed(() => {
 })
 
 const allPendingSelected = computed(() => {
-  return pendingTasks.value.length > 0 && pendingTasks.value.every(t => selectedPendingIds.value.has(t.id))
+  return pendingJobs.value.length > 0 && pendingJobs.value.every(j => selectedPendingIds.value.has(j.id))
 })
 
 const somePendingSelected = computed(() => {
@@ -36,7 +36,7 @@ function toggleSelectAllRunning() {
   if (allRunningSelected.value) {
     selectedRunningIds.value = new Set()
   } else {
-    selectedRunningIds.value = new Set(runningTasks.value.map(t => t.id))
+    selectedRunningIds.value = new Set(runningJobs.value.map(j => j.id))
   }
 }
 
@@ -44,26 +44,26 @@ function toggleSelectAllPending() {
   if (allPendingSelected.value) {
     selectedPendingIds.value = new Set()
   } else {
-    selectedPendingIds.value = new Set(pendingTasks.value.map(t => t.id))
+    selectedPendingIds.value = new Set(pendingJobs.value.map(j => j.id))
   }
 }
 
-function toggleRunningSelect(taskId) {
+function toggleRunningSelect(jobId) {
   const next = new Set(selectedRunningIds.value)
-  if (next.has(taskId)) {
-    next.delete(taskId)
+  if (next.has(jobId)) {
+    next.delete(jobId)
   } else {
-    next.add(taskId)
+    next.add(jobId)
   }
   selectedRunningIds.value = next
 }
 
-function togglePendingSelect(taskId) {
+function togglePendingSelect(jobId) {
   const next = new Set(selectedPendingIds.value)
-  if (next.has(taskId)) {
-    next.delete(taskId)
+  if (next.has(jobId)) {
+    next.delete(jobId)
   } else {
-    next.add(taskId)
+    next.add(jobId)
   }
   selectedPendingIds.value = next
 }
@@ -71,11 +71,11 @@ function togglePendingSelect(taskId) {
 async function fetchQueue() {
   try {
     const data = await api.getQueue()
-    runningTasks.value = data.running
-    pendingTasks.value = data.pending
+    runningJobs.value = data.running
+    pendingJobs.value = data.pending
     loading.value = false
-    const runningIds = new Set(runningTasks.value.map(t => t.id))
-    const pendingIds = new Set(pendingTasks.value.map(t => t.id))
+    const runningIds = new Set(runningJobs.value.map(j => j.id))
+    const pendingIds = new Set(pendingJobs.value.map(j => j.id))
     selectedRunningIds.value = new Set([...selectedRunningIds.value].filter(id => runningIds.has(id)))
     selectedPendingIds.value = new Set([...selectedPendingIds.value].filter(id => pendingIds.has(id)))
   } catch (err) {
@@ -92,26 +92,26 @@ async function handlePinSelected() {
     selectedPendingIds.value = new Set()
     await fetchQueue()
     if (result.skipped?.length > 0) {
-      alert(`Pinned ${result.updated.length} task(s). Skipped ${result.skipped.length} non-pending task(s).`)
+      alert(`Pinned ${result.updated.length} job(s). Skipped ${result.skipped.length} non-pending job(s).`)
     }
   } catch (err) {
-    alert(`Failed to pin tasks: ${err.message}`)
+    alert(`Failed to pin jobs: ${err.message}`)
   }
 }
 
 async function handleCancelSelected() {
   const ids = [...selectedRunningIds.value]
   if (ids.length === 0) return
-  if (!confirm(`Cancel ${ids.length} running task(s)?`)) return
+  if (!confirm(`Cancel ${ids.length} running job(s)?`)) return
   try {
     const result = await api.batchCancel(ids)
     selectedRunningIds.value = new Set()
     await fetchQueue()
     if (result.skipped?.length > 0) {
-      alert(`Cancelled ${result.cancelled.length} task(s). Skipped ${result.skipped.length} non-running task(s).`)
+      alert(`Cancelled ${result.cancelled.length} job(s). Skipped ${result.skipped.length} non-running job(s).`)
     }
   } catch (err) {
-    alert(`Failed to cancel tasks: ${err.message}`)
+    alert(`Failed to cancel jobs: ${err.message}`)
   }
 }
 
@@ -133,34 +133,34 @@ function getOrdinalSuffix(n) {
   return s[(v - 20) % 10] || s[v] || s[0]
 }
 
-function getQueuePosition(task, index) {
-  if (task.priority > 0) return '⭐ Pinned'
+function getQueuePosition(job, index) {
+  if (job.priority > 0) return '⭐ Pinned'
   return `${index + 1}${getOrdinalSuffix(index + 1)}`
 }
 
-function viewTask(taskId) {
-  router.push(`/tasks/${taskId}`)
+function viewJob(jobId) {
+  router.push(`/jobs/${jobId}`)
 }
 
 onMounted(() => {
   fetchQueue()
   websocket.connect('/ws/dashboard')
-  websocket.on('task_update', fetchQueue)
-  websocket.on('task_created', fetchQueue)
-  websocket.on('task_completed', fetchQueue)
+  websocket.on('job_update', fetchQueue)
+  websocket.on('job_created', fetchQueue)
+  websocket.on('job_completed', fetchQueue)
 })
 
 onUnmounted(() => {
-  websocket.off('task_update', fetchQueue)
-  websocket.off('task_created', fetchQueue)
-  websocket.off('task_completed', fetchQueue)
+  websocket.off('job_update', fetchQueue)
+  websocket.off('job_created', fetchQueue)
+  websocket.off('job_completed', fetchQueue)
 })
 </script>
 
 <template>
   <div>
     <div class="flex items-center justify-between mb-8">
-      <h1 class="text-3xl font-bold text-gray-900">Task Queue</h1>
+      <h1 class="text-3xl font-bold text-gray-900">Job Queue</h1>
       <div class="flex gap-3">
         <button
           v-if="pendingSelectedCount > 0"
@@ -180,7 +180,7 @@ onUnmounted(() => {
     </div>
 
     <div class="mb-4 flex items-center justify-between text-sm text-gray-600">
-      <span>{{ runningTasks.length }} Running | {{ pendingTasks.length }} Pending</span>
+      <span>{{ runningJobs.length }} Running | {{ pendingJobs.length }} Pending</span>
     </div>
 
     <div v-if="loading" class="flex justify-center py-12">
@@ -191,8 +191,8 @@ onUnmounted(() => {
       Failed to load queue: {{ error }}
     </div>
 
-    <div v-else-if="runningTasks.length === 0 && pendingTasks.length === 0" class="bento-card text-center py-12">
-      <p class="text-gray-500">No tasks in queue.</p>
+    <div v-else-if="runningJobs.length === 0 && pendingJobs.length === 0" class="bento-card text-center py-12">
+      <p class="text-gray-500">No jobs in queue.</p>
     </div>
 
     <div v-else class="bento-card">
@@ -201,7 +201,7 @@ onUnmounted(() => {
           <tr>
             <th class="px-4 py-3 text-left w-12">
               <input
-                v-if="runningTasks.length > 0"
+                v-if="runningJobs.length > 0"
                 type="checkbox"
                 :checked="allRunningSelected"
                 :indeterminate="someRunningSelected"
@@ -212,6 +212,7 @@ onUnmounted(() => {
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap w-16">ID</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">Crate</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap w-24">Version</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap w-32">Task</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap w-24">Status</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap w-32">Runner ID</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap w-28">Queue Pos</th>
@@ -219,54 +220,56 @@ onUnmounted(() => {
           </tr>
         </thead>
         <tbody class="divide-y divide-gray-200">
-          <tr v-if="runningTasks.length > 0" class="bg-green-50">
-            <td colspan="8" class="px-4 py-2 text-sm font-semibold text-green-800">
-              ▶ Running Tasks ({{ runningTasks.length }})
+          <tr v-if="runningJobs.length > 0" class="bg-green-50">
+            <td colspan="9" class="px-4 py-2 text-sm font-semibold text-green-800">
+              ▶ Running Jobs ({{ runningJobs.length }})
             </td>
           </tr>
-          <tr v-for="task in runningTasks" :key="task.id" class="hover:bg-gray-50 transition-colors cursor-pointer" @click="viewTask(task.id)">
+          <tr v-for="job in runningJobs" :key="job.id" class="hover:bg-gray-50 transition-colors cursor-pointer" @click="viewJob(job.id)">
             <td class="px-4 py-3 whitespace-nowrap" @click.stop>
               <input
                 type="checkbox"
-                :checked="selectedRunningIds.has(task.id)"
-                @change="toggleRunningSelect(task.id)"
+                :checked="selectedRunningIds.has(job.id)"
+                @change="toggleRunningSelect(job.id)"
                 class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
             </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">#{{ task.id }}</td>
-            <td class="px-4 py-3 text-sm font-medium text-gray-900 truncate">{{ task.crate_name }}</td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">{{ task.version }}</td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">#{{ job.id }}</td>
+            <td class="px-4 py-3 text-sm font-medium text-gray-900 truncate">{{ job.crate_name }}</td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">{{ job.version }}</td>
+            <td class="px-4 py-3 text-sm text-gray-500 truncate">{{ job.task_name || '-' }}</td>
             <td class="px-4 py-3 whitespace-nowrap">
-              <span class="status-badge status-running">{{ task.status }}</span>
+              <span class="status-badge status-running">{{ job.status }}</span>
             </td>
-            <td class="px-4 py-3 text-sm text-gray-500 truncate"><RunnerIdBadge :runner-id="task.runner_id || ''" /></td>
+            <td class="px-4 py-3 text-sm text-gray-500 truncate"><RunnerIdBadge :runner-id="job.runner_id || ''" /></td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">-</td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">{{ formatDuration(task.started_at, task.finished_at) }}</td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">{{ formatDuration(job.started_at, job.finished_at) }}</td>
           </tr>
 
-          <tr v-if="pendingTasks.length > 0" class="bg-orange-50">
-            <td colspan="8" class="px-4 py-2 text-sm font-semibold text-orange-800">
-              ⏳ Pending Queue ({{ pendingTasks.length }})
+          <tr v-if="pendingJobs.length > 0" class="bg-orange-50">
+            <td colspan="9" class="px-4 py-2 text-sm font-semibold text-orange-800">
+              ⏳ Pending Queue ({{ pendingJobs.length }})
             </td>
           </tr>
-          <tr v-for="(task, idx) in pendingTasks" :key="task.id" class="hover:bg-gray-50 transition-colors cursor-pointer" :class="{ 'bg-yellow-50': task.priority > 0 }" @click="viewTask(task.id)">
+          <tr v-for="(job, idx) in pendingJobs" :key="job.id" class="hover:bg-gray-50 transition-colors cursor-pointer" :class="{ 'bg-yellow-50': job.priority > 0 }" @click="viewJob(job.id)">
             <td class="px-4 py-3 whitespace-nowrap" @click.stop>
               <input
                 type="checkbox"
-                :checked="selectedPendingIds.has(task.id)"
-                @change="togglePendingSelect(task.id)"
+                :checked="selectedPendingIds.has(job.id)"
+                @change="togglePendingSelect(job.id)"
                 class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
             </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">#{{ task.id }}</td>
-            <td class="px-4 py-3 text-sm font-medium text-gray-900 truncate">{{ task.crate_name }}</td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">{{ task.version }}</td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">#{{ job.id }}</td>
+            <td class="px-4 py-3 text-sm font-medium text-gray-900 truncate">{{ job.crate_name }}</td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">{{ job.version }}</td>
+            <td class="px-4 py-3 text-sm text-gray-500 truncate">{{ job.task_name || '-' }}</td>
             <td class="px-4 py-3 whitespace-nowrap">
-              <span class="status-badge status-pending">{{ task.status }}</span>
+              <span class="status-badge status-pending">{{ job.status }}</span>
             </td>
-            <td class="px-4 py-3 text-sm text-gray-500 truncate"><RunnerIdBadge :runner-id="task.runner_id || ''" /></td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm font-medium" :class="task.priority > 0 ? 'text-orange-600' : 'text-gray-500'">
-              {{ getQueuePosition(task, idx) }}
+            <td class="px-4 py-3 text-sm text-gray-500 truncate"><RunnerIdBadge :runner-id="job.runner_id || ''" /></td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm font-medium" :class="job.priority > 0 ? 'text-orange-600' : 'text-gray-500'">
+              {{ getQueuePosition(job, idx) }}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">-</td>
           </tr>
