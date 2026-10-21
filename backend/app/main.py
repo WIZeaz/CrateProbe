@@ -39,7 +39,6 @@ from app.services.job_files import (
     PathSafetyError,
 )
 from app.security import generate_runner_token, generate_salt, hash_token, verify_token
-from app.utils.file_utils import read_last_n_lines
 from app.utils.file_utils import FileNotFoundError as CustomFileNotFoundError
 from app.api.websocket import get_manager
 
@@ -188,12 +187,6 @@ class RunnerMetricsQueryResponse(BaseModel):
     window: Literal["1h", "6h", "24h"]
     latest: Optional[RunnerLatestMetricsResponse]
     series: List[RunnerLatestMetricsResponse]
-
-
-def resolve_job_file_path(config: Config, job_id: int, log_type: str) -> Path:
-    return (
-        Path(config.workspace_path) / "jobs" / str(job_id) / "files" / f"{log_type}.log"
-    )
 
 
 def _clear_job_files(job_id: int, db: Database, job_files: JobFileStore) -> None:
@@ -1236,41 +1229,68 @@ def create_app(config: Config, db_path: str) -> FastAPI:
         monitor = SystemMonitor()
         return monitor.get_system_stats()
 
-    @app.get("/api/jobs/{job_id}/logs/{log_name}")
-    async def get_job_log(
-        job_id: int, log_name: str, lines: int = Query(default=1000, ge=0)
-    ):
-        """Get last N lines of any job log by name"""
-
+    @app.get("/api/jobs/{job_id}/files")
+    async def list_job_files(job_id: int):
+        """List files pushed by the runner for a job"""
         job = db.get_job(job_id)
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
+        return job_files.list_files(job_id)
 
-        log_path = resolve_job_file_path(config, job_id, log_name)
+    @app.get("/api/jobs/{job_id}/files/{path:path}")
+    async def get_job_file(
+        job_id: int,
+        path: str,
+        lines: int = Query(default=1000, ge=0),
+        raw: bool = Query(default=False),
+    ):
+        """Read a pushed file: tail N lines as JSON, or full text with raw=true"""
+        job = db.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
 
         try:
-            log_lines = read_last_n_lines(str(log_path), lines)
-            return {"lines": log_lines}
-        except CustomFileNotFoundError:
-            raise HTTPException(status_code=404, detail="Log file not found")
+            if raw:
+                return PlainTextResponse(job_files.read_raw(job_id, path))
+            return {"lines": job_files.read_tail(job_id, path, lines)}
+        except PathSafetyError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except FileNotFoundError:
+            # JobFileStore pre-checks existence and raises the builtin.
+            raise HTTPException(status_code=404, detail="File not found")
+        except CustomFileNotFoundError as e:
+            # read_last_n_lines wraps mid-read I/O failures in its custom
+            # FileNotFoundError; treat those as server-side read errors.
+            logger.error(
+                "failed to read job file",
+                extra={"job_id": job_id, "path": path, "error": str(e)},
+            )
+            raise HTTPException(status_code=500, detail="Failed to read file")
 
-    @app.get(
-        "/api/jobs/{job_id}/logs/{log_name}/raw",
-        response_class=PlainTextResponse,
-    )
-    async def get_job_log_raw(job_id: int, log_name: str):
-        """Download full content of any job log by name"""
+    @app.get("/api/jobs/{job_id}/artifacts")
+    async def list_job_artifacts(job_id: int):
+        """List artifacts uploaded for a job"""
+        job = db.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return job_files.list_artifacts(job_id)
 
+    @app.get("/api/jobs/{job_id}/artifacts/{path:path}")
+    async def download_job_artifact(job_id: int, path: str):
+        """Download an uploaded artifact"""
         job = db.get_job(job_id)
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
 
-        log_path = resolve_job_file_path(config, job_id, log_name)
+        try:
+            artifact_path = job_files.artifact_file_path(job_id, path)
+        except PathSafetyError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
-        if not log_path.exists():
-            raise HTTPException(status_code=404, detail="Log file not found")
+        if not artifact_path.is_file():
+            raise HTTPException(status_code=404, detail="Artifact not found")
 
-        return PlainTextResponse(log_path.read_text(encoding="utf-8", errors="replace"))
+        return FileResponse(artifact_path)
 
     @app.websocket("/ws/jobs/{job_id}")
     async def websocket_job_endpoint(websocket: WebSocket, job_id: int):

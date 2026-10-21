@@ -64,8 +64,14 @@ def create_job(
     return response.json()["job_id"]
 
 
-def job_log_file(config, job_id, log_name):
-    path = config.workspace_path / "jobs" / str(job_id) / "files" / f"{log_name}.log"
+def job_file(config, job_id, rel_path):
+    path = config.workspace_path / "jobs" / str(job_id) / "files" / rel_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def artifact_file(config, job_id, rel_path):
+    path = config.workspace_path / "jobs" / str(job_id) / "artifacts" / rel_path
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -232,16 +238,52 @@ def test_dashboard_system(client):
     assert 0.0 <= data["cpu_percent"] <= 100.0
 
 
-def test_get_job_logs(client, app, config):
-    """Test getting stdout logs for a job"""
+def test_list_job_files(client, app, config):
+    """GET /api/jobs/{id}/files lists pushed files with path/size/mtime"""
     job_id = create_job(client, app)
 
-    # Create a fake log file under jobs/{id}/files/
-    log_file = job_log_file(config, job_id, "stdout")
-    log_file.write_text("\n".join([f"Log line {i}" for i in range(1, 21)]))
+    job_file(config, job_id, "stdout.log").write_text("hello\n")
+    job_file(config, job_id, "nested/watch.txt").write_text("watch\n")
 
-    # Get last 10 lines
-    response = client.get(f"/api/jobs/{job_id}/logs/stdout?lines=10")
+    response = client.get(f"/api/jobs/{job_id}/files")
+
+    assert response.status_code == 200
+    entries = response.json()
+    assert [entry["path"] for entry in entries] == [
+        "nested/watch.txt",
+        "stdout.log",
+    ]
+    for entry in entries:
+        assert entry["size"] > 0
+        assert isinstance(entry["mtime"], (int, float))
+
+
+def test_list_job_files_empty(client, app):
+    """GET /api/jobs/{id}/files returns [] when nothing was pushed"""
+    job_id = create_job(client, app)
+
+    response = client.get(f"/api/jobs/{job_id}/files")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_list_job_files_job_not_found(client):
+    """GET /api/jobs/{id}/files returns 404 for unknown job"""
+    response = client.get("/api/jobs/9999/files")
+
+    assert response.status_code == 404
+
+
+def test_get_job_file_tail(client, app, config):
+    """GET /api/jobs/{id}/files/{path} returns the last N lines by default"""
+    job_id = create_job(client, app)
+
+    job_file(config, job_id, "stdout.log").write_text(
+        "\n".join([f"Log line {i}" for i in range(1, 21)])
+    )
+
+    response = client.get(f"/api/jobs/{job_id}/files/stdout.log?lines=10")
 
     assert response.status_code == 200
     data = response.json()
@@ -251,35 +293,179 @@ def test_get_job_logs(client, app, config):
     assert data["lines"][-1] == "Log line 20"
 
 
-def test_get_job_logs_not_found(client):
-    """Test getting logs for non-existent job"""
-    response = client.get("/api/jobs/9999/logs/stdout")
+def test_get_job_file_tail_default_lines(client, app, config):
+    """Without ?lines= the whole small file is returned (default tail 1000)"""
+    job_id = create_job(client, app)
+
+    job_file(config, job_id, "stdout.log").write_text("a\nb\nc")
+
+    response = client.get(f"/api/jobs/{job_id}/files/stdout.log")
+
+    assert response.status_code == 200
+    assert response.json()["lines"] == ["a", "b", "c"]
+
+
+def test_get_job_file_raw(client, app, config):
+    """?raw=true returns the full file as plain text"""
+    job_id = create_job(client, app)
+
+    content = "Full log content\nLine 2\nLine 3"
+    job_file(config, job_id, "stdout.log").write_text(content)
+
+    response = client.get(f"/api/jobs/{job_id}/files/stdout.log?raw=true")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    assert content in response.text
+
+
+def test_get_job_file_nested_path(client, app, config):
+    """Nested relative paths are served by the files endpoint"""
+    job_id = create_job(client, app)
+
+    job_file(config, job_id, "sub/dir/run.log").write_text("nested content\n")
+
+    response = client.get(f"/api/jobs/{job_id}/files/sub/dir/run.log?raw=true")
+
+    assert response.status_code == 200
+    assert "nested content" in response.text
+
+
+def test_get_job_file_job_not_found(client):
+    """GET /api/jobs/{id}/files/{path} returns 404 for unknown job"""
+    response = client.get("/api/jobs/9999/files/stdout.log")
 
     assert response.status_code == 404
 
 
-def test_get_job_logs_file_missing(client, app):
-    """Test getting logs when file doesn't exist"""
+def test_get_job_file_not_found(client, app):
+    """GET /api/jobs/{id}/files/{path} returns 404 when file is missing"""
     job_id = create_job(client, app)
 
-    # Don't create the log file - it should be missing
-    response = client.get(f"/api/jobs/{job_id}/logs/stdout")
+    response = client.get(f"/api/jobs/{job_id}/files/missing.log")
 
     assert response.status_code == 404
     assert "not found" in response.json()["detail"].lower()
 
 
-def test_download_raw(client, app, config):
-    """Test downloading full log"""
+def test_get_job_file_raw_not_found(client, app):
+    """?raw=true on a missing file also returns 404"""
     job_id = create_job(client, app)
 
-    log_file = job_log_file(config, job_id, "stdout")
-    log_content = "Full log content\nLine 2\nLine 3"
-    log_file.write_text(log_content)
+    response = client.get(f"/api/jobs/{job_id}/files/missing.log?raw=true")
 
-    response = client.get(f"/api/jobs/{job_id}/logs/stdout/raw")
+    assert response.status_code == 404
+
+
+def test_get_job_file_path_traversal(client, app):
+    """Path traversal in files endpoint is rejected with 400"""
+    job_id = create_job(client, app)
+
+    for url in (
+        f"/api/jobs/{job_id}/files/%2e%2e/secret",
+        f"/api/jobs/{job_id}/files/%2Fetc%2Fpasswd",
+    ):
+        response = client.get(url)
+        assert response.status_code == 400, url
+
+
+def test_list_job_artifacts(client, app, config):
+    """GET /api/jobs/{id}/artifacts lists artifacts with path/size"""
+    job_id = create_job(client, app)
+
+    artifact_file(config, job_id, "report.html").write_text("<html></html>")
+    artifact_file(config, job_id, "pocs/poc1.rs").write_text("fn main() {}")
+
+    response = client.get(f"/api/jobs/{job_id}/artifacts")
 
     assert response.status_code == 200
+    entries = response.json()
+    assert [entry["path"] for entry in entries] == [
+        "pocs/poc1.rs",
+        "report.html",
+    ]
+    for entry in entries:
+        assert set(entry.keys()) == {"path", "size"}
+        assert entry["size"] > 0
+
+
+def test_list_job_artifacts_empty(client, app):
+    """GET /api/jobs/{id}/artifacts returns [] when nothing was uploaded"""
+    job_id = create_job(client, app)
+
+    response = client.get(f"/api/jobs/{job_id}/artifacts")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_list_job_artifacts_job_not_found(client):
+    """GET /api/jobs/{id}/artifacts returns 404 for unknown job"""
+    response = client.get("/api/jobs/9999/artifacts")
+
+    assert response.status_code == 404
+
+
+def test_download_job_artifact(client, app, config):
+    """GET /api/jobs/{id}/artifacts/{path} downloads the artifact file"""
+    job_id = create_job(client, app)
+
+    content = "<html>report</html>"
+    artifact_file(config, job_id, "report.html").write_text(content)
+
+    response = client.get(f"/api/jobs/{job_id}/artifacts/report.html")
+
+    assert response.status_code == 200
+    assert response.text == content
+
+
+def test_download_job_artifact_nested(client, app, config):
+    """Artifacts under nested directories are downloadable"""
+    job_id = create_job(client, app)
+
+    artifact_file(config, job_id, "pocs/poc1.rs").write_text("fn main() {}")
+
+    response = client.get(f"/api/jobs/{job_id}/artifacts/pocs/poc1.rs")
+
+    assert response.status_code == 200
+    assert response.text == "fn main() {}"
+
+
+def test_download_job_artifact_job_not_found(client):
+    """Artifact download returns 404 for unknown job"""
+    response = client.get("/api/jobs/9999/artifacts/report.html")
+
+    assert response.status_code == 404
+
+
+def test_download_job_artifact_not_found(client, app):
+    """Artifact download returns 404 when file is missing"""
+    job_id = create_job(client, app)
+
+    response = client.get(f"/api/jobs/{job_id}/artifacts/missing.bin")
+
+    assert response.status_code == 404
+
+
+def test_download_job_artifact_path_traversal(client, app):
+    """Path traversal in artifact download is rejected with 400"""
+    job_id = create_job(client, app)
+
+    for url in (
+        f"/api/jobs/{job_id}/artifacts/%2e%2e/secret",
+        f"/api/jobs/{job_id}/artifacts/%2Fetc%2Fpasswd",
+    ):
+        response = client.get(url)
+        assert response.status_code == 400, url
+
+
+def test_old_logs_endpoints_removed(client, app, config):
+    """Old /api/jobs/{id}/logs/... endpoints no longer exist"""
+    job_id = create_job(client, app)
+    job_file(config, job_id, "stdout.log").write_text("line\n")
+
+    assert client.get(f"/api/jobs/{job_id}/logs/stdout").status_code == 404
+    assert client.get(f"/api/jobs/{job_id}/logs/stdout/raw").status_code == 404
 
 
 def test_retry_job(client, app):
@@ -330,66 +516,6 @@ def test_retry_clears_job_files_and_artifacts(client, app, config):
 
     assert not files_dir.exists()
     assert not artifacts_dir.exists()
-
-
-def test_generic_log_endpoint(client, app, config):
-    """GET /api/jobs/{id}/logs/stdout returns last N lines"""
-    job_id = create_job(client, app)
-
-    log_file = job_log_file(config, job_id, "stdout")
-    log_file.write_text("\n".join([f"line {i}" for i in range(1, 6)]))
-
-    response = client.get(f"/api/jobs/{job_id}/logs/stdout?lines=3")
-
-    assert response.status_code == 200
-    data = response.json()
-    assert "lines" in data
-    assert len(data["lines"]) == 3
-    assert data["lines"][-1] == "line 5"
-
-
-def test_generic_log_endpoint_unknown_name(client, app):
-    """GET /api/jobs/{id}/logs/{unknown} returns 404 Log file not found"""
-    job_id = create_job(client, app)
-
-    response = client.get(f"/api/jobs/{job_id}/logs/unknown_log_type")
-
-    assert response.status_code == 404
-    assert "Log file not found" in response.json()["detail"]
-
-
-def test_generic_log_raw_unknown_name(client, app):
-    """GET /api/jobs/{id}/logs/{unknown}/raw returns 404 Log file not found"""
-    job_id = create_job(client, app)
-
-    response = client.get(f"/api/jobs/{job_id}/logs/unknown_log_type/raw")
-
-    assert response.status_code == 404
-    assert "Log file not found" in response.json()["detail"]
-
-
-def test_generic_log_raw_endpoint(client, app, config):
-    """GET /api/jobs/{id}/logs/{name}/raw returns full plain text content"""
-    job_id = create_job(client, app)
-
-    log_file = job_log_file(config, job_id, "stdout")
-    log_content = "Full content line 1\nFull content line 2"
-    log_file.write_text(log_content)
-
-    response = client.get(f"/api/jobs/{job_id}/logs/stdout/raw")
-
-    assert response.status_code == 200
-    assert log_content in response.text
-
-
-def test_generic_log_endpoint_file_missing(client, app):
-    """GET /api/jobs/{id}/logs/{name} returns 404 when file doesn't exist"""
-    job_id = create_job(client, app)
-
-    response = client.get(f"/api/jobs/{job_id}/logs/stdout")
-
-    assert response.status_code == 404
-    assert "not found" in response.json()["detail"].lower()
 
 
 def test_batch_retry_uses_job_ids_key(client, app):
