@@ -1,9 +1,10 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import api from '../services/api'
 import PageHeader from '../components/ui/PageHeader.vue'
 import EmptyState from '../components/ui/EmptyState.vue'
 import { formatDateTime } from '../utils/format.js'
+import { highlightToml } from '../utils/highlightToml.js'
 
 const tasks = ref([])
 const loading = ref(true)
@@ -27,17 +28,16 @@ const updateFileInput = ref(null)
 const deletingId = ref(null)
 const deleteError = ref(null)
 
-// Inline task.toml viewer state.
-const expandedTomlId = ref(null)
-const tomlContents = ref({})
-const tomlErrors = ref({})
-const tomlLoading = ref(null)
+// task.toml dialog state.
+const tomlDialog = ref(null)
+const tomlTask = ref(null)
+const tomlContent = ref('')
+const tomlLoading = ref(false)
+const tomlError = ref('')
+const highlightedToml = computed(() => highlightToml(tomlContent.value))
+let tomlRequestId = 0
 
 async function fetchTasks() {
-  // Any list refresh may mean a task's zip changed; drop cached TOML.
-  tomlContents.value = {}
-  tomlErrors.value = {}
-  expandedTomlId.value = null
   try {
     tasks.value = await api.getTasks()
     loading.value = false
@@ -47,21 +47,48 @@ async function fetchTasks() {
   }
 }
 
-async function toggleToml(task) {
-  if (expandedTomlId.value === task.id) {
-    expandedTomlId.value = null
-    return
-  }
-  expandedTomlId.value = task.id
-  if (tomlContents.value[task.id] !== undefined) return
+async function openToml(task) {
+  tomlTask.value = task
+  tomlContent.value = ''
+  tomlError.value = ''
+  tomlLoading.value = true
 
-  tomlLoading.value = task.id
+  if (tomlDialog.value && !tomlDialog.value.open) {
+    tomlDialog.value.showModal()
+  }
+
+  const requestId = ++tomlRequestId
   try {
-    tomlContents.value[task.id] = await api.getTaskToml(task.id)
+    const content = await api.getTaskToml(task.id)
+    if (requestId === tomlRequestId) {
+      tomlContent.value = content
+    }
   } catch (err) {
-    tomlErrors.value[task.id] = extractError(err)
+    if (requestId === tomlRequestId) {
+      tomlError.value = extractError(err)
+    }
   } finally {
-    tomlLoading.value = null
+    if (requestId === tomlRequestId) {
+      tomlLoading.value = false
+    }
+  }
+}
+
+function closeToml() {
+  tomlDialog.value?.close()
+}
+
+function handleTomlClosed() {
+  tomlRequestId += 1
+  tomlTask.value = null
+  tomlContent.value = ''
+  tomlError.value = ''
+  tomlLoading.value = false
+}
+
+function retryToml() {
+  if (tomlTask.value) {
+    openToml(tomlTask.value)
   }
 }
 
@@ -342,23 +369,9 @@ onMounted(() => {
               </dl>
 
               <div class="mt-3">
-                <button class="btn btn--ghost btn--sm" @click="toggleToml(task)">
-                  {{ expandedTomlId === task.id ? 'Hide task.toml' : 'View task.toml' }}
+                <button class="btn btn--ghost btn--sm" @click="openToml(task)">
+                  View task.toml
                 </button>
-              </div>
-
-              <div v-if="expandedTomlId === task.id" class="mt-3">
-                <div v-if="tomlLoading === task.id" class="text-[11px] text-muted">
-                  Loading task.toml...
-                </div>
-                <div
-                  v-else-if="tomlErrors[task.id]"
-                  class="notice notice--error text-[11px]"
-                  role="alert"
-                >
-                  Failed to load task.toml: {{ tomlErrors[task.id] }}
-                </div>
-                <pre v-else class="code-block">{{ tomlContents[task.id] }}</pre>
               </div>
             </article>
           </div>
@@ -457,5 +470,65 @@ onMounted(() => {
         </section>
       </aside>
     </div>
+
+    <dialog
+      ref="tomlDialog"
+      class="toml-dialog"
+      aria-labelledby="toml-dialog-title"
+      @close="handleTomlClosed"
+      @click.self="closeToml"
+    >
+      <div class="toml-dialog__panel">
+        <div class="panel-header">
+          <div class="min-w-0">
+            <h2 id="toml-dialog-title" class="panel-title">task.toml</h2>
+            <p class="mt-1 truncate text-[11px] text-muted">
+              {{ tomlTask?.name }}
+              <span class="font-mono">#{{ tomlTask?.id }}</span>
+            </p>
+          </div>
+          <button
+            type="button"
+            class="btn btn--ghost btn--sm"
+            @click="closeToml"
+          >
+            Close
+          </button>
+        </div>
+
+        <div class="mt-4 min-h-0">
+          <div
+            v-if="tomlLoading"
+            class="space-y-2"
+            aria-busy="true"
+            aria-label="Loading task.toml"
+          >
+            <div class="skeleton h-3 w-1/3"></div>
+            <div class="skeleton h-3 w-2/3"></div>
+            <div class="skeleton h-3 w-1/2"></div>
+          </div>
+
+          <div
+            v-else-if="tomlError"
+            class="notice notice--error"
+            role="alert"
+          >
+            <div class="min-w-0 flex-1">
+              <p class="notice__title">Couldn't load task.toml.</p>
+              <p class="notice__detail">{{ tomlError }}</p>
+            </div>
+            <button
+              type="button"
+              class="btn btn--ghost btn--sm"
+              @click="retryToml"
+            >
+              Try again
+            </button>
+          </div>
+
+          <pre v-else class="code-block toml-code"><code v-html="highlightedToml"></code></pre>
+        </div>
+      </div>
+    </dialog>
   </div>
 </template>

@@ -445,6 +445,85 @@ body {
     color: var(--color-ink);
   }
 
+  .toml-dialog {
+    position: fixed;
+    inset: 0;
+    width: min(920px, calc(100vw - 32px));
+    max-width: min(920px, calc(100vw - 32px));
+    height: fit-content;
+    max-height: min(85vh, 900px);
+    margin: auto;
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid var(--color-rule);
+    border-radius: 4px;
+    background-color: var(--color-face);
+    color: var(--color-ink);
+    box-shadow: 0 18px 60px rgba(16, 25, 27, 0.22);
+  }
+
+  .toml-dialog::backdrop {
+    background-color: rgba(16, 25, 27, 0.45);
+  }
+
+  .toml-dialog__panel {
+    display: flex;
+    flex-direction: column;
+    max-height: min(85vh, 900px);
+    padding: 20px;
+  }
+
+  .toml-code {
+    flex: 1;
+    min-height: 0;
+    max-height: calc(85vh - 140px);
+    overflow: auto;
+  }
+
+  .toml-code code {
+    display: block;
+    font: inherit;
+    color: inherit;
+  }
+
+  .toml-key {
+    color: #8ab4ff;
+  }
+
+  .toml-table {
+    color: #f0b45a;
+    font-weight: 600;
+  }
+
+  .toml-string {
+    color: #7bd88f;
+  }
+
+  .toml-number {
+    color: #f0b45a;
+  }
+
+  .toml-boolean {
+    color: #c9a6ff;
+  }
+
+  .toml-date {
+    color: #7fd6e8;
+  }
+
+  .toml-punct {
+    color: #8a9698;
+  }
+
+  .toml-comment {
+    color: #70807d;
+    font-style: italic;
+  }
+
+  .toml-dialog[open] .toml-dialog__panel {
+    animation: panel-in 200ms ease-out;
+  }
+
   .data-table {
     width: 100%;
     border-collapse: collapse;
@@ -1133,6 +1212,19 @@ body {
   .ui-select--sm {
     min-height: 40px;
   }
+
+  .toml-dialog {
+    width: calc(100vw - 24px);
+    max-width: calc(100vw - 24px);
+  }
+
+  .toml-dialog__panel {
+    padding: 16px;
+  }
+
+  .toml-code {
+    max-height: calc(100vh - 180px);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1166,5 +1258,9 @@ body {
 
   .btn:hover:not(:disabled) {
     transform: none;
+  }
+
+  .toml-dialog[open] .toml-dialog__panel {
+    animation: none;
   }
 }
