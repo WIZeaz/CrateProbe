@@ -91,7 +91,7 @@ async def test_worker_skips_claim_when_local_capacity_full(monkeypatch):
 @pytest.mark.asyncio
 async def test_worker_claims_and_executes_task():
     task = {
-        "id": 42,
+        "job_id": 42,
         "lease_token": "lease-42",
         "crate_name": "foo",
         "crate_version": "1.0.0",
@@ -100,8 +100,8 @@ async def test_worker_claims_and_executes_task():
     executed = []
 
     class FakeExecutor:
-        async def execute_claimed_task(self, claimed_task):
-            executed.append(claimed_task["id"])
+        async def execute_claimed_job(self, claimed_task):
+            executed.append(claimed_task["job_id"])
 
     worker = RunnerWorker(client=client, runner_id="runner-1", executor=FakeExecutor())
 
@@ -122,13 +122,13 @@ async def test_worker_claims_and_executes_task():
 async def test_worker_fills_multiple_slots_via_repeated_single_claims():
     tasks_to_claim = [
         {
-            "id": 101,
+            "job_id": 101,
             "lease_token": "lease-101",
             "crate_name": "foo",
             "crate_version": "1.0.0",
         },
         {
-            "id": 102,
+            "job_id": 102,
             "lease_token": "lease-102",
             "crate_name": "bar",
             "crate_version": "2.0.0",
@@ -147,8 +147,8 @@ async def test_worker_fills_multiple_slots_via_repeated_single_claims():
     release_tasks = asyncio.Event()
 
     class BlockingExecutor:
-        async def execute_claimed_task(self, claimed_task):
-            execution_started.append(claimed_task["id"])
+        async def execute_claimed_job(self, claimed_task):
+            execution_started.append(claimed_task["job_id"])
             await release_tasks.wait()
 
     worker = RunnerWorker(
@@ -185,7 +185,7 @@ async def test_worker_fills_multiple_slots_via_repeated_single_claims():
 @pytest.mark.asyncio
 async def test_worker_executor_failure_isolated_from_poll_and_schedule_one():
     task = {
-        "id": 9,
+        "job_id": 9,
         "lease_token": "lease-9",
         "crate_name": "foo",
         "crate_version": "1.0.0",
@@ -193,7 +193,7 @@ async def test_worker_executor_failure_isolated_from_poll_and_schedule_one():
     client = FakeClient(claimed_task=task)
 
     class BrokenExecutor:
-        async def execute_claimed_task(self, _):
+        async def execute_claimed_job(self, _):
             raise RuntimeError("boom")
 
     worker = RunnerWorker(
@@ -292,7 +292,7 @@ async def test_worker_claim_transport_failure_logs_warning_with_runner_id(caplog
 async def test_worker_executor_failure_logs_traceback(caplog):
     caplog.set_level("ERROR")
     task = {
-        "id": 22,
+        "job_id": 22,
         "lease_token": "lease-22",
         "crate_name": "foo",
         "crate_version": "1.0.0",
@@ -300,7 +300,7 @@ async def test_worker_executor_failure_logs_traceback(caplog):
     client = FakeClient(claimed_task=task)
 
     class BrokenExecutor:
-        async def execute_claimed_task(self, _):
+        async def execute_claimed_job(self, _):
             raise RuntimeError("executor boom")
 
     worker = RunnerWorker(
@@ -329,7 +329,7 @@ async def test_worker_executor_failure_logs_traceback(caplog):
     assert record is not None
     assert record.exc_info is not None
     assert record.runner_id == "runner-1"
-    assert record.task_id == 22
+    assert record.job_id == 22
     assert record.crate_name == "foo"
 
 
@@ -500,7 +500,7 @@ async def test_poll_and_schedule_one_does_not_start_task_scoped_heartbeat_thread
     monkeypatch,
 ):
     task = {
-        "id": 77,
+        "job_id": 77,
         "lease_token": "lease-77",
         "crate_name": "foo",
         "crate_version": "1.0.0",
@@ -509,8 +509,8 @@ async def test_poll_and_schedule_one_does_not_start_task_scoped_heartbeat_thread
     executed = []
 
     class FakeExecutor:
-        async def execute_claimed_task(self, claimed_task):
-            executed.append(claimed_task["id"])
+        async def execute_claimed_job(self, claimed_task):
+            executed.append(claimed_task["job_id"])
 
     worker = RunnerWorker(client=client, runner_id="runner-1", executor=FakeExecutor())
 
@@ -537,7 +537,7 @@ async def test_poll_and_schedule_one_does_not_start_task_scoped_heartbeat_thread
 @pytest.mark.asyncio
 async def test_heartbeat_continues_while_executor_blocks_main_event_loop():
     task = {
-        "id": 88,
+        "job_id": 88,
         "lease_token": "lease-88",
         "crate_name": "foo",
         "crate_version": "1.0.0",
@@ -580,7 +580,7 @@ async def test_heartbeat_continues_while_executor_blocks_main_event_loop():
     )
 
     class SlowExecutor:
-        async def execute_claimed_task(self, _):
+        async def execute_claimed_job(self, _):
             started_event.set()
             time.sleep(0.8)
             finished_event.set()
@@ -608,7 +608,7 @@ async def test_heartbeat_continues_while_executor_blocks_main_event_loop():
 @pytest.mark.asyncio
 async def test_run_forever_shutdown_waits_for_inflight_tasks_before_exit(monkeypatch):
     task = {
-        "id": 99,
+        "job_id": 99,
         "lease_token": "lease-99",
         "crate_name": "foo",
         "crate_version": "1.0.0",
@@ -631,7 +631,7 @@ async def test_run_forever_shutdown_waits_for_inflight_tasks_before_exit(monkeyp
     cancel_seen = asyncio.Event()
 
     class CancellationResistantExecutor:
-        async def execute_claimed_task(self, _):
+        async def execute_claimed_job(self, _):
             try:
                 await asyncio.Event().wait()
             except asyncio.CancelledError:

@@ -3,18 +3,25 @@ import contextlib
 import logging
 import shutil
 import tarfile
-from datetime import datetime
+import tempfile
+import time
 from pathlib import Path
-from typing import Optional, Tuple
-from core.models import TaskStatus
+from typing import Optional
+
+from core.task_spec import parse_task_spec
 from runner.client import RunnerControlClient
 from runner.config import RunnerConfig
 from runner.crate_downloader import CrateDownloader
 from runner.crates_api import CratesAPI
 from runner.docker_runner import DockerRunner
 from runner.reporter import TaskReporter
+from runner.task_cache import TaskCache, TaskFetchError
 
 logger = logging.getLogger(__name__)
+
+_REPORTER_SHUTDOWN_TIMEOUT_SECONDS = 30.0
+_TERMINAL_ACK_TIMEOUT_SECONDS = 300.0
+_SYNC_LOOP_SHUTDOWN_TIMEOUT_SECONDS = 10.0
 
 
 class _SyncState:
@@ -22,9 +29,6 @@ class _SyncState:
         self.status = "running"
         self.exit_code = None
         self.message = None
-        self.case_count = None
-        self.poc_count = None
-        self.compile_failed = None
         self.wake_event = asyncio.Event()
         self.terminal_acked = asyncio.Event()
         self._next_seq = 1
@@ -46,6 +50,7 @@ class TaskExecutor:
         config: RunnerConfig,
         client: RunnerControlClient,
         crate_downloader: Optional[CrateDownloader] = None,
+        task_cache: Optional[TaskCache] = None,
     ):
         self.config = config
         self.client = client
@@ -55,147 +60,164 @@ class TaskExecutor:
             ),
             max_concurrent_downloads=config.crates_io_max_concurrent_downloads,
         )
+        self.task_cache = task_cache or TaskCache(
+            Path(config.workspace_dir) / "task_cache", client
+        )
 
     async def close(self):
         await self.crate_downloader.close()
 
-    async def execute_claimed_task(self, claimed: dict) -> None:
-        task_id = claimed["id"]
+    async def execute_claimed_job(self, claimed: dict) -> None:
+        job_id = claimed["job_id"]
         lease_token = claimed["lease_token"]
         crate_name = claimed["crate_name"]
         crate_version = claimed["version"]
+        task_id = claimed["task_id"]
+        task_sha256 = claimed["task_sha256"]
 
-        # Each task gets its own DockerRunner to avoid shared-state issues
-        # when running multiple containers concurrently.
+        # Each job gets its own DockerRunner so concurrent containers never
+        # share runner state; per-job settings (image, limits, command) are
+        # supplied per run from the task spec.
         docker = DockerRunner(
-            image=self.config.docker_image,
-            max_memory_gb=self.config.max_memory_gb,
-            max_runtime_seconds=self.config.max_runtime_seconds,
-            max_cpus=self.config.max_cpus,
+            docker_pull_policy=self.config.docker_pull_policy,
             mounts=self.config.docker_mounts,
             log_sync_interval_seconds=self.config.log_sync_interval_seconds,
         )
 
-        workspace_dir = (
-            Path(self.config.workspace_dir) / "repos" / f"{crate_name}-{crate_version}"
-        )
-        logs_dir = Path(self.config.workspace_dir) / "logs"
+        workspace_root = Path(self.config.workspace_dir)
+        job_dir = workspace_root / "jobs" / f"job{job_id}"
+        logs_dir = workspace_root / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
-        runner_log = logs_dir / f"{task_id}-runner.log"
-        stdout_log = logs_dir / f"{task_id}-stdout.log"
-        stderr_log = logs_dir / f"{task_id}-stderr.log"
+        runner_log = logs_dir / f"{job_id}-runner.log"
+        stdout_log = job_dir / "stdout.log"
+        stderr_log = job_dir / "stderr.log"
 
         handler = logging.FileHandler(str(runner_log), mode="w")
         handler.setFormatter(
             logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
         )
-        task_logger = logging.getLogger(f"task.{task_id}")
-        task_logger.setLevel(logging.DEBUG)
-        task_logger.handlers.clear()
-        task_logger.addHandler(handler)
+        job_logger = logging.getLogger(f"job.{job_id}")
+        job_logger.setLevel(logging.DEBUG)
+        job_logger.handlers.clear()
+        job_logger.addHandler(handler)
 
-        task_ctx = {
+        job_ctx = {
+            "job_id": job_id,
             "task_id": task_id,
             "crate_name": crate_name,
             "version": crate_version,
         }
 
         sync_state = _SyncState()
-
-        reporter = TaskReporter(
-            client=self.client,
-            job_id=task_id,
-            lease_token=lease_token,
-            file_specs={
-                "stdout": (stdout_log, "append"),
-                "stderr": (stderr_log, "append"),
-                "runner": (runner_log, "append"),
-                "miri_report": (
-                    workspace_dir / "testgen" / "miri_report.txt",
-                    "append",
-                ),
-                "stats-yaml": (workspace_dir / "testgen" / "stats.yaml", "full"),
-            },
-            flush_interval=self.config.log_flush_interval_seconds,
+        # The sync loop runs for the whole job so terminal states are acked
+        # even when the job fails before reaching docker (e.g. task zip
+        # fetch errors).
+        sync_task = asyncio.create_task(
+            self._state_sync_loop(
+                job_id,
+                lease_token,
+                self.config.state_sync_interval_seconds,
+                sync_state,
+            )
         )
-        reporter_task = asyncio.create_task(reporter.run())
 
-        sync_task = None
+        reporter = None
+        reporter_task = None
 
         terminal_status = None
         terminal_exit_code = None
         terminal_message = None
-        terminal_counts = None
 
         try:
-            task_logger.info("task started", extra=task_ctx)
+            job_logger.info("job started", extra=job_ctx)
 
-            if not await docker.is_available():
-                raise RuntimeError("Docker is not available")
-
-            if not await docker.ensure_image(self.config.docker_pull_policy):
-                raise RuntimeError(
-                    f"Docker image {self.config.docker_image} is not available"
+            try:
+                task_dir = await self.task_cache.ensure(task_id, task_sha256)
+            except TaskFetchError as exc:
+                job_logger.error("task fetch failed: %s", exc, extra=job_ctx)
+                terminal_status = "failed"
+                terminal_message = str(exc)
+            else:
+                spec = self._load_task_spec(task_dir, task_id)
+                job_logger.info(
+                    "task spec loaded",
+                    extra={**job_ctx, "task_name": spec.name, "image": spec.image},
                 )
 
-            await self._prepare_workspace(
-                workspace_dir, crate_name, crate_version, task_logger, docker
-            )
+                if not await docker.is_available():
+                    raise RuntimeError("Docker is not available")
+                if not await docker.ensure_image(spec.image):
+                    raise RuntimeError(f"Docker image {spec.image} is not available")
 
-            task_logger.info("workspace prepared, starting state sync", extra=task_ctx)
-            sync_task = asyncio.create_task(
-                self._state_sync_loop(
-                    task_id,
-                    lease_token,
-                    workspace_dir,
-                    self.config.state_sync_interval_seconds,
-                    sync_state,
+                await self._prepare_workspace(
+                    job_dir, crate_name, crate_version, job_logger, docker, spec
                 )
-            )
+                await asyncio.to_thread(self._overlay_task_files, task_dir, job_dir)
+                job_logger.info("workspace prepared", extra=job_ctx)
 
-            cmd = ["cargo", "rapx", f"--test-crate={crate_name}", "test"]
-            task_logger.info(
-                "command started",
-                extra={**task_ctx, "command_summary": " ".join(cmd)},
-            )
+                file_specs = {
+                    "stdout.log": (stdout_log, "append"),
+                    "stderr.log": (stderr_log, "append"),
+                    "runner.log": (runner_log, "append"),
+                }
+                for watch_path in spec.watch:
+                    file_specs[watch_path] = (job_dir / watch_path, "full")
+                reporter = TaskReporter(
+                    client=self.client,
+                    job_id=job_id,
+                    lease_token=lease_token,
+                    file_specs=file_specs,
+                    flush_interval=self.config.log_flush_interval_seconds,
+                )
+                reporter_task = asyncio.create_task(reporter.run())
 
-            result = await docker.run(
-                command=cmd,
-                workspace_dir=workspace_dir,
-                stdout_log=stdout_log,
-                stderr_log=stderr_log,
-            )
-            task_logger.info(
-                "command finished",
-                extra={**task_ctx, "exit_code": result.exit_code},
-            )
+                job_logger.info(
+                    "command started",
+                    extra={**job_ctx, "command_summary": spec.cmd},
+                )
+                command_started_at = time.monotonic()
+                result = await docker.run(
+                    image=spec.image,
+                    cmd=spec.cmd,
+                    workspace_dir=job_dir,
+                    container_workspace=spec.workspace,
+                    env=spec.env,
+                    cpu=spec.limits.cpu,
+                    mem=spec.limits.mem,
+                    timeout_seconds=spec.limits.timeout_seconds,
+                    stdout_log=stdout_log,
+                    stderr_log=stderr_log,
+                )
+                command_duration_ms = int(
+                    (time.monotonic() - command_started_at) * 1000
+                )
+                job_logger.info(
+                    "command finished",
+                    extra={
+                        **job_ctx,
+                        "exit_code": result.exit_code,
+                        "duration_ms": command_duration_ms,
+                    },
+                )
 
-            case_count, poc_count = await asyncio.to_thread(
-                self._count_generated_items, workspace_dir
-            )
-            compile_failed = await asyncio.to_thread(
-                self._get_compile_failed_count, workspace_dir
-            )
+                await self._upload_artifacts(
+                    job_id, lease_token, job_dir, spec.artifacts, job_logger, job_ctx
+                )
 
-            terminal_status = result.state.value
-            terminal_exit_code = result.exit_code
-            terminal_message = result.message
-            terminal_counts = {
-                "case_count": case_count,
-                "poc_count": poc_count,
-                "compile_failed": compile_failed,
-            }
+                terminal_status = result.state.value
+                terminal_exit_code = result.exit_code
+                terminal_message = result.message
         except asyncio.CancelledError:
-            task_logger.info("task cancelled", extra=task_ctx)
+            job_logger.info("job cancelled", extra=job_ctx)
             terminal_status = "failed"
-            terminal_message = "Task interrupted by shutdown"
+            terminal_message = "Job interrupted by shutdown"
             raise
         except Exception as exc:
-            task_logger.exception("task execution failed", extra=task_ctx)
+            job_logger.exception("job execution failed", extra=job_ctx)
             terminal_status = "failed"
             terminal_message = str(exc)
         finally:
-            await self._shutdown_task(
+            await self._shutdown_job(
                 reporter=reporter,
                 reporter_task=reporter_task,
                 sync_state=sync_state,
@@ -203,14 +225,13 @@ class TaskExecutor:
                 terminal_status=terminal_status,
                 terminal_exit_code=terminal_exit_code,
                 terminal_message=terminal_message,
-                terminal_counts=terminal_counts,
-                task_logger=task_logger,
+                job_logger=job_logger,
                 handler=handler,
                 docker=docker,
-                task_ctx=task_ctx,
+                job_ctx=job_ctx,
             )
 
-    async def _shutdown_task(
+    async def _shutdown_job(
         self,
         reporter,
         reporter_task,
@@ -219,97 +240,85 @@ class TaskExecutor:
         terminal_status,
         terminal_exit_code,
         terminal_message,
-        terminal_counts,
-        task_logger,
+        job_logger,
         handler,
         docker,
-        task_ctx,
+        job_ctx,
     ):
-        reporter.stop()
-        try:
-            await asyncio.wait_for(reporter_task, timeout=30.0)
-        except asyncio.TimeoutError:
-            reporter_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await reporter_task
+        if reporter is not None:
+            reporter.stop()
+            try:
+                await asyncio.wait_for(
+                    reporter_task, timeout=_REPORTER_SHUTDOWN_TIMEOUT_SECONDS
+                )
+            except asyncio.TimeoutError:
+                reporter_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await reporter_task
 
         if terminal_status is not None:
             sync_state.set_terminal(
                 status=terminal_status,
                 exit_code=terminal_exit_code,
                 message=terminal_message,
-                **(terminal_counts or {}),
             )
             try:
-                await asyncio.wait_for(sync_state.terminal_acked.wait(), timeout=300.0)
-                task_logger.info("terminal sync acked", extra=task_ctx)
+                await asyncio.wait_for(
+                    sync_state.terminal_acked.wait(),
+                    timeout=_TERMINAL_ACK_TIMEOUT_SECONDS,
+                )
+                job_logger.info("terminal sync acked", extra=job_ctx)
             except asyncio.TimeoutError:
-                task_logger.warning(
-                    "terminal sync not acked within timeout", extra=task_ctx
+                job_logger.warning(
+                    "terminal sync not acked within timeout", extra=job_ctx
                 )
 
         sync_state.terminal_acked.set()
-        if sync_task is not None:
-            try:
-                await asyncio.wait_for(sync_task, timeout=10.0)
-            except asyncio.TimeoutError:
-                sync_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await sync_task
-        else:
-            task_logger.info(
-                "no state sync loop started, skipping terminal sync wait",
-                extra=task_ctx,
+        try:
+            await asyncio.wait_for(
+                sync_task, timeout=_SYNC_LOOP_SHUTDOWN_TIMEOUT_SECONDS
             )
+        except asyncio.TimeoutError:
+            sync_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await sync_task
 
-        task_logger.info("task runner log closed", extra=task_ctx)
-        task_logger.removeHandler(handler)
+        job_logger.info("job runner log closed", extra=job_ctx)
+        job_logger.removeHandler(handler)
         handler.close()
         await docker.close()
 
     async def _state_sync_loop(
         self,
-        task_id: int,
+        job_id: int,
         lease_token: str,
-        workspace_dir: Path,
         interval: float,
         sync_state: _SyncState,
     ) -> None:
         while not sync_state.terminal_acked.is_set():
             seq = sync_state.next_seq()
-            try:
-                case_count, poc_count = await asyncio.to_thread(
-                    self._count_generated_items, workspace_dir
-                )
-                compile_failed = await asyncio.to_thread(
-                    self._get_compile_failed_count, workspace_dir
-                )
-            except Exception:
-                case_count = poc_count = compile_failed = None
-
-            payload_status = sync_state.status
             payload = {
                 "lease_token": lease_token,
                 "sync_seq": seq,
-                "status": payload_status,
+                "status": sync_state.status,
                 "exit_code": sync_state.exit_code,
                 "message": sync_state.message,
-                "case_count": case_count,
-                "poc_count": poc_count,
-                "compile_failed": compile_failed,
             }
 
             try:
-                result = await self.client.sync_job(task_id, payload)
+                result = await self.client.sync_job(job_id, payload)
                 last_sync_seq = result.get("last_sync_seq", 0)
-                if seq <= last_sync_seq and payload_status != "running":
+                if seq <= last_sync_seq and payload["status"] != "running":
                     sync_state.terminal_acked.set()
             except Exception as exc:
                 logger.warning(
-                    "task sync failed: %s",
+                    "job sync failed: %s",
                     exc,
-                    extra={"task_id": task_id, "sync_seq": seq},
+                    extra={"job_id": job_id, "sync_seq": seq},
                 )
+
+            if sync_state.terminal_acked.is_set():
+                break
 
             try:
                 await asyncio.wait_for(sync_state.wake_event.wait(), timeout=interval)
@@ -317,64 +326,84 @@ class TaskExecutor:
             except asyncio.TimeoutError:
                 pass
 
+    def _load_task_spec(self, task_dir: Path, task_id: int):
+        task_toml = task_dir / "task.toml"
+        if not task_toml.is_file():
+            raise TaskFetchError(f"task {task_id} zip does not contain task.toml")
+        return parse_task_spec(task_toml.read_bytes())
+
     async def _prepare_workspace(
         self,
-        workspace_dir: Path,
+        job_dir: Path,
         crate_name: str,
         version: str,
-        task_logger,
+        job_logger,
         docker: DockerRunner,
+        spec,
     ):
-        if workspace_dir.exists():
-            await docker.ensure_workspace_ownership(workspace_dir)
-            await asyncio.to_thread(shutil.rmtree, workspace_dir)
-        workspace_dir.mkdir(parents=True, exist_ok=True)
+        if job_dir.exists():
+            await docker.ensure_workspace_ownership(job_dir, spec.image, spec.workspace)
+            await asyncio.to_thread(shutil.rmtree, job_dir)
+        job_dir.mkdir(parents=True, exist_ok=True)
 
-        crate_file = workspace_dir.parent / f"{crate_name}-{version}.crate"
-        crate_file.parent.mkdir(parents=True, exist_ok=True)
-        if crate_file.exists():
-            crate_file.unlink()
-
-        task_logger.info(
-            "crate download started",
-            extra={"crate_name": crate_name, "version": version},
+        temp_dir = Path(
+            tempfile.mkdtemp(prefix=f"_{job_dir.name}-", dir=job_dir.parent)
         )
-        await self.crate_downloader.download(crate_name, version, crate_file)
-        task_logger.info(
-            "crate download completed",
-            extra={"crate_name": crate_name, "version": version},
-        )
-
-        temp_extract_dir = workspace_dir.parent / f"_temp_{crate_name}-{version}"
-        temp_extract_dir.mkdir(parents=True, exist_ok=True)
         try:
-            task_logger.info(
+            crate_file = temp_dir / f"{crate_name}-{version}.crate"
+            job_logger.info(
+                "crate download started",
+                extra={
+                    "job_dir": job_dir.name,
+                    "crate_name": crate_name,
+                    "version": version,
+                },
+            )
+            await self.crate_downloader.download(crate_name, version, crate_file)
+            job_logger.info(
+                "crate download completed",
+                extra={
+                    "job_dir": job_dir.name,
+                    "crate_name": crate_name,
+                    "version": version,
+                },
+            )
+
+            extract_dir = temp_dir / "extract"
+            extract_dir.mkdir()
+            job_logger.info(
                 "crate extraction started",
-                extra={"crate_name": crate_name, "version": version},
+                extra={
+                    "job_dir": job_dir.name,
+                    "crate_name": crate_name,
+                    "version": version,
+                },
             )
             await asyncio.to_thread(
                 self._extract_and_move_crate,
                 crate_file,
-                temp_extract_dir,
-                workspace_dir,
+                extract_dir,
+                job_dir,
                 crate_name,
                 version,
             )
-            task_logger.info(
+            job_logger.info(
                 "crate extraction completed",
-                extra={"crate_name": crate_name, "version": version},
+                extra={
+                    "job_dir": job_dir.name,
+                    "crate_name": crate_name,
+                    "version": version,
+                },
             )
         finally:
-            if temp_extract_dir.exists():
-                await asyncio.to_thread(shutil.rmtree, temp_extract_dir)
-        if crate_file.exists():
-            await asyncio.to_thread(crate_file.unlink)
+            if temp_dir.exists():
+                await asyncio.to_thread(shutil.rmtree, temp_dir, ignore_errors=True)
 
     def _extract_and_move_crate(
         self,
         crate_file: Path,
         temp_extract_dir: Path,
-        workspace_dir: Path,
+        job_dir: Path,
         crate_name: str,
         version: str,
     ) -> None:
@@ -384,44 +413,59 @@ class TaskExecutor:
         inner_dir = temp_extract_dir / f"{crate_name}-{version}"
         source_dir = inner_dir if inner_dir.exists() else temp_extract_dir
         for item in source_dir.iterdir():
-            shutil.move(str(item), str(workspace_dir))
+            shutil.move(str(item), str(job_dir))
 
-    def _count_generated_items(self, workspace_dir: Path) -> Tuple[int, int]:
-        testgen_dir = workspace_dir / "testgen"
-        case_count = 0
-        poc_count = 0
-        tests_dir = testgen_dir / "tests"
-        if tests_dir.exists():
-            case_count = len([d for d in tests_dir.iterdir() if d.is_dir()])
-        poc_dir = testgen_dir / "poc"
-        if poc_dir.exists():
-            poc_count = len([d for d in poc_dir.iterdir() if d.is_dir()])
-        return case_count, poc_count
+    def _overlay_task_files(self, task_dir: Path, job_dir: Path) -> None:
+        # Zip contents override crate files on name conflicts. task.toml is
+        # metadata, and .sha256 is the TaskCache marker; neither belongs in
+        # the job workspace.
+        shutil.copytree(
+            task_dir,
+            job_dir,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("task.toml", ".sha256"),
+        )
 
-    def _get_compile_failed_count(self, workspace_dir: Path) -> int | None:
-        stats_yaml_path = workspace_dir / "testgen" / "stats.yaml"
-        if not stats_yaml_path.exists():
-            return None
-        try:
-            lines = stats_yaml_path.read_text(
-                encoding="utf-8", errors="replace"
-            ).splitlines()
-        except Exception:
-            return None
-        for raw_line in lines:
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
+    async def _upload_artifacts(
+        self,
+        job_id: int,
+        lease_token: str,
+        job_dir: Path,
+        artifacts,
+        job_logger,
+        job_ctx,
+    ) -> None:
+        uploaded = 0
+        for rel_path in artifacts:
+            source = job_dir / rel_path
+            if not source.exists():
+                job_logger.warning(
+                    "artifact path missing, skipping: %s",
+                    rel_path,
+                    extra={**job_ctx, "path": rel_path},
+                )
                 continue
-            if not line.startswith("CompileFailed:") and not line.startswith(
-                "compile_failed:"
-            ):
-                continue
-            value = line.split(":", 1)[1].strip()
-            if value.startswith('"') and value.endswith('"') and len(value) >= 2:
-                value = value[1:-1].strip()
-            if value.startswith("'") and value.endswith("'") and len(value) >= 2:
-                value = value[1:-1].strip()
-            if value.isdigit():
-                return int(value)
-            return None
-        return None
+            if source.is_file():
+                files = [source]
+            else:
+                files = sorted(p for p in source.rglob("*") if p.is_file())
+            for file_path in files:
+                remote_path = file_path.relative_to(job_dir).as_posix()
+                try:
+                    await self.client.upload_artifact(
+                        job_id, lease_token, remote_path, file_path
+                    )
+                    uploaded += 1
+                except Exception as exc:
+                    # Artifact loss must not turn an otherwise finished job
+                    # into a failure; log and continue with the rest.
+                    job_logger.warning(
+                        "artifact upload failed: %s (path=%s)",
+                        exc,
+                        remote_path,
+                        extra={**job_ctx, "path": remote_path},
+                    )
+        job_logger.info(
+            "artifacts upload finished",
+            extra={**job_ctx, "uploaded_files": uploaded},
+        )

@@ -101,7 +101,7 @@ class RunnerWorker:
         if claimed is None:
             return False
 
-        execution_task = asyncio.create_task(self._execute_claimed_task_safe(claimed))
+        execution_task = asyncio.create_task(self._execute_claimed_job_safe(claimed))
         self._inflight_tasks.add(execution_task)
         self._is_executing = True
         execution_task.add_done_callback(self._on_execution_task_done)
@@ -112,15 +112,15 @@ class RunnerWorker:
         self._inflight_tasks.discard(task)
         self._is_executing = self._current_jobs() > 0
 
-    async def _execute_claimed_task_safe(self, claimed) -> None:
+    async def _execute_claimed_job_safe(self, claimed) -> None:
         try:
-            await self._executor.execute_claimed_task(claimed)
+            await self._executor.execute_claimed_job(claimed)
         except Exception:
             logger.exception(
                 "runner executor failed",
                 extra={
                     "runner_id": self._runner_id,
-                    "task_id": claimed.get("id"),
+                    "job_id": claimed.get("job_id"),
                     "crate_name": claimed.get("crate_name"),
                 },
             )
