@@ -6,8 +6,16 @@ const api = axios.create({
   timeout: 30000,
 })
 
+// Inject the admin token the same way for every admin-protected endpoint:
+// runner management under /admin/* and task definition mutations
+// (POST/PUT/DELETE /tasks*). Listing tasks (GET) stays public.
 api.interceptors.request.use(config => {
-  if (config.url && config.url.startsWith('/admin/')) {
+  const url = config.url || ''
+  const method = (config.method || 'get').toLowerCase()
+  const needsAdminToken =
+    url.startsWith('/admin/') ||
+    (url.startsWith('/tasks') && method !== 'get')
+  if (needsAdminToken) {
     const token = getAdminToken()
     if (token) {
       config.headers = {
@@ -28,14 +36,116 @@ api.interceptors.response.use(
   }
 )
 
+// Encode a relative file path for use in a URL, keeping '/' separators.
+function encodePath(path) {
+  return path
+    .split('/')
+    .map(segment => encodeURIComponent(segment))
+    .join('/')
+}
+
 export default {
-  // Task endpoints
-  async createTask(crate_name, version = null) {
-    const response = await api.post('/tasks', { crate_name, version })
+  // Job endpoints
+  async createJob(crateName, version = null, taskId) {
+    const response = await api.post('/jobs', {
+      crate_name: crateName,
+      version,
+      task_id: taskId,
+    })
     return response.data
   },
 
-  async getAllTasks() {
+  async getJobs() {
+    const response = await api.get('/jobs')
+    return response.data
+  },
+
+  async getJob(jobId) {
+    const response = await api.get(`/jobs/${jobId}`)
+    return response.data
+  },
+
+  async cancelJob(jobId) {
+    const response = await api.post(`/jobs/${jobId}/cancel`)
+    return response.data
+  },
+
+  async deleteJob(jobId) {
+    const response = await api.delete(`/jobs/${jobId}`)
+    return response.data
+  },
+
+  async retryJob(jobId) {
+    const response = await api.post(`/jobs/${jobId}/retry`)
+    return response.data
+  },
+
+  async batchRetry(jobIds) {
+    const response = await api.post('/jobs/batch-retry', { job_ids: jobIds })
+    return response.data
+  },
+
+  async batchDelete(jobIds) {
+    const response = await api.post('/jobs/batch-delete', { job_ids: jobIds })
+    return response.data
+  },
+
+  async batchSetPriority(jobIds, priority) {
+    const response = await api.post('/jobs/batch-priority', {
+      job_ids: jobIds,
+      priority,
+    })
+    return response.data
+  },
+
+  async batchCancel(jobIds) {
+    const response = await api.post('/jobs/batch-cancel', { job_ids: jobIds })
+    return response.data
+  },
+
+  async getQueue() {
+    const response = await api.get('/queue')
+    return response.data
+  },
+
+  // Job file / artifact endpoints
+  async getJobFiles(jobId) {
+    const response = await api.get(`/jobs/${jobId}/files`)
+    return response.data
+  },
+
+  async getJobFile(jobId, path, { lines, raw } = {}) {
+    const params = {}
+    if (lines !== undefined && lines !== null) {
+      params.lines = lines
+    }
+    if (raw !== undefined && raw !== null) {
+      params.raw = raw
+    }
+    const config = { params }
+    if (raw) {
+      // raw=true returns text/plain; keep it as a string.
+      config.responseType = 'text'
+    }
+    const response = await api.get(
+      `/jobs/${jobId}/files/${encodePath(path)}`,
+      config
+    )
+    return response.data
+  },
+
+  async getJobArtifacts(jobId) {
+    const response = await api.get(`/jobs/${jobId}/artifacts`)
+    return response.data
+  },
+
+  // Relative download URL for an artifact (for <a :href>).
+  artifactUrl(jobId, path) {
+    return `/api/jobs/${jobId}/artifacts/${encodePath(path)}`
+  },
+
+  // Task definition endpoints
+  async getTasks() {
     const response = await api.get('/tasks')
     return response.data
   },
@@ -45,43 +155,24 @@ export default {
     return response.data
   },
 
-  async cancelTask(taskId) {
-    const response = await api.post(`/tasks/${taskId}/cancel`)
+  // Upload a task definition zip (admin token via interceptor).
+  async uploadTask(file) {
+    const form = new FormData()
+    form.append('file', file)
+    const response = await api.post('/tasks', form)
+    return response.data
+  },
+
+  // Replace a task definition's zip (admin token via interceptor).
+  async updateTask(taskId, file) {
+    const form = new FormData()
+    form.append('file', file)
+    const response = await api.put(`/tasks/${taskId}`, form)
     return response.data
   },
 
   async deleteTask(taskId) {
     const response = await api.delete(`/tasks/${taskId}`)
-    return response.data
-  },
-
-  async retryTask(taskId) {
-    const response = await api.post(`/tasks/${taskId}/retry`)
-    return response.data
-  },
-
-  async batchRetry(taskIds) {
-    const response = await api.post('/tasks/batch-retry', { task_ids: taskIds })
-    return response.data
-  },
-
-  async batchDelete(taskIds) {
-    const response = await api.post('/tasks/batch-delete', { task_ids: taskIds })
-    return response.data
-  },
-
-  async batchSetPriority(taskIds, priority) {
-    const response = await api.post('/tasks/batch-priority', { task_ids: taskIds, priority })
-    return response.data
-  },
-
-  async batchCancel(taskIds) {
-    const response = await api.post('/tasks/batch-cancel', { task_ids: taskIds })
-    return response.data
-  },
-
-  async getQueue() {
-    const response = await api.get('/queue')
     return response.data
   },
 
@@ -138,19 +229,4 @@ export default {
     })
     return response.data
   },
-
-  // Log endpoints
-  async getLog(taskId, logType, lines = 1000) {
-    const response = await api.get(`/tasks/${taskId}/logs/${logType}`, {
-      params: { lines }
-    })
-    return response.data
-  },
-
-  async downloadLog(taskId, logType) {
-    const response = await api.get(`/tasks/${taskId}/logs/${logType}/raw`, {
-      responseType: 'blob'
-    })
-    return response.data
-  }
 }

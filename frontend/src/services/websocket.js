@@ -10,10 +10,14 @@ class WebSocketService {
 
   connect(url = '/ws/dashboard') {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      return
+      if (this.currentUrl === url) {
+        return
+      }
+      // Connected to a different endpoint: close it and reconnect.
+      this.disconnect()
     }
 
-    if (this.isConnecting) {
+    if (this.isConnecting && this.currentUrl === url) {
       return
     }
 
@@ -64,6 +68,12 @@ class WebSocketService {
       this.emit('disconnected')
       this.scheduleReconnect()
     }
+  }
+
+  // Connect to the per-job channel: /ws/jobs/{jobId}.
+  // Server emits job_created / job_update / job_completed messages.
+  connectJob(jobId) {
+    this.connect(`/ws/jobs/${jobId}`)
   }
 
   scheduleReconnect() {
