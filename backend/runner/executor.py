@@ -308,7 +308,7 @@ class TaskExecutor:
             }
 
             try:
-                result = await self.client.sync_task(task_id, payload)
+                result = await self.client.sync_job(task_id, payload)
                 last_sync_seq = result.get("last_sync_seq", 0)
                 if seq <= last_sync_seq and payload_status != "running":
                     sync_state.terminal_acked.set()

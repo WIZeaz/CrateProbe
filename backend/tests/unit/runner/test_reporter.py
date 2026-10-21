@@ -12,8 +12,8 @@ async def test_reporter_flush_logs_sends_incremental_chunks(tmp_path):
     sent_chunks = []
 
     class FakeClient:
-        async def send_log_chunk(self, task_id, log_type, payload):
-            sent_chunks.append((task_id, log_type, payload))
+        async def push_file(self, job_id, payload):
+            sent_chunks.append((job_id, payload["path"], payload))
 
     reporter = TaskReporter(
         client=FakeClient(),
@@ -28,6 +28,7 @@ async def test_reporter_flush_logs_sends_incremental_chunks(tmp_path):
     assert len(sent_chunks) == 1
     assert sent_chunks[0][1] == "stdout"
     assert sent_chunks[0][2]["chunk_seq"] == 1
+    assert sent_chunks[0][2]["mode"] == "append"
     assert sent_chunks[0][2]["content"] == "line 1\n"
     assert sent_chunks[0][2]["lease_token"] == "lease-1"
 
@@ -47,7 +48,7 @@ async def test_reporter_flush_logs_skips_unchanged_file(tmp_path):
     log_file.write_text("content")
 
     class FakeClient:
-        async def send_log_chunk(self, *_args, **_kwargs):
+        async def push_file(self, *_args, **_kwargs):
             raise AssertionError("should not be called")
 
     reporter = TaskReporter(
@@ -71,7 +72,7 @@ async def test_reporter_flush_logs_retries_on_failure(tmp_path):
     call_count = 0
 
     class FailingClient:
-        async def send_log_chunk(self, *_args, **_kwargs):
+        async def push_file(self, *_args, **_kwargs):
             nonlocal call_count
             call_count += 1
             raise RuntimeError("network error")
@@ -100,7 +101,7 @@ async def test_reporter_flush_logs_handles_truncation(tmp_path):
     sent_chunks = []
 
     class FakeClient:
-        async def send_log_chunk(self, task_id, log_type, payload):
+        async def push_file(self, job_id, payload):
             sent_chunks.append(payload)
 
     reporter = TaskReporter(
@@ -134,7 +135,7 @@ async def test_reporter_run_loop_stops_on_event(tmp_path):
     sent_chunks = []
 
     class FakeClient:
-        async def send_log_chunk(self, task_id, log_type, payload):
+        async def push_file(self, job_id, payload):
             sent_chunks.append(payload)
 
     reporter = TaskReporter(
@@ -164,7 +165,7 @@ async def test_reporter_run_loop_stops_on_event(tmp_path):
 
 def test_reporter_uses_custom_flush_interval(tmp_path):
     class FakeClient:
-        async def send_log_chunk(self, task_id, log_type, payload):
+        async def push_file(self, job_id, payload):
             pass
 
     reporter = TaskReporter(
@@ -187,11 +188,8 @@ async def test_reporter_flush_logs_defaults_to_full_upload(tmp_path):
     sent_logs = []
 
     class FakeClient:
-        async def send_log(self, task_id, log_type, payload):
-            sent_logs.append((task_id, log_type, payload))
-
-        async def send_log_chunk(self, *_args, **_kwargs):
-            raise AssertionError("chunk upload should not be called")
+        async def push_file(self, job_id, payload):
+            sent_logs.append((job_id, payload["path"], payload))
 
     reporter = TaskReporter(
         client=FakeClient(),
@@ -206,6 +204,7 @@ async def test_reporter_flush_logs_defaults_to_full_upload(tmp_path):
     assert len(sent_logs) == 1
     assert sent_logs[0][1] == "stats-yaml"
     assert sent_logs[0][2]["content"] == "CompileFailed: 1\n"
+    assert sent_logs[0][2]["mode"] == "full"
     assert sent_logs[0][2]["lease_token"] == "lease-1"
 
 
@@ -220,11 +219,8 @@ async def test_reporter_full_mode_reuploads_on_same_size_content_change(tmp_path
     sent_logs = []
 
     class FakeClient:
-        async def send_log(self, task_id, log_type, payload):
+        async def push_file(self, job_id, payload):
             sent_logs.append(payload)
-
-        async def send_log_chunk(self, *_args, **_kwargs):
-            raise AssertionError("chunk upload should not be called")
 
     reporter = TaskReporter(
         client=FakeClient(),
@@ -257,11 +253,8 @@ async def test_reporter_invalid_upload_config_falls_back_to_full(tmp_path):
     sent_logs = []
 
     class FakeClient:
-        async def send_log(self, task_id, log_type, payload):
-            sent_logs.append((task_id, log_type, payload))
-
-        async def send_log_chunk(self, *_args, **_kwargs):
-            raise AssertionError("chunk upload should not be called")
+        async def push_file(self, job_id, payload):
+            sent_logs.append((job_id, payload["path"], payload))
 
     reporter = TaskReporter(
         client=FakeClient(),

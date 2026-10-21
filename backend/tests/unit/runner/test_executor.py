@@ -46,7 +46,7 @@ async def test_execute_claimed_task_does_not_block_event_loop_during_docker_prec
     tmp_path, monkeypatch
 ):
     class FakeClient:
-        async def sync_task(self, task_id, payload):
+        async def sync_job(self, task_id, payload):
             return {"synced": True, "last_sync_seq": payload["sync_seq"]}
 
         async def send_log_chunk(self, task_id, log_type, payload):
@@ -153,7 +153,7 @@ async def test_executor_logs_lifecycle_boundaries(tmp_path, monkeypatch):
         def __init__(self):
             self.syncs = []
 
-        async def sync_task(self, task_id, payload):
+        async def sync_job(self, task_id, payload):
             self.syncs.append((task_id, payload))
             return {"synced": True, "last_sync_seq": payload["sync_seq"]}
 
@@ -245,7 +245,7 @@ async def test_executor_failure_logs_traceback(tmp_path, monkeypatch):
     )()
 
     class FakeClient:
-        async def sync_task(self, *_args, **kwargs):
+        async def sync_job(self, *_args, **kwargs):
             payload = kwargs.get("payload") or (_args[1] if len(_args) > 1 else {})
             return {"synced": True, "last_sync_seq": payload.get("sync_seq", 1)}
 
@@ -332,7 +332,7 @@ async def test_multiple_tasks_run_containers_concurrently(tmp_path, monkeypatch)
     )()
 
     class FakeClient:
-        async def sync_task(self, *_args, **kwargs):
+        async def sync_job(self, *_args, **kwargs):
             payload = kwargs.get("payload") or (_args[1] if len(_args) > 1 else {})
             return {"synced": True, "last_sync_seq": payload.get("sync_seq", 1)}
 
@@ -448,8 +448,8 @@ async def test_executor_cancellation_does_not_block_on_reporter(tmp_path, monkey
         def __init__(self):
             self.syncs = []
 
-        async def sync_task(self, task_id, payload):
-            self.syncs.append(("sync_task", task_id, payload))
+        async def sync_job(self, task_id, payload):
+            self.syncs.append(("sync_job", task_id, payload))
             return {"synced": True, "last_sync_seq": payload["sync_seq"]}
 
         async def send_log_chunk(self, *_args, **_kwargs):
@@ -548,7 +548,7 @@ async def test_state_sync_loop_starts_after_prepare_workspace(tmp_path, monkeypa
         def __init__(self):
             self.sync_payloads = []
 
-        async def sync_task(self, task_id, payload):
+        async def sync_job(self, task_id, payload):
             self.sync_payloads.append(payload.copy())
             return {"synced": True, "last_sync_seq": payload["sync_seq"]}
 
@@ -693,7 +693,7 @@ async def test_running_sync_in_flight_does_not_ack_terminal(tmp_path, monkeypatc
         def __init__(self):
             self.payloads = []
 
-        async def sync_task(self, task_id, payload):
+        async def sync_job(self, task_id, payload):
             self.payloads.append(payload.copy())
             if payload["status"] == "running" and not running_released.is_set():
                 running_started.set()
@@ -723,7 +723,7 @@ async def test_running_sync_in_flight_does_not_ack_terminal(tmp_path, monkeypatc
     )
 
     try:
-        # Wait until the running payload is blocked inside client.sync_task.
+        # Wait until the running payload is blocked inside client.sync_job.
         await asyncio.wait_for(running_started.wait(), timeout=2.0)
         # Flip to terminal while the running payload is still in flight.
         sync_state.set_terminal(status="completed", exit_code=0, message="done")

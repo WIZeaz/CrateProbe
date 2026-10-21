@@ -91,56 +91,29 @@ class TaskReporter:
 
             try:
                 if upload_mode == "chunk":
-                    if self._stop_event.is_set():
-                        await asyncio.wait_for(
-                            self.client.send_log_chunk(
-                                self.task_id,
-                                log_type,
-                                {
-                                    "lease_token": self.lease_token,
-                                    "chunk_seq": chunk_seq,
-                                    "content": new_content,
-                                },
-                            ),
-                            timeout=2.0,
-                        )
-                    else:
-                        await self.client.send_log_chunk(
-                            self.task_id,
-                            log_type,
-                            {
-                                "lease_token": self.lease_token,
-                                "chunk_seq": chunk_seq,
-                                "content": new_content,
-                            },
-                        )
-                    self._next_chunk_seq[log_type] = chunk_seq + 1
+                    payload = {
+                        "lease_token": self.lease_token,
+                        "path": log_type,
+                        "mode": "append",
+                        "chunk_seq": chunk_seq,
+                        "content": new_content,
+                    }
                 else:
-                    if self._stop_event.is_set():
-                        await asyncio.wait_for(
-                            self.client.send_log(
-                                self.task_id,
-                                log_type,
-                                {
-                                    "lease_token": self.lease_token,
-                                    "content": path.read_text(
-                                        encoding="utf-8", errors="replace"
-                                    ),
-                                },
-                            ),
-                            timeout=2.0,
-                        )
-                    else:
-                        await self.client.send_log(
-                            self.task_id,
-                            log_type,
-                            {
-                                "lease_token": self.lease_token,
-                                "content": path.read_text(
-                                    encoding="utf-8", errors="replace"
-                                ),
-                            },
-                        )
+                    payload = {
+                        "lease_token": self.lease_token,
+                        "path": log_type,
+                        "mode": "full",
+                        "content": path.read_text(encoding="utf-8", errors="replace"),
+                    }
+                if self._stop_event.is_set():
+                    await asyncio.wait_for(
+                        self.client.push_file(self.task_id, payload),
+                        timeout=2.0,
+                    )
+                else:
+                    await self.client.push_file(self.task_id, payload)
+                if upload_mode == "chunk":
+                    self._next_chunk_seq[log_type] = chunk_seq + 1
                 self._sent_offsets[log_type] = current_size
             except asyncio.TimeoutError:
                 logger.warning(

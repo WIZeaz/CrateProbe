@@ -15,10 +15,6 @@ class RunnerConfig:
     request_timeout_seconds: float = 10.0
     state_sync_interval_seconds: float = 30.0
     max_jobs: int = 3
-    max_memory_gb: int = 20
-    max_runtime_seconds: int = 86400
-    max_cpus: int = 4
-    docker_image: str = "rust-cargo-rapx:latest"
     docker_pull_policy: str = "if-not-present"
     docker_mounts: List[str] = field(default_factory=list)
     workspace_dir: str = "/workspace"
@@ -43,10 +39,6 @@ class RunnerConfig:
             "RUNNER_STATE_SYNC_INTERVAL_SECONDS", "30"
         )
         max_jobs_raw = os.environ.get("RUNNER_MAX_JOBS", "3")
-        max_memory_raw = os.environ.get("RUNNER_MAX_MEMORY_GB", "20")
-        max_runtime_raw = os.environ.get("RUNNER_MAX_RUNTIME_SECONDS", "86400")
-        max_cpus_raw = os.environ.get("RUNNER_MAX_CPUS", "4")
-        docker_image = os.environ.get("RUNNER_DOCKER_IMAGE", "rust-cargo-rapx:latest")
         docker_pull_policy = os.environ.get(
             "RUNNER_DOCKER_PULL_POLICY", "if-not-present"
         )
@@ -116,10 +108,6 @@ class RunnerConfig:
                 "RUNNER_STATE_SYNC_INTERVAL_SECONDS", state_sync_interval_raw
             ),
             max_jobs=max_jobs,
-            max_memory_gb=_int("RUNNER_MAX_MEMORY_GB", max_memory_raw),
-            max_runtime_seconds=_int("RUNNER_MAX_RUNTIME_SECONDS", max_runtime_raw),
-            max_cpus=_int("RUNNER_MAX_CPUS", max_cpus_raw),
-            docker_image=docker_image,
             docker_pull_policy=docker_pull_policy,
             docker_mounts=docker_mounts,
             workspace_dir=workspace_dir,
