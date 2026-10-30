@@ -141,7 +141,7 @@ onMounted(() => {
               class="btn btn--primary"
               :disabled="loading || tasks.length === 0"
             >
-              <span v-if="loading" class="spinner border-white"></span>
+              <span v-if="loading" class="spinner"></span>
               {{ loading ? 'Creating...' : 'Create job' }}
             </button>
           </div>

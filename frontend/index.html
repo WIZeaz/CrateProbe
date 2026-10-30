@@ -6,6 +6,27 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#e8edeb" />
     <title>CrateProbe</title>
+    <script>
+      // Apply the persisted/system theme before first paint to avoid a flash.
+      ;(function () {
+        try {
+          var mode = localStorage.getItem('lifesonar_theme')
+          if (mode !== 'light' && mode !== 'dark') {
+            mode = 'system'
+          }
+          var prefersDark =
+            typeof window.matchMedia === 'function' &&
+            window.matchMedia('(prefers-color-scheme: dark)').matches
+          var isDark = mode === 'dark' || (mode === 'system' && prefersDark)
+          if (isDark) {
+            document.documentElement.classList.add('dark')
+            document.documentElement.style.colorScheme = 'dark'
+          }
+        } catch (error) {
+          // Ignore unavailable storage; the app falls back to system appearance.
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="app"></div>

@@ -408,7 +408,7 @@ onUnmounted(() => {
             class="btn btn--primary w-full"
             :disabled="creating"
           >
-            <span v-if="creating" class="spinner border-white"></span>
+            <span v-if="creating" class="spinner"></span>
             {{ creating ? 'Creating...' : 'Create runner' }}
           </button>
         </form>
@@ -619,7 +619,7 @@ onUnmounted(() => {
               :key="runner.runner_id"
               class="cursor-pointer border-b border-l-2 border-rule py-3 pl-3 transition-colors last:border-b-0"
               :class="{
-                'bg-black/[0.02]': selectedRunnerId === runner.runner_id,
+                'bg-black/[0.02] dark:bg-white/[0.04]': selectedRunnerId === runner.runner_id,
               }"
               :style="{
                 borderLeftColor:
@@ -805,7 +805,7 @@ onUnmounted(() => {
             :points="metricsSeries"
             field="cpu_percent"
             :max-y="100"
-            stroke="#1f55d8"
+            stroke="var(--color-signal)"
           />
         </div>
         <div class="chart-panel">
@@ -814,7 +814,7 @@ onUnmounted(() => {
             :points="metricsSeries"
             field="memory_percent"
             :max-y="100"
-            stroke="#16794a"
+            stroke="var(--color-good)"
           />
         </div>
         <div class="chart-panel">
@@ -823,7 +823,7 @@ onUnmounted(() => {
             :points="metricsSeries"
             field="disk_percent"
             :max-y="100"
-            stroke="#8a5800"
+            stroke="var(--color-warn)"
           />
         </div>
         <div class="chart-panel">
@@ -832,7 +832,7 @@ onUnmounted(() => {
             :points="metricsSeries"
             field="active_tasks"
             :max-y="activeTasksMaxY"
-            stroke="#6e4fa3"
+            stroke="var(--color-oom)"
           />
         </div>
       </div>

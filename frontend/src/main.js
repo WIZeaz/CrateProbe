@@ -6,6 +6,10 @@ import './style.css'
 import App from './App.vue'
 import router from './router'
 import websocket from './services/websocket'
+import { useTheme } from './composables/useTheme'
+
+// Apply the persisted/system theme before the first render.
+useTheme()
 
 const app = createApp(App)
 

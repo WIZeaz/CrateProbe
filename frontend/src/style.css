@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --font-sans: "Archivo Variable", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -16,6 +18,29 @@
   --color-warn: #8a5800;
   --color-oom: #6e4fa3;
   --color-quiet: #5f6f8a;
+  --color-field: #ffffff;
+  --color-placeholder: #8a9698;
+}
+
+/* Dark palette: overrides the semantic tokens above, so every utility
+   (bg-face, text-ink, border-rule, ...) follows the active theme. */
+.dark {
+  color-scheme: dark;
+
+  --color-bench: #0d1416;
+  --color-face: #131c1e;
+  --color-ink: #e3ebe9;
+  --color-muted: #93a4a5;
+  --color-rule: #2a3739;
+  --color-rule-soft: #223032;
+  --color-signal: #6f9cff;
+  --color-good: #4cc38a;
+  --color-alarm: #f4756a;
+  --color-warn: #e0a63f;
+  --color-oom: #b18cff;
+  --color-quiet: #8ea3c4;
+  --color-field: #182224;
+  --color-placeholder: #718384;
 }
 
 /* Custom styles */
@@ -227,7 +252,7 @@ body {
     padding: 8px 10px;
     border: 1px solid var(--color-rule);
     border-radius: 3px;
-    background-color: #ffffff;
+    background-color: var(--color-field);
     color: var(--color-ink);
     font-family: var(--font-sans);
     font-size: 13px;
@@ -237,7 +262,7 @@ body {
 
   .ui-input::placeholder,
   .ui-textarea::placeholder {
-    color: #8a9698;
+    color: var(--color-placeholder);
   }
 
   .ui-input:focus,
@@ -721,6 +746,38 @@ body {
     border: 1px solid var(--color-rule);
     border-radius: 3px;
     background-color: color-mix(in oklab, var(--color-bench) 45%, var(--color-face));
+  }
+
+  .metric-chart__grid {
+    stroke: var(--color-rule-soft);
+  }
+
+  .metric-chart__axis {
+    stroke: var(--color-rule);
+  }
+
+  .metric-chart__tick {
+    fill: var(--color-muted);
+  }
+
+  .metric-chart__crosshair {
+    stroke: var(--color-placeholder);
+  }
+
+  .metric-chart__point-ring {
+    stroke: var(--color-face);
+  }
+
+  .metric-chart__tooltip {
+    fill: var(--color-ink);
+  }
+
+  .metric-chart__tooltip-time {
+    fill: var(--color-rule);
+  }
+
+  .metric-chart__tooltip-value {
+    fill: var(--color-face);
   }
 
   .timeline-dot {
@@ -1302,4 +1359,39 @@ body {
   .task-dialog[open] .task-dialog__panel {
     animation: none;
   }
+}
+
+/* Dark theme adjustments for pieces that cannot be derived from tokens alone. */
+.dark .ui-select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='m1 1 4 4 4-4' fill='none' stroke='%2393a4a5' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+.dark .task-dialog {
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
+}
+
+.dark .task-dialog::backdrop {
+  background-color: rgba(0, 0, 0, 0.62);
+}
+
+.dark .btn--primary,
+.dark .btn--selected,
+.dark .btn--warn,
+.dark .btn--danger {
+  color: #0b1113;
+}
+
+.dark .data-table tbody tr:hover,
+.dark .job-row:hover,
+.dark .ledger-row:hover,
+.dark .file-tree-row--clickable:hover,
+.dark .log-tab:hover,
+.dark .btn--ghost:hover {
+  background-color: color-mix(in oklab, var(--color-signal) 9%, transparent);
+}
+
+.dark .data-table tr.is-selected,
+.dark .file-tree-row--highlight,
+.dark .log-tab--active {
+  background-color: color-mix(in oklab, var(--color-signal) 10%, transparent);
 }

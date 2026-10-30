@@ -412,7 +412,7 @@ onUnmounted(() => {
                 v-for="job in runningJobs"
                 :key="job.id"
                 class="cursor-pointer border-b border-rule py-3 transition-colors last:border-0"
-                :class="{ 'bg-black/[0.02]': selectedRunningIds.has(job.id) }"
+                :class="{ 'bg-black/[0.02] dark:bg-white/[0.04]': selectedRunningIds.has(job.id) }"
                 @click="viewJob(job.id)"
               >
                 <div class="flex items-start gap-3">
@@ -472,7 +472,7 @@ onUnmounted(() => {
                 v-for="(job, idx) in pendingJobs"
                 :key="job.id"
                 class="cursor-pointer border-b border-rule py-3 transition-colors last:border-0"
-                :class="{ 'bg-black/[0.02]': selectedPendingIds.has(job.id) }"
+                :class="{ 'bg-black/[0.02] dark:bg-white/[0.04]': selectedPendingIds.has(job.id) }"
                 @click="viewJob(job.id)"
               >
                 <div class="flex items-start gap-3">

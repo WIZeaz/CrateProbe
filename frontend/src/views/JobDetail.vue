@@ -327,7 +327,7 @@ onUnmounted(() => {
             :disabled="cancelling"
             @click="cancelJob"
           >
-            <span v-if="cancelling" class="spinner border-white"></span>
+            <span v-if="cancelling" class="spinner"></span>
             {{ cancelling ? 'Cancelling...' : 'Cancel job' }}
           </button>
           <button

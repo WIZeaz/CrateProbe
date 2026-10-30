@@ -380,7 +380,7 @@ onUnmounted(() => {
       <Transition name="fade-slide">
         <div
           v-if="selectedIds.size > 0"
-          class="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-[3px] border border-rule bg-black/[0.03] px-3 py-2"
+          class="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-[3px] border border-rule bg-black/[0.03] px-3 py-2 dark:bg-white/[0.05]"
         >
           <span class="font-mono text-[11px] text-muted">
             {{ selectedIds.size }} selected
@@ -573,7 +573,7 @@ onUnmounted(() => {
               v-for="job in jobs"
               :key="job.id"
               class="cursor-pointer border-b border-rule py-3 last:border-0 transition-colors"
-              :class="{ 'bg-black/[0.02]': selectedIds.has(job.id) }"
+              :class="{ 'bg-black/[0.02] dark:bg-white/[0.04]': selectedIds.has(job.id) }"
               @click="viewJob(job.id)"
             >
               <div class="flex items-start gap-3">

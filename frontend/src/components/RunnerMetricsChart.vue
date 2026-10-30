@@ -26,7 +26,7 @@ const props = defineProps({
   },
   stroke: {
     type: String,
-    default: '#1f55d8',
+    default: 'var(--color-signal)',
   },
 })
 
@@ -233,22 +233,22 @@ function clearHover() {
         :x2="plot.right"
         :y1="yForValue(tick)"
         :y2="yForValue(tick)"
-        stroke="#d8e0de"
+        class="metric-chart__grid"
         stroke-width="1"
       />
       <text
         :x="plot.left - 6"
         :y="yForValue(tick) + 4"
         font-size="10"
-        fill="#5d6c6f"
+        class="metric-chart__tick"
         text-anchor="end"
       >
         {{ formatYTick(tick) }}
       </text>
     </g>
 
-    <line :x1="plot.left" :x2="plot.right" :y1="plot.bottom" :y2="plot.bottom" stroke="#c9d3d1" stroke-width="1" />
-    <line :x1="plot.left" :x2="plot.left" :y1="plot.top" :y2="plot.bottom" stroke="#c9d3d1" stroke-width="1" />
+    <line :x1="plot.left" :x2="plot.right" :y1="plot.bottom" :y2="plot.bottom" class="metric-chart__axis" stroke-width="1" />
+    <line :x1="plot.left" :x2="plot.left" :y1="plot.top" :y2="plot.bottom" class="metric-chart__axis" stroke-width="1" />
 
     <g v-for="tick in xTicks" :key="`x-${tick.index}`">
       <line
@@ -256,14 +256,14 @@ function clearHover() {
         :x2="xForIndex(tick.index)"
         :y1="plot.bottom"
         :y2="plot.bottom + 4"
-        stroke="#c9d3d1"
+        class="metric-chart__axis"
         stroke-width="1"
       />
       <text
         :x="xForIndex(tick.index)"
         :y="plot.bottom + 16"
         font-size="10"
-        fill="#5d6c6f"
+        class="metric-chart__tick"
         :text-anchor="tick.index === 0 ? 'start' : tick.index === points.length - 1 ? 'end' : 'middle'"
       >
         {{ tick.label }}
@@ -274,7 +274,7 @@ function clearHover() {
       v-if="polyline"
       :points="polyline"
       fill="none"
-      :stroke="stroke"
+      :style="{ stroke }"
       stroke-width="2"
       stroke-linecap="round"
       stroke-linejoin="round"
@@ -286,11 +286,11 @@ function clearHover() {
         :x2="hoverData.x"
         :y1="plot.top"
         :y2="plot.bottom"
-        stroke="#8a9698"
+        class="metric-chart__crosshair"
         stroke-width="1"
         stroke-dasharray="3 3"
       />
-      <circle :cx="hoverData.x" :cy="hoverData.y" r="3.5" :fill="stroke" stroke="#f7f9f7" stroke-width="1.5" />
+      <circle :cx="hoverData.x" :cy="hoverData.y" r="3.5" :style="{ fill: stroke }" class="metric-chart__point-ring" stroke-width="1.5" />
       <g>
         <rect
           :x="hoverData.tooltip.x"
@@ -298,13 +298,13 @@ function clearHover() {
           :width="tooltipWidth"
           :height="tooltipHeight"
           rx="4"
-          fill="#10191b"
+          class="metric-chart__tooltip"
           fill-opacity="0.96"
         />
-        <text :x="hoverData.tooltip.x + 8" :y="hoverData.tooltip.y + 16" font-size="10" fill="#c9d3d1">
+        <text :x="hoverData.tooltip.x + 8" :y="hoverData.tooltip.y + 16" font-size="10" class="metric-chart__tooltip-time">
           {{ hoverData.timeText }}
         </text>
-        <text :x="hoverData.tooltip.x + 8" :y="hoverData.tooltip.y + 33" font-size="12" font-weight="600" fill="#f7f9f7">
+        <text :x="hoverData.tooltip.x + 8" :y="hoverData.tooltip.y + 33" font-size="12" font-weight="600" class="metric-chart__tooltip-value">
           {{ hoverData.valueText }}
         </text>
       </g>

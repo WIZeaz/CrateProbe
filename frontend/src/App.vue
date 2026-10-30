@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useSettings } from './composables/useSettings'
+import ThemeToggle from './components/ui/ThemeToggle.vue'
 
 const route = useRoute()
 const mobileMenuOpen = ref(false)
@@ -128,25 +129,29 @@ watch(
             </div>
           </div>
 
-          <button
-            type="button"
-            class="inline-flex h-10 w-10 items-center justify-center rounded-[3px] text-ink hover:bg-black/5 lg:hidden"
-            :aria-expanded="mobileMenuOpen"
-            aria-controls="mobile-nav"
-            @click="mobileMenuOpen = !mobileMenuOpen"
-          >
-            <span class="sr-only">{{ mobileMenuOpen ? 'Close menu' : 'Open menu' }}</span>
-            <span class="relative block h-4 w-4" aria-hidden="true">
-              <span
-                class="absolute left-0 h-px w-4 bg-ink transition-transform duration-150"
-                :class="mobileMenuOpen ? 'top-2 rotate-45' : 'top-0.5'"
-              ></span>
-              <span
-                class="absolute left-0 h-px w-4 bg-ink transition-transform duration-150"
-                :class="mobileMenuOpen ? 'top-2 -rotate-45' : 'top-3'"
-              ></span>
-            </span>
-          </button>
+          <div class="flex flex-none items-center gap-2">
+            <ThemeToggle />
+
+            <button
+              type="button"
+              class="inline-flex h-10 w-10 items-center justify-center rounded-[3px] text-ink hover:bg-black/5 dark:hover:bg-white/10 lg:hidden"
+              :aria-expanded="mobileMenuOpen"
+              aria-controls="mobile-nav"
+              @click="mobileMenuOpen = !mobileMenuOpen"
+            >
+              <span class="sr-only">{{ mobileMenuOpen ? 'Close menu' : 'Open menu' }}</span>
+              <span class="relative block h-4 w-4" aria-hidden="true">
+                <span
+                  class="absolute left-0 h-px w-4 bg-ink transition-transform duration-150"
+                  :class="mobileMenuOpen ? 'top-2 rotate-45' : 'top-0.5'"
+                ></span>
+                <span
+                  class="absolute left-0 h-px w-4 bg-ink transition-transform duration-150"
+                  :class="mobileMenuOpen ? 'top-2 -rotate-45' : 'top-3'"
+                ></span>
+              </span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -163,7 +168,7 @@ watch(
             class="flex min-h-11 items-center border-l-2 py-2 pl-3 text-[13px] font-medium"
             :class="
               isActive(item)
-                ? 'border-signal bg-black/[0.03] text-ink'
+                ? 'border-signal bg-black/[0.03] text-ink dark:bg-white/[0.05]'
                 : 'border-transparent text-muted hover:text-ink'
             "
             @click="closeMobileMenu"

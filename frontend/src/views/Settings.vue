@@ -78,7 +78,7 @@ async function handleSave() {
       <aside class="lg:col-span-1">
         <nav class="instrument-panel p-2" aria-label="Settings categories">
           <span
-            class="flex min-h-10 items-center border-l-2 border-signal bg-black/[0.03] px-3 text-[13px] font-medium text-ink"
+            class="flex min-h-10 items-center border-l-2 border-signal bg-black/[0.03] px-3 text-[13px] font-medium text-ink dark:bg-white/[0.05]"
             aria-current="page"
           >
             Security
@@ -135,7 +135,7 @@ async function handleSave() {
               :disabled="saving"
               @click="handleSave"
             >
-              <span v-if="saving" class="spinner border-white"></span>
+              <span v-if="saving" class="spinner"></span>
               {{ saving ? 'Saving...' : 'Save settings' }}
             </button>
           </div>
